@@ -31,6 +31,20 @@ class Settings(BaseSettings):
 
     cors_allowed_origins: list[str] = ["http://localhost:5173"]
 
+    # --- IAM (docs/architecture/iam-module.md §4 — authentication mechanics
+    # are an implementation detail outside architectural scope; the specific
+    # token scheme and its secret/TTL are configured here as ordinary
+    # infrastructure config, CLAUDE.md §22). Never a real secret by default —
+    # every deployment must override this via the environment.
+    secret_key: str = "insecure-development-secret-change-me"
+    access_token_ttl_seconds: int = 8 * 60 * 60  # 8 hours
+
+    # Bootstrap Administrator (app/modules/iam/bootstrap.py) — read only when
+    # no Administrator-role user exists yet.
+    bootstrap_admin_username: str = "admin"
+    bootstrap_admin_password: str = "change-me-immediately"
+    bootstrap_admin_email: str | None = None
+
     @property
     def is_development(self) -> bool:
         return self.environment.lower() in {"development", "dev", "local"}

@@ -13,6 +13,7 @@ dependencies = [
     "psycopg[binary]>=3.2,<4.0",
     "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.6,<3.0",
+    "bcrypt>=4.2,<5.0",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +32,11 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# "tests" holds cross-module/infrastructure tests (Phase 0); "app" is walked
+# so each module's own tests/ package (e.g. app/modules/iam/tests/) is
+# discovered too, per docs/architecture/implementation-plan.md §1's
+# per-module test layout.
+testpaths = ["tests", "app"]
 pythonpath = ["."]
 
 [tool.ruff]
@@ -44,6 +49,19 @@ ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection system relies on `Depends(...)` (and
+# similar) being evaluated as an argument default — the standard, documented
+# FastAPI pattern, not the accidental-mutable-default bug B008 exists to
+# catch elsewhere.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "app.modules.iam.dependencies.require_permission",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # Migration files follow Alembic's own generated-script convention

@@ -16,7 +16,9 @@ from app.core.config import get_settings
 from app.db.base import Base
 
 # --- Import every module's models here as modules are added -----------------
-# from app.modules.iam import models as iam_models  # noqa: ERA001 (Phase 1+)
+from app.modules.iam import models as iam_models  # noqa: F401
+from app.reference_data import models as reference_data_models  # noqa: F401
+
 # ------------------------------------------------------------------------------
 
 config = context.config
