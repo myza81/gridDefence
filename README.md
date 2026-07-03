@@ -23,6 +23,30 @@ history live in three project governance documents at the repository root:
 
 ---
 
+## Release Baselines & Tagging
+
+An annotated Git tag (`vX.Y.0`, one per accepted phase) marks an **accepted
+engineering baseline** — not every commit, and not every development
+milestone. A tag is created only after a phase has, in order:
+
+1. Passed its automated test suite (backend `pytest`, frontend `vitest`,
+   both against real PostgreSQL where the phase touches schema — see
+   [`docs/development/postgresql-setup.md`](docs/development/postgresql-setup.md)).
+2. Passed manual UAT.
+3. Been architecturally reviewed against [`REVIEW_CHECKLIST.md`](REVIEW_CHECKLIST.md).
+4. Been explicitly accepted (recorded in [`CHANGELOG.md`](CHANGELOG.md)).
+5. Been committed to Git.
+
+Tags are annotated (`git tag -a`, never lightweight) so the tag itself
+carries a message and an identifiable tagger, distinct from the commit it
+points to. Existing baselines:
+
+| Tag | Commit | Marks |
+|---|---|---|
+| `v0.2.0` | `ff830a4f0999c5d9eeca79d55647da4e53f6b3f8` | Phase 2 — Substation Registry, accepted with PostgreSQL verification |
+
+---
+
 ## Repository Structure
 
 ```
