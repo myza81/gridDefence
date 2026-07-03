@@ -308,7 +308,7 @@ Note: no `DELETE` privilege is granted at the application-role level on `substat
 4. **Geolocation pair integrity.** Latitude and longitude must both be present or both be null — a partial coordinate is worse than none.
 5. **Referential immutability of identity.** `substation_id` is never reused, never changed, and is the only value scheme modules are permitted to store as a foreign key.
 6. **No back-writes from scheme modules.** UFLS/UVLS/EMLS modules have read-only access to `substation`; only the Registry's own service can write to it. This is enforced architecturally (service boundary) and can be reinforced at the DB role/grant level.
-7. **Status transitions follow a defined lifecycle** (see §10) — e.g. a substation cannot go directly from `Planned` to `Decommissioned` without passing through `Active`, unless explicitly cancelled before commissioning.
+7. **Status transitions follow a defined, closed-list lifecycle** (see §10; [ADR-005](../adr/ADR-005-substation-operational-status-lifecycle.md)) — e.g. a substation cannot go directly from `Planned` to `Active`; it must pass through `Under Construction`. Only the seven transitions §10 enumerates are legal; every other transition, including `Planned → Decommissioned` in any number of hops other than the defined path, is rejected at the service layer.
 8. **Every attribute change is audited.** Any update to a tracked field on `substation` produces a corresponding `substation_audit_log` row (via application-level service logic or a DB trigger — see §11).
 
 ---
@@ -326,36 +326,59 @@ Note: no `DELETE` privilege is granted at the application-role level on `substat
 
 ## 10. CRUD Lifecycle
 
+Status: v2 (revised by [ADR-005](../adr/ADR-005-substation-operational-status-lifecycle.md)) — v1's diagram omitted `Under Construction` entirely (despite it being seeded reference data since Phase 1) and showed no direct `Active → Decommissioned` edge. Both gaps are resolved below; see ADR-005 for the full rationale.
+
 ```
         ┌─────────┐
         │ Planned │  (registered ahead of commissioning; usable for
         └────┬────┘   forward-looking scheme planning)
+             │ begin construction
+             ▼
+  ┌─────────────────────┐
+  │ Under Construction   │  (physically being built; not yet in service)
+  └──────────┬───────────┘
              │ commission
              ▼
         ┌─────────┐
-   ┌───▶│ Active  │◀───┐
-   │    └────┬────┘    │
-   │         │ mothball│ reactivate
-   │         ▼         │
-   │    ┌───────────┐  │
-   └────┤ Mothballed├──┘
-        └────┬──────┘
-             │ decommission
-             ▼
-        ┌──────────────┐
-        │ Decommissioned│  (terminal for operational purposes,
-        └──────┬────────┘   but record is retained)
-               │ (optional, admin-only, rare)
-               ▼
-        ┌──────────┐
-        │ Retired  │  (fully closed record; still never hard-deleted
-        └──────────┘   if ever referenced historically)
+   ┌───▶│ Active  │───────────────────┐
+   │    └────┬────┘                   │
+   │         │ mothball                │ decommission
+   │         ▼                         │
+   │    ┌───────────┐                  │
+   └────┤ Mothballed├───decommission───┤
+reactivate└─────┬─────┘                │
+                │                      │
+                └──────────┬───────────┘
+                            ▼
+                    ┌──────────────┐
+                    │ Decommissioned│  (terminal for operational purposes,
+                    └──────┬────────┘   but record is retained)
+                           │ (optional, admin-only, rare)
+                           ▼
+                    ┌──────────┐
+                    │ Retired  │  (fully closed record; still never
+                    └──────────┘   hard-deleted if ever referenced
+                                    historically)
 ```
 
-- **Create:** always starts as `Planned` or `Active` (data migration/backfill case). Requires mnemonic, name, voltage level, region, state, owner — geolocation and PSS/E bus number may be added later.
+**Allowed transitions (closed list — no other transition is legal):**
+
+| From | To | Trigger |
+|---|---|---|
+| `Planned` | `Under Construction` | begin construction |
+| `Under Construction` | `Active` | commission |
+| `Active` | `Mothballed` | mothball |
+| `Mothballed` | `Active` | reactivate |
+| `Active` | `Decommissioned` | decommission |
+| `Mothballed` | `Decommissioned` | decommission |
+| `Decommissioned` | `Retired` | administrative closure (optional, admin-only, rare) |
+
+Any transition not listed above — including `Planned → Active` directly, anything into or out of `Retired` other than the one edge shown, or any transition touching `Under Construction` other than the two edges shown — is illegal and must be rejected at the service layer (§8 rule 7).
+
+- **Create:** always starts as `Planned` or `Active` (data migration/backfill case) — this is a *creation-time* exception, not a transition, and remains unchanged by ADR-005. A newly created row does not pass through `Under Construction`; only a status *change* on an existing row is validated against the transition table above. Requires mnemonic, name, voltage level, region, state, owner — geolocation and PSS/E bus number may be added later.
 - **Read:** open to all authenticated modules/users; this is reference data, not sensitive.
 - **Update:** metadata can be updated at any time; every update writes an audit log entry. Mnemonic changes are a special, gated operation (see §8, #1) requiring an alias record.
-- **Status change:** validated against the state machine above; illegal transitions rejected at the service layer.
+- **Status change:** validated against the transition table above; illegal transitions rejected at the service layer.
 - **Delete:** never a hard delete in normal operation — see §12.
 
 ---
@@ -410,6 +433,7 @@ The schema and boundary are designed so the following can be added without touch
 - **Grid Analytics / Simulation** — study cases can reference sets of `substation_id`s and, if needed, request point-in-time attribute snapshots via the audit log (§11) for reproducible study inputs.
 - **GIS/mapping enhancement** — the existing nullable `latitude`/`longitude` pair can be upgraded to a PostGIS `geography` column later for spatial queries (radius search, containment) without breaking existing consumers, since the plain numeric columns can be kept in sync or migrated in a single pass.
 - **Geographic expansion beyond Peninsular Malaysia** — because `region`, `state`, and `grid_owner` are reference tables rather than hardcoded enums/CHECK lists, extending coverage (e.g. Sabah/Sarawak, or a different owner/utility) is a data change, not a schema migration.
+- **Backlog (recorded, not scheduled): a `decommissioned_at`-equivalent column.** `commissioned_date` (a nullable `DATE`) already exists (Phase 2) and records when a substation entered service, but there is no symmetrical column recording when it was decommissioned — that fact is currently only reconstructable indirectly, by querying `substation_audit_log` for the row where `field_name = 'operational_status_id'` and `new_value = 'DECOMMISSIONED'`. If a dedicated column becomes a real requirement (e.g. for reporting that shouldn't depend on parsing audit-log text), implementing it should also resolve a naming/precision inconsistency it would otherwise inherit: `commissioned_date` is `DATE`-precision, while every other timestamp column in this schema (`created_at`, `updated_at`, `changed_at`) is `TIMESTAMPTZ`-precision and `_at`-suffixed. That decision — whether to add `commissioned_at`/`decommissioned_at` as new `TIMESTAMPTZ` columns alongside (or replacing) `commissioned_date` — should be made explicitly at implementation time, not defaulted silently, since it affects an existing, already-shipped column.
 
 ---
 

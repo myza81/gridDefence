@@ -4,15 +4,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-griddefence}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-griddefence}
-      POSTGRES_DB: ${POSTGRES_DB:-griddefence}
+      POSTGRES_USER: ${POSTGRES_USER:-engineering_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-engineering_platform}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-griddefence}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-engineering_app}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -22,7 +22,7 @@ services:
       context: ./backend
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://griddefence:griddefence@postgres:5432/griddefence}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://engineering_app:changeme@postgres:5432/engineering_platform}
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: ${BACKEND_PORT:-8000}
     ports:

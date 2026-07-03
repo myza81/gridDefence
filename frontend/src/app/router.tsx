@@ -7,12 +7,16 @@ import { PermissionsPage } from "../modules/iam/pages/PermissionsPage";
 import { RolesPage } from "../modules/iam/pages/RolesPage";
 import { UsersPage } from "../modules/iam/pages/UsersPage";
 import { ProtectedRoute } from "../modules/iam/ProtectedRoute";
+import { SubstationCreatePage } from "../modules/substation_registry/pages/SubstationCreatePage";
+import { SubstationDetailPage } from "../modules/substation_registry/pages/SubstationDetailPage";
+import { SubstationListPage } from "../modules/substation_registry/pages/SubstationListPage";
 
 /**
  * Root route table. Each business module registers its own routes here once
  * it exists (docs/architecture/implementation-plan.md §3). IAM (Phase 1)
- * adds /login plus its protected management pages; the landing/status route
- * from Phase 0 stays public.
+ * adds /login plus its protected management pages; Substation Registry
+ * (Phase 2) adds /substations. The landing/status route from Phase 0 stays
+ * public.
  */
 const router = createBrowserRouter([
   {
@@ -57,6 +61,36 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <PermissionsPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/substations",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <SubstationListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/substations/new",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <SubstationCreatePage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/substations/:substationId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <SubstationDetailPage />
         </ProtectedRoute>
       </AppShell>
     ),

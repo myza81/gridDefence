@@ -26,6 +26,7 @@ export function AppShell({ children }: PropsWithChildren) {
           {token !== null && (
             <nav style={{ display: "inline-flex", gap: "1rem", marginLeft: "1.5rem" }}>
               <Link to="/">Status</Link>
+              <Link to="/substations">Substations</Link>
               <Link to="/users">Users</Link>
               <Link to="/roles">Roles</Link>
               <Link to="/permissions">Permissions</Link>

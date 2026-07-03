@@ -6,6 +6,23 @@ Full architecture documentation lives in [`docs/architecture/`](docs/architectur
 
 ---
 
+## Development Workflow
+
+Day-to-day implementation workflow, review criteria, and the shipped-phase
+history live in three project governance documents at the repository root:
+
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — architecture-first, one-phase-at-a-time
+  workflow: environment setup, dependency management, backend layering
+  rules, Alembic migration rules, and the required implementation report
+  format.
+- [`REVIEW_CHECKLIST.md`](REVIEW_CHECKLIST.md) — the standard checklist
+  applied to every phase, plus a running list of each phase's high-risk
+  files that warrant closer review.
+- [`CHANGELOG.md`](CHANGELOG.md) — a factual, phase-by-phase record of what
+  has actually shipped.
+
+---
+
 ## Repository Structure
 
 ```
@@ -25,7 +42,7 @@ griddefence/
 
 - Python 3.11+
 - Node.js 20+
-- Docker + Docker Compose (for the containerised workflow)
+- PostgreSQL 16+ (for local, non-Docker development — see [`docs/development/postgresql-setup.md`](docs/development/postgresql-setup.md)) **or** Docker + Docker Compose (for the containerised workflow)
 
 ---
 
@@ -92,7 +109,7 @@ The frontend dev server runs at `http://localhost:5173` and expects the backend 
 
 ### Database
 
-The backend expects PostgreSQL to be reachable at the connection string in `DATABASE_URL`. For local (non-Docker) development, run Postgres however you prefer (a local install, or `docker compose up postgres` from this repo using only the database service).
+The backend expects PostgreSQL to be reachable at the connection string in `DATABASE_URL`. See [`docs/development/postgresql-setup.md`](docs/development/postgresql-setup.md) for the full setup walkthrough (installation, dedicated database/user creation, connection verification, migration workflow, and troubleshooting) — the short version: create a dedicated `engineering_platform` database owned by a dedicated `engineering_app` user (never use the default `postgres` database for the application), point `DATABASE_URL` at it in the repository-root `.env`, then run `alembic upgrade head` from `backend/`.
 
 ---
 

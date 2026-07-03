@@ -32,6 +32,36 @@ export function setAuthTokenProvider(provider: (() => string | null) | null): vo
   authTokenProvider = provider;
 }
 
+/**
+ * FastAPI always wraps `HTTPException(detail=...)` in an outer top-level
+ * `{"detail": ...}` envelope. The inner value is either a bare string
+ * (FastAPI's own infrastructure-level responses, e.g. 401 "Not
+ * authenticated") or CLAUDE.md A9's structured `{code, message}` shape
+ * (every business-rule rejection — app/shared/exceptions.py). Either way,
+ * prefer the backend's own words over a generic "request failed" message
+ * so the user sees the actual reason (mnemonic collision, illegal status
+ * transition, etc.).
+ */
+function extractErrorMessage(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null || !("detail" in body)) {
+    return undefined;
+  }
+  const detail = (body as { detail: unknown }).detail;
+
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (
+    typeof detail === "object" &&
+    detail !== null &&
+    "message" in detail &&
+    typeof (detail as { message: unknown }).message === "string"
+  ) {
+    return (detail as { message: string }).message;
+  }
+  return undefined;
+}
+
 async function request<TResponse>(path: string, init?: RequestInit): Promise<TResponse> {
   const token = authTokenProvider?.() ?? null;
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -50,7 +80,11 @@ async function request<TResponse>(path: string, init?: RequestInit): Promise<TRe
     } catch {
       detail = undefined;
     }
-    throw new ApiError(`Request to ${path} failed with status ${response.status}`, response.status, detail);
+    throw new ApiError(
+      extractErrorMessage(detail) ?? `Request to ${path} failed with status ${response.status}`,
+      response.status,
+      detail,
+    );
   }
 
   if (response.status === 204) {
@@ -65,6 +99,8 @@ export const apiClient = {
   get: <TResponse>(path: string) => request<TResponse>(path, { method: "GET" }),
   post: <TResponse>(path: string, body?: unknown) =>
     request<TResponse>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  patch: <TResponse>(path: string, body?: unknown) =>
+    request<TResponse>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   delete: <TResponse>(path: string) => request<TResponse>(path, { method: "DELETE" }),
 };
 

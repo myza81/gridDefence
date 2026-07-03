@@ -1,15 +1,23 @@
 """Shared pytest fixtures for every test under tests/ and app/*/tests/.
 
-No live PostgreSQL is reachable in this environment (no Docker, no local
-PostgreSQL install — see Phase 1's final report); SQLite in-memory is used
-here as a pragmatic stand-in, exercising the same SQLAlchemy models and
-Alembic-equivalent schema (app.db.base.Base.metadata) rather than any
-hand-duplicated test schema. Each test gets its own fresh in-memory database
-so tests never leak state into one another.
+By default, uses SQLite in-memory as a fast, dependency-free stand-in —
+exercising the same SQLAlchemy models and Alembic-equivalent schema
+(app.db.base.Base.metadata) rather than any hand-duplicated test schema.
+Each test gets its own fresh in-memory database so tests never leak state
+into one another.
+
+Set GRIDDEFENCE_TEST_DATABASE_URL to run the same suite against a real
+PostgreSQL database instead (see docs/development/postgresql-setup.md) —
+e.g. for the periodic full-fidelity verification pass CLAUDE.md A11/DEVELOPMENT.md
+call for, catching PostgreSQL-specific behaviour SQLite cannot reproduce
+(case-insensitive functional indexes, real FK RESTRICT enforcement, native
+UUID/TIMESTAMPTZ types). Point this at a *dedicated test database*, never at
+a real development database — this fixture drops all tables after every test.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 
 import pytest
@@ -25,16 +33,22 @@ from app.main import app
 # Import every module's models so they register with Base.metadata before
 # create_all runs — mirrors alembic/env.py's own import block.
 from app.modules.iam import models as iam_models  # noqa: F401
+from app.modules.substation_registry import models as substation_registry_models  # noqa: F401
 from app.reference_data import models as reference_data_models  # noqa: F401
+
+_POSTGRES_TEST_URL = os.environ.get("GRIDDEFENCE_TEST_DATABASE_URL")
 
 
 @pytest.fixture()
 def db_session() -> Generator[Session, None, None]:
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    if _POSTGRES_TEST_URL:
+        engine = create_engine(_POSTGRES_TEST_URL)
+    else:
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
     Base.metadata.create_all(bind=engine)
 
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -43,6 +57,8 @@ def db_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+        if _POSTGRES_TEST_URL:
+            Base.metadata.drop_all(bind=engine)
         engine.dispose()
 
 
