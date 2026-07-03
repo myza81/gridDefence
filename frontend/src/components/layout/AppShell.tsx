@@ -1,14 +1,45 @@
 import type { PropsWithChildren } from "react";
+import { Link } from "react-router-dom";
+
+import { useAuth } from "../../modules/iam/AuthContext";
 
 /**
  * Outermost page frame. Business-module navigation is added here once
  * modules exist (CLAUDE.md §15 — the frontend presents; it does not decide).
  */
 export function AppShell({ children }: PropsWithChildren) {
+  const { token, currentUser, logout } = useAuth();
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <header style={{ padding: "1rem 1.5rem", borderBottom: "1px solid #e2e2e2" }}>
-        <strong>GridDefence</strong>
+      <header
+        style={{
+          padding: "1rem 1.5rem",
+          borderBottom: "1px solid #e2e2e2",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <strong>GridDefence</strong>
+          {token !== null && (
+            <nav style={{ display: "inline-flex", gap: "1rem", marginLeft: "1.5rem" }}>
+              <Link to="/">Status</Link>
+              <Link to="/users">Users</Link>
+              <Link to="/roles">Roles</Link>
+              <Link to="/permissions">Permissions</Link>
+            </nav>
+          )}
+        </div>
+        {token !== null && (
+          <div data-testid="current-user-display">
+            {currentUser ? `Signed in as ${currentUser.username}` : "Loading..."}
+            <button type="button" onClick={() => void logout()} style={{ marginLeft: "0.75rem" }}>
+              Sign out
+            </button>
+          </div>
+        )}
       </header>
       <main style={{ flex: 1, padding: "1.5rem" }}>{children}</main>
     </div>

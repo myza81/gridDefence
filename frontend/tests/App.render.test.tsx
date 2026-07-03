@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../src/components/layout/AppShell";
 import { StatusPage } from "../src/components/layout/StatusPage";
+import { AuthProvider } from "../src/modules/iam/AuthContext";
 
 describe("App renders", () => {
   beforeEach(() => {
@@ -18,6 +20,7 @@ describe("App renders", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.localStorage.clear();
   });
 
   it("renders the landing page inside the app shell without crashing", async () => {
@@ -27,9 +30,13 @@ describe("App renders", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <AppShell>
-          <StatusPage />
-        </AppShell>
+        <AuthProvider>
+          <MemoryRouter>
+            <AppShell>
+              <StatusPage />
+            </AppShell>
+          </MemoryRouter>
+        </AuthProvider>
       </QueryClientProvider>,
     );
 
