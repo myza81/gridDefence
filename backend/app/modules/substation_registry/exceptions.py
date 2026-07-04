@@ -13,6 +13,7 @@ __all__ = [
     "DuplicatePsseBusNumberError",
     "InvalidGeolocationPairError",
     "InvalidStatusTransitionError",
+    "MnemonicReservedByHistoricalSubstationError",
     "ReferenceDataNotFoundError",
 ]
 
@@ -20,14 +21,33 @@ __all__ = [
 class DuplicateMnemonicError(ValidationAppError):
     def __init__(self, mnemonic: str) -> None:
         super().__init__(
-            f"Mnemonic '{mnemonic}' is already in use by a current or historical substation "
+            f"Mnemonic '{mnemonic}' is already in use by another current substation "
             "and cannot be reassigned (substation-registry.md §8 rule 1)."
+        )
+
+
+class MnemonicReservedByHistoricalSubstationError(ValidationAppError):
+    """Raised when a mnemonic was historically used by a *different*
+    substation (substation_alias.substation_id != the requesting
+    substation). Deliberately distinct from `DuplicateMnemonicError`
+    (current-substation collision) so the two failure reasons are never
+    conflated in a UI or log message — see substation-registry.md §8
+    rule 1's UAT correction: a substation reusing its own historical
+    mnemonic is allowed and never reaches this error."""
+
+    def __init__(self, mnemonic: str) -> None:
+        super().__init__(
+            f"Mnemonic '{mnemonic}' was previously used by a different substation and is "
+            "permanently reserved to that substation's identity; it cannot be reassigned "
+            "(substation-registry.md §8 rule 1)."
         )
 
 
 class DuplicateNameError(ValidationAppError):
     def __init__(self, official_name: str) -> None:
-        super().__init__(f"Official name '{official_name}' is already in use.")
+        super().__init__(
+            f"Official name '{official_name}' is already in use by another current substation."
+        )
 
 
 class DuplicatePsseBusNumberError(ValidationAppError):

@@ -27,6 +27,7 @@ from app.modules.substation_registry.exceptions import (
     DuplicatePsseBusNumberError,
     InvalidGeolocationPairError,
     InvalidStatusTransitionError,
+    MnemonicReservedByHistoricalSubstationError,
     NotFoundError,
     ReferenceDataNotFoundError,
 )
@@ -129,18 +130,38 @@ class SubstationService:
         self, mnemonic: str, *, exclude_substation_id: uuid.UUID | None = None
     ) -> None:
         """Mnemonic uniqueness spans both the live `substation.mnemonic`
-        value and every historical `substation_alias.alias_mnemonic` —
-        retired mnemonics are never reassigned (substation-registry.md §8
-        rule 1)."""
+        value and every historical `substation_alias.alias_mnemonic` value
+        — a mnemonic once assigned is never reassigned to a *different*
+        substation (substation-registry.md §8 rule 1). A substation may
+        always reuse one of its own historical mnemonics, though: a
+        historical alias is "owned" by the substation that originated it,
+        not withheld from that same substation (UAT correction — a
+        SIDS -> SIDST -> SIDS rename on one substation must succeed).
+        `exclude_substation_id` is "the substation this check is on behalf
+        of" for both the current-record check and the alias-ownership
+        check below.
+        """
         existing = self.repo.get_by_mnemonic_ci(mnemonic)
         if existing is not None and existing.substation_id != exclude_substation_id:
             raise DuplicateMnemonicError(mnemonic)
-        if self.repo.alias_mnemonic_exists_ci(mnemonic):
-            raise DuplicateMnemonicError(mnemonic)
+
+        alias_owner_id = self.repo.find_alias_mnemonic_owner_ci(mnemonic)
+        if alias_owner_id is not None and alias_owner_id != exclude_substation_id:
+            raise MnemonicReservedByHistoricalSubstationError(mnemonic)
 
     def _check_name_available(
         self, official_name: str, *, exclude_substation_id: uuid.UUID | None = None
     ) -> None:
+        """Unlike mnemonic (`_check_mnemonic_available`), `official_name`
+        has no alias-based historical reservation: substation-registry.md
+        §8 explicitly treats mnemonic changes as "a special, gated
+        operation" (rule 1) while name changes are an ordinary update,
+        audit-logged only (§10) — no `SubstationAlias.alias_name` row is
+        ever written by `update_substation`. Only current-record
+        uniqueness applies here, which already correctly allows a
+        substation to rename away from and back to its own former name
+        (nothing else currently holds that name once this substation has
+        renamed away from it)."""
         existing = self.repo.get_by_name_ci(official_name)
         if existing is not None and existing.substation_id != exclude_substation_id:
             raise DuplicateNameError(official_name)

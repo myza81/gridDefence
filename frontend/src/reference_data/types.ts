@@ -42,3 +42,13 @@ export interface LineTypeSummary {
   code: string;
   label: string;
 }
+
+export interface TransformerBreakerNumberingConventionSummary {
+  convention_id: number;
+  hv_voltage_level_id: number;
+  lv_voltage_level_id: number;
+  side: "HV" | "LV";
+  pattern: string | null;
+  is_standard: boolean;
+  notes: string | null;
+}

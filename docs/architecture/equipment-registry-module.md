@@ -10,6 +10,16 @@ Related documents: [domain-model.md](domain-model.md), [substation-registry.md](
 
 **Phase 3 close-out — final UAT-validated model.** §7.4 and §7.6 state the current, authoritative `bay_number`/circuit-name semantics. Some illustrative examples elsewhere in this document (§7.9, §7.11, §7.13, §19, the Appendix) still show the earlier "Line 1"/"Line 2" convention and a circuit name with the bay number appended (e.g. "PKLG–IGBK Line 1") — these are historical illustrations, left as originally written per this document's practice of correcting the authoritative text directly while noting supersession rather than rewriting every narrative example. Read any such example as: bay number is now a short designator (`1`, `Main`), and the circuit name never includes it. See the "Phase 3 Final Model Summary" section immediately below for the current, consolidated picture, and the Appendix for the itemized list of what changed and why.
 
+**Phase 3.5 addendum — Transformer Registry.** Equipment Registry now also owns `Transformer`/`TransformerTerminal`/`transformer_audit_log`, added between Equipment Registry (Phase 3) and PSS/E Topology Import (Phase 4) specifically because a transformer is a fundamental topology element defining connectivity between two voltage levels — PSS/E import needs a Master Data anchor for it, exactly as it already has one for `Circuit`/`CircuitTerminal`. See the **"Phase 3.5 Addendum: Transformer Registry"** section immediately after the Phase 3 Final Model Summary below for the complete specification (domain model, business rules, generated short-name convention, uniqueness rule, API, testing). Tertiary windings, transformer impedance, tap-changer modelling, transformer loading, and protection-relay modelling remain explicitly out of scope, deferred to future phases. **The uniqueness rule and breaker-number convention stated in that section were both corrected post-acceptance — see the numbering-model pointer below; read that pointer before trusting either one.**
+
+**Phase 3 follow-up — Engineering Connectivity.** UAT clarified that Transformer Registry (above) answers *asset ownership* ("which transformers are installed at this substation") while Circuit Registry answers *engineering connectivity* ("which circuits are connected to this substation") — genuinely different questions. `Circuit` does **not** gain a `substation_id` column; it remains modeled through `CircuitTerminal` since a circuit connects two or more substations. See the **"Phase 3 Follow-up: Engineering Connectivity (Substation Detail Page)"** section (immediately after the Transformer Registry addendum below) for the full record, including the explicit architectural note distinguishing this manually-maintained engineering baseline from PSS/E's future operational topology snapshot.
+
+**Phase 3 follow-up — Deletion/Correction Policy.** UAT found that switchyards, circuit terminals, circuits, and transformers created by mistake could never be corrected — this module still never hard-deletes (CLAUDE.md §11.6), so a new `ENTERED_IN_ERROR` operational status was added, hidden from default list views but always reachable via an explicit toggle or a record's own detail page. `CircuitTerminal` correction is never blocked, even below the two-terminal minimum — that completeness rule is instead enforced only when a circuit tries to (re)enter `Active`. `TransformerTerminal` gains no independent correction path; a mistaken transformer is corrected as a whole. See the **"Phase 3 Follow-up: Deletion/Correction Policy"** section (immediately after the Engineering Connectivity follow-up below) for the full record.
+
+**Transformer Registry UAT correction #2 — Numbering Model.** UAT found that `UNIQUE(substation_id, transformer_number)` (the substation-ownership correction above) was too coarse: real Malaysian grid practice numbers transformer bays *per transformation pair*, not per substation as a whole — a substation legitimately has a "Transformer Bay 1" on its 275/132kV pair *and a separate* "Transformer Bay 1" on its 132/33kV pair, which that constraint wrongly rejected. Uniqueness reverts to `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)`, enforced at the service layer, not as a raw database constraint. The breaker-number suggestion convention was also corrected to a mapping keyed by (HV nominal kV, LV nominal kV, side) — voltage alone was not enough to determine the right formula. See the **"Phase 3.5 Addendum: Transformer Registry"** section's Business Rules 5 and 7 (both revised in place, with supersession noted) and [ADR-008](../adr/ADR-008-substation-voltage-yard.md)'s "UAT Correction #2 (Numbering Model)" addendum for the full record.
+
+**Transformer breaker-numbering convention moved to reference data.** The (HV nominal kV, LV nominal kV, side)-keyed mapping introduced by UAT correction #2 (above) was itself hardcoded in a frontend TypeScript file (`transformerBreakerSuggestion.ts`). It has since been moved into a new Core Platform reference table, `transformer_breaker_numbering_convention` (`app/reference_data/`, seeded and served alongside `voltage_level`/`line_type`/etc.), keyed by real `voltage_level` FKs rather than raw nominal-kV numbers. This is an implementation/maintainability change only — the convention's actual values, and its suggestion-only, never-backend-enforced nature (Business Rule 7), are unchanged. See Business Rule 7 and the Database Design table in the **"Phase 3.5 Addendum: Transformer Registry"** section below for the corrected shape.
+
 ---
 
 ## Phase 3 Final Model Summary (UAT-Validated)
@@ -56,6 +66,204 @@ The circuit name is computed, never stored, and is the terminal substation mnemo
 ### `bay_number` semantics (Phase 3 close-out)
 
 `bay_number` is a bay/circuit *designator*, not a display label: `1`, `2`, `Main`, `Transfer` — not `Line 1`, `Line 2`. It remains free text (not restricted to numeric-only), since real bay designators are frequently non-numeric. It is never embedded in the computed circuit name (see above), so a list or detail view showing both the circuit name and the bay number never displays the same number twice.
+
+---
+
+## Phase 3.5 Addendum: Transformer Registry
+
+This section is a self-contained specification for the Transformer Registry, added as Phase 3.5 — after Equipment Registry (Phase 3) completed UAT, before PSS/E Topology Import (Phase 4). It follows the same architecture-first process as Phase 3: an Architecture Decision Gate was run before implementation, presenting the three genuine modelling ambiguities below as options with a recommendation, and implementation began only after explicit approval. It does not restate or duplicate the Circuit/CircuitTerminal sections above; it adds a sibling entity family alongside them, owned by this same module.
+
+**UAT correction #1 (post-implementation, before acceptance):** UAT found that the initial design exposed only two switchyards on creation, with no first-class substation context — a transformer could not be discovered "from a substation's own perspective," and nothing prevented a transformer's HV and LV switchyards from belonging to two different substations. In the Malaysian transmission/distribution domain, **a transformer is substation-owned equipment and is never modeled as spanning two substations.** `Transformer.substation_id` was added as a mandatory, first-class column; both terminals' switchyards must resolve to this same substation (service-layer check); creation is now substation-first in the UI; and the uniqueness rule (Decision 3 below) was revised from a switchyard-pair key to `UNIQUE(substation_id, transformer_number)` — see the corrected Business Rules, Database Design, and API Contract below, and the ADR-008 addendum recording this correction.
+
+**UAT correction #2 (post-acceptance):** UAT found `UNIQUE(substation_id, transformer_number)` above too coarse — it collapses every transformation level at a substation into one shared bay-number namespace, but real Malaysian grid practice numbers transformer bays *per transformation pair*. Uniqueness (Decision 3, revised a second time) reverts to `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)`, enforced at the service layer, not a raw database constraint. The breaker-number suggestion convention (Business Rule 7) was also corrected to a mapping keyed by (HV nominal kV, LV nominal kV, side), replacing the previous per-voltage table. `Transformer.substation_id` itself (UAT correction #1 above) is unaffected. See the ADR-008 addendum ("UAT Correction #2 (Numbering Model)") for the full record.
+
+### Conceptual hierarchy
+
+```
+Substation                                  (Substation Registry — Master Data)
+    ├── Switchyard (SubstationVoltageYard)   (Equipment Registry; ADR-008)
+    └── Transformer                         (Equipment Registry; Phase 3.5 — substation-owned, UAT correction)
+            └── TransformerTerminal (HV, LV) (each references one of this substation's own switchyards)
+```
+
+A `Transformer` belongs to exactly one substation (`Transformer.substation_id`) and connects exactly two of that substation's own `SubstationVoltageYard` rows — one HV, one LV (e.g. a substation's own 275kV yard stepping down to its own 132kV yard). **A transformer spanning two different substations is not a legal configuration** (UAT correction above). **Tertiary windings, transformer impedance, tap-changer modelling, transformer loading, and protection-relay modelling are explicitly out of scope** for this phase, deferred to future phases exactly as busbars, bus couplers, and a generalized `Equipment` backbone already are for Circuit (see the Phase 3 Final Model Summary above).
+
+### Architecture Decision Gate — decisions made and their rationale
+
+Three genuine modelling ambiguities were identified before implementation began. Per this phase's process (mirroring Phase 3's own gate), each was presented with options and a recommendation, and implementation did not proceed until the Project Owner explicitly approved all three:
+
+**Decision 1 — `TransformerTerminal` rows vs. direct `hv_*`/`lv_*` columns on `Transformer`.** Two options were considered: (A) `Transformer` holds `hv_switchyard_id`/`hv_breaker_number`/`lv_switchyard_id`/`lv_breaker_number` directly as columns; (B) `Transformer` owns two `TransformerTerminal` child rows, each with `side` (`HV`/`LV`), `voltage_yard_id`, and `breaker_number` — structurally mirroring `CircuitTerminal`'s own precedent exactly. **Option B was approved.** Rationale: `side` is a CHECK-constrained string, not a hardcoded pair of columns, so a future tertiary-winding phase can add a third `side` value via a constraint change alone, with zero migration to `Transformer` itself — the same forward-compatibility reasoning that already justifies `CircuitTerminal`'s own shape for tee-off circuits (§7.5, §7.13). Rejecting Option A avoids baking a two-winding assumption directly into the `Transformer` table's own column set.
+
+**Decision 2 — should the generated engineering short name (e.g. `SGT1`) be stored on `Transformer` or computed at read time?** **Computed at read time was approved**, for the identical reason `Circuit`'s own canonical name is computed, not stored (§7.4): "storing it separately would create a second place it could drift out of sync" — here, out of sync with the HV terminal's voltage level or the transformer number, either of which can change after creation. It is derived from the HV terminal's voltage level (via the TNB prefix convention below) and `Transformer.transformer_number`, and is exposed on every read response (list and detail) but never accepted on a create/update request.
+
+**Decision 3 — the transformer uniqueness rule.** `UNIQUE (hv_switchyard_id, lv_switchyard_id, transformer_number)` was originally approved, enforced at the service layer. **Superseded by UAT correction #1, then re-superseded by UAT correction #2 (both above).** UAT correction #1 collapsed the key to `UNIQUE(substation_id, transformer_number)` once `substation_id` became a mandatory column, trading the original cross-row check for a real database constraint. UAT correction #2 found that key too coarse — it wrongly conflated every transformation pair at a substation into one shared bay-number namespace, rejecting the legitimate case of the same bay number appearing once per transformation pair. **The uniqueness key is now `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)`, back to a service-layer, cross-row check** (an aliased double join on `TransformerTerminal`, mirroring the original design), because `hv_switchyard_id`/`lv_switchyard_id` live on the two child `TransformerTerminal` rows, not on `Transformer` itself — denormalizing them onto `Transformer` to regain a single-table constraint was considered and rejected (it would reintroduce the exact two-winding-only assumption Decision 1 avoided baking into `Transformer`'s own column set). **This uniqueness key still represents the physical transformer's own identity, distinct from the generated engineering short name (e.g. `SGT1`), which remains a separate, computed, user-facing label derived from the HV voltage level and transformer number.** Two physically distinct transformers may legitimately share the same computed short name (e.g. two transformers both computing to `SGT1`, one at PKLG and one at IGBK, or even two at the same substation on different transformation pairs) without violating uniqueness, because uniqueness is keyed on physical identity, not on the display label derived from voltage level.
+
+### Transformer identity and the generated short name
+
+Users never type the engineering short name directly — they enter only the **Bay / Transformer Number** (e.g. `1`, `2`, `3`, `Main`), mirroring `Circuit.bay_number`'s own free-text, non-numeric-only convention (§7.4, §7.6). The short name is computed from the HV terminal's voltage level using the following TNB convention:
+
+| HV side voltage | Prefix | Example (Transformer No. 1) |
+|---|---|---|
+| 500kV | `XGT` | `XGT1` |
+| 275kV | `SGT` | `SGT1` |
+| 230kV | `SGT` | `SGT1` |
+| 132kV | `T` | `T1` |
+| 33kV | `T` | `T1` |
+| 22kV | `T` | `T1` |
+| 11kV | `T` | `T1` |
+
+E.g. a 500/275kV Transformer No. 1 computes to `XGT1`; a 275/132kV No. 1 to `SGT1`; a 132/33kV No. 1 to `T1`. Any HV voltage level not in this table falls back to the `T` prefix — a display convenience, never a validation gate; the transformer may still be created. The generated short name is presented read-only everywhere it appears; only the transformer number is ever editable.
+
+### Domain Model
+
+```
+Transformer (1) ──── (2) TransformerTerminal   [exactly one HV, one LV — enforced at creation, not editable after]
+
+Transformer          ──── references ───▶ Substation.substation_id               (Master Data, external; UAT correction)
+TransformerTerminal ──── references ───▶ SubstationVoltageYard.voltage_yard_id   (this module, existing entity; must resolve to the parent Transformer's own substation_id)
+Transformer          ──── references ───▶ OperationalStatus                      (Core Platform, external)
+Transformer / TransformerTerminal ──── references ───▶ User.user_id              (Core Platform/IAM, external)
+```
+
+`Transformer` carries: `transformer_id` (UUID PK), `substation_id` (FK to Substation Registry, external, mandatory — UAT correction: a transformer is substation-owned equipment), `transformer_number`, `capacity_mva` (optional), `commissioning_date` (optional), `operational_status_id` (FK, external), `transformer_type` (optional, free text — no reference table introduced, since no fixed vocabulary was specified and CLAUDE.md discourages inventing one), `manufacturer` (optional, free text), `remarks` (optional), plus standard audit columns (`created_at`/`updated_at`/`created_by_user_id`/`updated_by_user_id`).
+
+`TransformerTerminal` carries: `transformer_terminal_id` (UUID PK), `transformer_id` (FK to `Transformer`), `side` (`HV` or `LV`, CHECK-constrained), `voltage_yard_id` (FK to `SubstationVoltageYard`), `breaker_number`, plus audit columns — breaker number is editable after creation, mirroring `CircuitTerminal`'s own post-creation editability (§7.5, ADR-008).
+
+`transformer_audit_log` owns this entity family's own audit trail (CLAUDE.md A4), structurally identical to `equipment_registry_audit_log`.
+
+### Business Rules
+
+1. **A transformer must have exactly two terminals: one HV, one LV.** Enforced at creation; `side` uniqueness is additionally enforced per `transformer_id` at the database level (`UNIQUE (transformer_id, side)`).
+2. **The HV terminal's voltage level must be strictly higher than the LV terminal's voltage level.** A reversed or equal pairing (e.g. 132kV declared HV against a 275kV LV, or two terminals at the same voltage level) is rejected with a human-readable error naming both voltage levels.
+3. **HV and LV terminals must connect to two different switchyards.** A transformer cannot have both terminals at the same `SubstationVoltageYard` — it must step between two genuinely different voltage-level connection points.
+4. **HV and LV terminals must both belong to the transformer's own substation.** A transformer is substation-owned equipment (UAT correction) — a substation's own 275kV yard stepping down to its own 132kV yard is the legitimate, common case; **a transformer physically spanning two different substations is not modeled and is rejected.** Enforced at the service layer on creation: each terminal's `SubstationVoltageYard.substation_id` must equal `Transformer.substation_id`, or the specific mismatching side and both substation mnemonics are named in the rejection.
+5. **Uniqueness: `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)`**, representing physical transformer identity (Architecture Decision Gate, Decision 3, as superseded twice — see UAT corrections #1 and #2 above) — enforced at the service layer (an aliased double join on `TransformerTerminal`), not a raw database constraint, since the two switchyard ids are not columns on `transformer` itself. A transformer number (e.g. "1", "TX1") is locally meaningful within one substation-and-transformation-pair only; the same number may legitimately exist at a different substation, or at the same substation on a different HV/LV pair (e.g. a "1" on the 275/132kV pair and a separate "1" on the 132/33kV pair). Parallel transformers on the same pair are supported by using different transformer numbers.
+6. **A transformer's switchyards are immutable after creation.** Only the transformer number, both breaker numbers, and the non-structural metadata fields (capacity, commissioning date, status, type, manufacturer, remarks) may be edited afterward — changing which switchyards a transformer connects would change its physical identity, which this phase treats as a new transformer, not an edit (consistent with Master Data's immutable-identity principle applied elsewhere in this module, §7.1).
+7. **Breaker-number suggestions are a display-only convenience, never enforced by the backend — and the convention itself is now Core Platform reference data, not hardcoded frontend logic.** UAT correction #2 (above) first corrected the convention to a mapping keyed by (HV nominal kV, LV nominal kV, side) — voltage alone does not determine the right formula, since the same nominal voltage requires a different formula depending on which side of which transformation pair it is (e.g. 132kV is `{N}10` as the HV side of a 132/33, 132/22, or 132/11kV transformer, but `{N}80` as the LV side of a 275/132kV transformer). A follow-up correction then moved that mapping out of a hardcoded TypeScript table (`transformerBreakerSuggestion.ts`) into a new reference table, `transformer_breaker_numbering_convention`, keyed by `(hv_voltage_level_id, lv_voltage_level_id, side)` — real `voltage_level` FKs, not raw text — so a new transformation pair, or a corrected pattern, is a seed-data change, not a frontend code change (CLAUDE.md §11.3: reference tables preferred over hardcoded application constants). See this section's Database Design table below for the full column shape:
+
+   | Transformation pair | HV side | LV side |
+   |---|---|---|
+   | 500/275kV | non-standard, no suggestion | `T{N}0` |
+   | 275/132kV | `H{N}0` | `{N}80` |
+   | 132/33kV | `{N}10` | `{N}T0` |
+   | 132/22kV | `{N}10` | `{N}T0` |
+   | 132/11kV | `{N}10` | `3{N}` |
+
+   Any transformation pair outside this table (e.g. one involving 230kV) has no matching row — an intentional scope limit matching what was specified, not an inferred extrapolation; the frontend shows no suggestion and the field remains freely editable. `{N}` in a `pattern` value is replaced by the frontend with the transformer/bay number. The user may freely overwrite any suggestion, and the backend never validates a breaker number's format or content against this convention (or at all) — mirroring `CircuitTerminal.breaker_number`'s own no-cross-substation-uniqueness, no-format-validation precedent (§9 rule 6, Validation Rules §10). This remains true regardless of where the convention data lives: moving it to the database changed *where the suggestion comes from*, not *whether it is enforced* — it is still suggestion-only.
+8. This module has no knowledge of "schemes," "stages," or "shedding assignments" for transformers, identically to Circuit (§9 rule 10) — unaffected by this addendum.
+9. Every create, update on `Transformer`/`TransformerTerminal` requires an authenticated, named IAM user and is audited (§14) — unaffected in kind by this addendum, only in owned entity set.
+
+### Validation Rules
+
+- `substation_id` must reference an existing Substation Registry record (UAT correction).
+- `hv_switchyard_id`/`lv_switchyard_id` must reference existing `SubstationVoltageYard` rows, and each must belong to the selected `substation_id` (Business Rule 4) — checked before the same-switchyard and voltage-order checks below, so a cross-substation mismatch is reported precisely (naming the offending side and both substation mnemonics), not conflated with a same-switchyard or voltage-order error.
+- `operational_status_id` must reference a valid Core Platform reference row; a transformer's initial status on creation is restricted to `Planned` or `Active`, mirroring Circuit's own creation-time rule (§8).
+- `capacity_mva`, if provided, must be strictly positive (database `CHECK` constraint).
+- The HV/LV voltage-order and same-switchyard rules (Business Rules 2–3 above) are enforced at the service layer on creation, using `SubstationVoltageYard.voltage_level_id` → `VoltageLevel.nominal_kv` for the comparison. (An "equal HV/LV voltage level via two distinct switchyards" scenario is not separately constructible once Business Rule 4 is in force — a substation holds at most one switchyard per voltage level, so two same-substation, same-level switchyards would necessarily be the same row, already covered by the same-switchyard rule.)
+- The uniqueness rule (Business Rule 5) is enforced entirely at the service layer (no raw database constraint — see UAT correction #2 above), on both create and update, as a pre-insert/pre-update check (mirroring `DuplicateVoltageYardError`'s own precedent) that produces a human-readable rejection naming the substation, rather than a raw constraint-violation error.
+- No validation rule requires or restricts the format of `breaker_number` — the backend never rejects a custom breaker number regardless of voltage level (Business Rule 7).
+
+### Database Design (Concept)
+
+| Table (conceptual) | Key columns (conceptual) | Notes |
+|---|---|---|
+| `transformer` | `transformer_id` (UUID PK), `substation_id` (FK to `substation`, external, `ON DELETE RESTRICT`, mandatory — UAT correction #1), `transformer_number`, `capacity_mva` (nullable, `CHECK > 0`), `commissioning_date` (nullable), `operational_status_id` (FK, external, `ON DELETE RESTRICT`), `transformer_type` (nullable, free text), `manufacturer` (nullable, free text), `remarks` (nullable), audit columns. No `UNIQUE` constraint (UAT correction #2 dropped `uq_transformer_substation_number` — migration `0010_transformer_yard_pair`). | New (Phase 3.5). Generated short name is never a column — computed at read time (Decision 2 above). Uniqueness is enforced at the service layer, scoped to `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)` — see UAT correction #2. |
+| `transformer_terminal` | `transformer_terminal_id` (UUID PK), `transformer_id` (FK to `transformer`, `ON DELETE RESTRICT`), `side` (`CHECK IN ('HV','LV')`), `voltage_yard_id` (FK to `substation_voltage_yard`, `ON DELETE RESTRICT`), `breaker_number`, audit columns. `UNIQUE (transformer_id, side)`. | New (Phase 3.5). Exactly two rows per `transformer_id` once creation completes. |
+| `transformer_audit_log` | `log_id` (BIGINT PK), `transformer_id` (FK), `field_name`, `old_value`, `new_value`, `changed_at`, `changed_by_user_id`, `change_reason` | New (Phase 3.5). Owned per CLAUDE.md A4, structurally identical to `equipment_registry_audit_log`. |
+| `transformer_breaker_numbering_convention` | `convention_id` (surrogate PK, `SMALLINT` on PostgreSQL — CLAUDE.md A5), `hv_voltage_level_id` (FK to `voltage_level`, `ON DELETE RESTRICT`), `lv_voltage_level_id` (FK to `voltage_level`, `ON DELETE RESTRICT`), `side` (`CHECK IN ('HV','LV')`), `pattern` (nullable — `NULL` means no automatic suggestion), `is_standard` (boolean), `notes` (nullable). `UNIQUE (hv_voltage_level_id, lv_voltage_level_id, side)`. | New — Core Platform reference data (`app/reference_data/`, not owned by this module), added by the breaker-numbering-convention-as-reference-data correction. Seeded by `app/reference_data/seed.py`, idempotent and backfill-safe like every other reference table (see `test_seed_backfills_transformer_breaker_numbering_conventions`). No `created_at`/`updated_at` — consistent with `VoltageLevel`/`Region`/`State`/`GridOwner`/`OperationalStatus`/`LineType`, none of which have them either. |
+
+**Reference data addition:** 33kV, 22kV, and 11kV were added to the `voltage_level` Core Platform reference table (previously only 500/275/230/132kV existed) — the LV-side distribution voltage classes the short-name prefix table and breaker-suggestion formulas above name explicitly. `transformer_breaker_numbering_convention` (above) is a second, later reference-data addition specific to the breaker-suggestion convention itself.
+
+### API Contract (Concept)
+
+- `GET /api/v1/transformers` — list, filterable by `substation_id` (UAT correction — answers "which transformers are installed at this substation"), `operational_status_id`, and free-text `search` (transformer number or substation mnemonic/name); paginated.
+- `POST /api/v1/transformers` — create; requires `substation_id` (UAT correction, mandatory) plus both switchyards, which must belong to that substation; requires `equipment_registry.write` (reused, no new permission — no strong architectural reason to diverge from Circuit's own permission scope).
+- `GET /api/v1/transformers/{id}` — retrieve, including the parent substation (id, mnemonic, official name — UAT correction), both terminals, and the computed generated short name.
+- `PATCH /api/v1/transformers/{id}` — update transformer number, both breaker numbers, and non-structural metadata; requires `equipment_registry.write`.
+- `GET /api/v1/transformers/{id}/audit-log` — read-only audit history, mirroring Circuit's own audit-log endpoint (§13's auditability requirement applied consistently, rather than treating audit visibility as Circuit-specific).
+- `GET /api/v1/reference-data/transformer-breaker-numbering-conventions` — list every convention row; lives on the shared reference-data router (`app/reference_data/router.py`), not this module's own router, exactly like `voltage-levels`/`line-types`/etc. — read-only, authentication required, no additional permission gate (same pattern as every other reference-data endpoint).
+
+No `DELETE` endpoint on `/transformers` — transformers are soft-deleted via `operational_status_id`, identically to every other entity in this module (§8, CLAUDE.md §11.6). The reference-data endpoint above has no write endpoint at all — reference data is managed exclusively via `app/reference_data/seed.py`, never through the API (CLAUDE.md §11.3, matching every other reference table).
+
+### Testing Requirements
+
+Per CLAUDE.md §18/A11, in the same priority order as §16 above: business-rule tests (two-terminal creation, HV/LV voltage-order rejection, same-switchyard rejection, **cross-substation HV/LV rejection (UAT correction #1) and same-substation allowance**, uniqueness rejection scoped to `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)` on both create and update, and what it deliberately allows — parallel transformers, same number at a different substation, **same number reused across a different HV/LV pair at the same substation (UAT correction #2)** — breaker-number override never rejected); the generated short-name computation across every seeded voltage level (parametrized); **reference-data seed tests for `transformer_breaker_numbering_convention` — first-run row count, second-run idempotency, exact pattern/is_standard values per transformation pair against the documented convention, and backfill-into-a-partially-seeded-database, mirroring `line_type`'s own established test shape**; an API contract test for the new `GET /api/v1/reference-data/transformer-breaker-numbering-conventions` endpoint (authentication required, every seeded row returned, non-standard/null-pattern row distinguishable from a real pattern); API contract tests (auth, permission enforcement, full create/read/update/audit-log flow including substation fields in every response, **substation-filtered list**, uniqueness rejection on both `POST` and `PATCH`, 404, 405 on `DELETE`); frontend tests (substation-first create workflow, HV/LV dropdowns filtered to the selected substation, generated short name display, **suggested breaker numbers looked up from the reference-data convention list (not a hardcoded table), requiring the transformer number, both switchyards, and the convention list itself to be ready before a suggestion appears**, override behaviour, **no suggestion and free manual entry when no convention row matches the pair**, list rendering with substation column, detail rendering with substation, edit, permission gating, **substation detail page's own transformers-installed-here section**) — implemented as part of this addendum and its UAT-correction and reference-data follow-ups; see this phase's implementation report for the full test inventory and pass counts.
+
+### Glossary additions
+
+| Term | Definition |
+|---|---|
+| **Transformer** | Substation-owned equipment (`substation_id`, mandatory — UAT correction) connecting exactly two of that substation's own `SubstationVoltageYard` rows (HV and LV) — the fundamental topology element defining connectivity between two voltage levels. Never modeled as spanning two substations. Tertiary windings are out of scope (Phase 3.5). |
+| **TransformerTerminal** | One side (HV or LV) of a `Transformer`'s connection to a `SubstationVoltageYard`, carrying that side's own breaker number. Structurally mirrors `CircuitTerminal` (Architecture Decision Gate, Decision 1). |
+| **Generated (engineering) short name** | A computed, read-only, user-facing label (e.g. `SGT1`, `XGT1`, `T1`) derived from the HV terminal's voltage level (via the TNB prefix convention) and `Transformer.transformer_number`. Never stored; never unique on its own (Decision 2 and 3 above). |
+
+---
+
+## Phase 3 Follow-up: Engineering Connectivity (Substation Detail Page)
+
+UAT on the Transformer Registry addendum above surfaced an architectural distinction worth stating explicitly, since the two entities now answer superficially similar-sounding but genuinely different questions:
+
+- **Transformer Registry answers asset ownership:** "which transformers are installed at this substation" — a `Transformer` belongs to exactly one substation (`Transformer.substation_id`, the UAT correction above).
+- **Circuit Registry answers engineering connectivity:** "which circuits are connected to this substation" — a `Circuit` connects **two or more** substations via its `CircuitTerminal` rows (§7.4–§7.5), and this document's Transformer Registry correction does **not** generalize to `Circuit`.
+
+**`Circuit` does not gain a `substation_id` column.** Doing so would be a category error: a circuit's whole reason for having two-or-more `CircuitTerminal` rows, rather than one, is that it is *not* substation-owned equipment — it is the connection between substations. `Circuit`/`CircuitTerminal` remain modeled exactly as §7.4–§7.5 already describe; only a new read path was added (below), not a new column.
+
+### The Engineering Connectivity read path
+
+`GET /api/v1/circuits` accepts a `substation_id` filter — a circuit matches if any of its `CircuitTerminal` rows' `SubstationVoltageYard.substation_id` equals the given substation, expressed as a read-only join across `Circuit`/`CircuitTerminal`/`SubstationVoltageYard` (permitted under CLAUDE.md F6 for query optimisation/reporting; this module already owns all three tables involved, so no cross-module join is even required). This mirrors the equivalent `substation_id` filter already added to `GET /api/v1/transformers`, giving both entity families a symmetric "which X are connected to/installed at this substation" read path, despite their different ownership models.
+
+The Substation Detail page (Substation Registry, a different module) consumes this filter to render an **"Engineering Connectivity"** section — deliberately named to distinguish it from any future PSS/E-derived view. It displays: the connected-circuit count; and, per circuit, the circuit name, bay number, voltage level, line type, operational status, other connected terminal substations (derived client-side from the already-computed `circuit_name`, which lists every terminal's substation mnemonic — see §7.4; no new backend field was needed), and a link to the circuit's own detail page.
+
+### Relationship to future PSS/E operational topology (architecture note)
+
+**Registry connectivity — what this section, and this module generally, shows — is the manually maintained engineering baseline.** It reflects what an engineer has recorded as true: which circuits terminate where, according to Equipment Registry's own data. It is derived exclusively from `Circuit`/`CircuitTerminal`/`Substation` — never from PSS/E data, and Phase 3 introduces no PSS/E dependency of any kind (§4).
+
+**Future PSS/E topology import (Phase 4) will provide a separate, operational connectivity snapshot** — what is actually, electrically connected according to imported network model data at a point in time (§7.10's `EquipmentTopologyMap` reconciliation already anticipates this). The two are **both valid, and answer different questions**: the engineering registry is the authoritative record of what was engineered and commissioned; the PSS/E snapshot is a point-in-time operational picture that may reveal drift (a physical change not yet recorded in the registry, or a registry entry not yet reflected in the network model actually in service).
+
+**GridDefence must compare these two views, never let one silently overwrite the other.** This is the same reconciliation discipline §7.10 already specifies for individual terminal bay-identifier matching (clean match / unmatched / discrepancy, with discrepancies always requiring an authenticated engineer's explicit resolution, never an automatic write) — restated here at the level of this whole "Engineering Connectivity" concept, so that whichever future module or view eventually surfaces PSS/E-derived connectivity does not casually name itself in a way that implies it replaces, rather than complements, this section. Naming discipline matters here: this section is called "Engineering Connectivity," never "Live Topology" or "Operational Connectivity" — those terms are reserved for the future PSS/E-derived view precisely so the two are never visually or terminologically conflated.
+
+---
+
+## Phase 3 Follow-up: Deletion/Correction Policy
+
+UAT identified a practical gap in an otherwise-already-correct principle: this module never hard-deletes engineering records (CLAUDE.md §11.6 — a substation-registry-wide rule this module has followed since Phase 3), but before this follow-up, users had no way to correct a mistakenly-created **switchyard**, **circuit terminal**, **circuit**, or **transformer** at all — `SubstationVoltageYard` and `CircuitTerminal` had no status field of any kind, and while `Circuit`/`Transformer` already had `operational_status_id`, no status value represented "this was a data-entry mistake" as distinct from "this was real equipment that has since been decommissioned."
+
+### Policy
+
+1. **No hard delete for persisted engineering records** — unchanged; this module still has no `DELETE` endpoint anywhere, for any entity.
+2. **A new status, `ENTERED_IN_ERROR`** ("Entered in Error"), added once to the shared Core Platform `operational_status` reference table (CLAUDE.md §11.3) that `Substation`, `Circuit`, and `Transformer` already reuse. It is semantically distinct from `DECOMMISSIONED`/`RETIRED`, which represent real equipment reaching genuine end-of-life — `ENTERED_IN_ERROR` means the record itself should never have been created as described.
+3. **Corrected records are hidden from default operational views, never from audit/history views.** Every list endpoint (`GET /circuits`, `GET /transformers`, `GET /voltage-yards`) excludes `ENTERED_IN_ERROR` rows by default; an explicit `include_entered_in_error=true` query parameter reveals them (used by an audit-facing "Show entered-in-error ⟨X⟩" toggle on each corresponding page). Detail endpoints (`GET /circuits/{id}`, `GET /transformers/{id}`) are never filtered by status — a circuit or transformer's own detail page is this module's audit/history view for that one record, reachable by id regardless of status.
+4. **Every correction is audit logged**, through each entity's existing per-field audit-log convention — no new audit mechanism was introduced, except one gap this policy closed: `SubstationVoltageYard` previously had no audit log at all (a documented, pre-existing known limitation); it now has `substation_voltage_yard_audit_log`, following the exact shape of `equipment_registry_audit_log`/`transformer_audit_log`.
+5. **Existing references are protected.** A switchyard cannot be corrected to `ENTERED_IN_ERROR` while it is still referenced by a non-entered-in-error `CircuitTerminal` or `TransformerTerminal` (on a non-entered-in-error parent `Circuit`/`Transformer`) — rejected with a message naming how many of each still reference it. A new `CircuitTerminal`/`TransformerTerminal` may never be created against a switchyard that is already `ENTERED_IN_ERROR`.
+6. **Terminal correction never corrupts historical circuit topology.** Marking a `CircuitTerminal` `ENTERED_IN_ERROR` is *never blocked* — including when it would leave the circuit with fewer than two active terminals — because `CircuitTerminal` is a first-class connectivity object that may legitimately require individual correction, and a circuit may be temporarily incomplete while under correction. The completeness rule (§9 rule 5: at least two terminals) is instead enforced **at the point a circuit tries to (re)enter `Active`** (`change_status`), not at correction time. A circuit already `Active` when a terminal is corrected below the threshold is left as-is (no automatic demotion) — the guard only fires on an actual transition into `Active`.
+7. **The UI action is "Mark as Entered in Error," never "Delete,"** for every corrected entity — there is no concept of an uncommitted draft anywhere in this module (every create call is one atomic, already-committed transaction), so the "unless the record is an uncommitted draft" exception this policy allows for never applies here.
+8. **Future references cannot point at entered-in-error records — enforced today wherever a real consumer already exists.** No scheme module exists yet in this phase, so nothing yet *creates* a reference to a `Circuit`/`Transformer`; the concrete, actionable instance of this rule today is switchyards (point 5's second half). Any future scheme module must add its own equivalent check (`circuit.operational_status_id != ENTERED_IN_ERROR`) before allowing an assignment — a forward-looking obligation, not code that exists yet.
+
+### Why `TransformerTerminal` is different
+
+Unlike `CircuitTerminal`, `TransformerTerminal` gains **no** status column and **no** independent correction path. A `Transformer`'s HV and LV terminals are intrinsic to what it is — exactly one of each, always — so a single mistaken terminal cannot be corrected in isolation without leaving an invalid, one-terminal transformer on record. The correction unit for a mistaken transformer is the **whole `Transformer`**: mark it `ENTERED_IN_ERROR` via its own, already-existing `operational_status_id` field (no new endpoint needed — `PATCH /transformers/{id}` already accepted this field; the new reference-data row simply makes it a meaningful value to set).
+
+### Affected tables
+
+| Table | Change |
+|---|---|
+| `operational_status` (Core Platform reference data) | New row: `code=ENTERED_IN_ERROR`, `label="Entered in Error"`, `is_terminal=true`. |
+| `substation_voltage_yard` | New column `operational_status_id` (FK, `NOT NULL`, backfilled to `ACTIVE`). |
+| `circuit_terminal` | New column `operational_status_id` (FK, `NOT NULL`, backfilled to `ACTIVE`). |
+| `substation_voltage_yard_audit_log` | **New table** — closes the pre-existing audit-log gap for this entity (point 4 above). |
+| `circuit` | No schema change — `ENTERED_IN_ERROR` is simply a new legal value for the existing `operational_status_id` column. |
+| `transformer` | No schema change — same. |
+| `transformer_terminal` | **Not changed** — see "Why `TransformerTerminal` is different" above. |
+| `substation` | **Not touched.** ADR-005's closed 7-edge transition graph does not list `ENTERED_IN_ERROR` as a reachable transition target, so it is structurally unreachable there even though it lives in the same shared reference table — no code change was needed to keep Substation Registry's own lifecycle unaffected. |
+
+### API surface added
+
+- `PATCH /api/v1/voltage-yards/{id}` — now also accepts `operational_status_id` and `change_reason`.
+- `PATCH /api/v1/circuits/{id}/terminals/{id}` — now also accepts `operational_status_id`.
+- `GET /api/v1/voltage-yards`, `GET /api/v1/circuits`, `GET /api/v1/transformers` — now accept `include_entered_in_error` (default `false`).
+- `GET /api/v1/voltage-yards/{id}/audit-log` — new endpoint, mirroring Circuit's and Transformer's own audit-log endpoints.
+
+No new endpoints were needed for Circuit or Transformer whole-entity correction — `POST /circuits/{id}/status` and `PATCH /transformers/{id}` already accepted `operational_status_id`; the new reference-data row is the only change that makes `ENTERED_IN_ERROR` a meaningful, selectable value there.
 
 ---
 
@@ -128,7 +336,10 @@ Equipment Registry does **not** own:
 | `RelayDetail` | Type-specific attributes for a protection relay as a physical device (§7.8). |
 | `RelayControlledEquipment` | The set of other `Equipment` rows a given relay is physically wired to control — for circuit-type equipment, this always means a specific `CircuitTerminal`-backed `Equipment` row, never a `Circuit` as a whole (§7.8; ADR-007 §6). |
 | `EquipmentAlias` | Historical bay ID / identifier changes for any `Equipment` row, with a validity window (§7.9). |
+| `Transformer` | A physical transformer connecting exactly two `SubstationVoltageYard` rows (HV/LV). Phase 3.5 — see the "Phase 3.5 Addendum: Transformer Registry" section above for the full specification. |
+| `TransformerTerminal` | One side (HV or LV) of a `Transformer`'s connection, structurally mirroring `CircuitTerminal`. Phase 3.5. |
 | `equipment_registry_audit_log` | This module's own audit trail (CLAUDE.md A4). |
+| `transformer_audit_log` | This entity family's own audit trail (CLAUDE.md A4), owned separately from `equipment_registry_audit_log`. Phase 3.5. |
 
 ---
 

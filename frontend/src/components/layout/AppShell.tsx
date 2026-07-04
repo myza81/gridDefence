@@ -28,6 +28,7 @@ export function AppShell({ children }: PropsWithChildren) {
               <Link to="/">Status</Link>
               <Link to="/substations">Substations</Link>
               <Link to="/circuits">Circuits</Link>
+              <Link to="/transformers">Transformers</Link>
               <Link to="/users">Users</Link>
               <Link to="/roles">Roles</Link>
               <Link to="/permissions">Permissions</Link>

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { ApiError } from "../../../api/client";
 import { useAuth } from "../../iam/AuthContext";
@@ -14,6 +14,8 @@ interface VoltageYardRowProps {
   yard: VoltageYardSummary;
   canWrite: boolean;
   onSaved: () => void;
+  statusLabel: string;
+  enteredInErrorStatusId: number | undefined;
 }
 
 /** One switchyard's editable metadata — commissioning_date/latitude/
@@ -21,12 +23,24 @@ interface VoltageYardRowProps {
  * UAT follow-up): a multi-voltage site may have switchyards commissioned
  * at different dates with slightly different GIS coordinates. The
  * substation and voltage level a switchyard represents are not editable
- * here — that would just be a different switchyard. */
-function VoltageYardRow({ yard, canWrite, onSaved }: VoltageYardRowProps) {
+ * here — that would just be a different switchyard.
+ *
+ * "Mark as Entered in Error" (deletion/correction policy, Phase 3
+ * follow-up) corrects a mistakenly-created switchyard — never a delete
+ * button, since no hard delete exists for engineering registry records
+ * (CLAUDE.md §11.6). Hidden once the yard is already corrected. */
+function VoltageYardRow({
+  yard,
+  canWrite,
+  onSaved,
+  statusLabel,
+  enteredInErrorStatusId,
+}: VoltageYardRowProps) {
   const [commissioningDate, setCommissioningDate] = useState(yard.commissioning_date ?? "");
   const [latitude, setLatitude] = useState(yard.latitude === null ? "" : String(yard.latitude));
   const [longitude, setLongitude] = useState(yard.longitude === null ? "" : String(yard.longitude));
   const [error, setError] = useState<string | null>(null);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   useEffect(() => {
     setCommissioningDate(yard.commissioning_date ?? "");
@@ -49,18 +63,49 @@ function VoltageYardRow({ yard, canWrite, onSaved }: VoltageYardRowProps) {
       setError(err instanceof ApiError ? err.message : "Failed to update switchyard."),
   });
 
+  const isEnteredInError = yard.operational_status_id === enteredInErrorStatusId;
+
+  const correctionMutation = useMutation({
+    mutationFn: () =>
+      equipmentRegistryApi.updateVoltageYard(yard.voltage_yard_id, {
+        operational_status_id: enteredInErrorStatusId,
+      }),
+    onSuccess: () => {
+      setCorrectionError(null);
+      onSaved();
+    },
+    onError: (err: unknown) =>
+      setCorrectionError(
+        err instanceof ApiError ? err.message : "Failed to correct switchyard.",
+      ),
+  });
+
+  const correctionControl =
+    canWrite && !isEnteredInError && enteredInErrorStatusId !== undefined ? (
+      <>
+        <button
+          type="button"
+          onClick={() => correctionMutation.mutate()}
+          disabled={correctionMutation.isPending}
+        >
+          Mark as Entered in Error
+        </button>
+        {correctionError && <p role="alert">{correctionError}</p>}
+      </>
+    ) : null;
+
   if (!canWrite) {
     return (
       <li>
-        {yard.voltage_level_label} — commissioned {yard.commissioning_date ?? "—"}, at{" "}
-        {yard.latitude ?? "—"}, {yard.longitude ?? "—"}
+        {yard.voltage_level_label} ({statusLabel}) — commissioned{" "}
+        {yard.commissioning_date ?? "—"}, at {yard.latitude ?? "—"}, {yard.longitude ?? "—"}
       </li>
     );
   }
 
   return (
     <li>
-      {yard.voltage_level_label}
+      {yard.voltage_level_label} ({statusLabel})
       <div>
         <label htmlFor={`yard-commissioning-date-${yard.voltage_yard_id}`}>
           Commissioning date for {yard.voltage_level_label}
@@ -114,6 +159,7 @@ function VoltageYardRow({ yard, canWrite, onSaved }: VoltageYardRowProps) {
         Save
       </button>
       {error && <p role="alert">{error}</p>}
+      {correctionControl}
     </li>
   );
 }
@@ -147,9 +193,56 @@ export function SubstationDetailPage() {
     enabled: substationId !== undefined,
   });
 
+  // Always fetched with include_entered_in_error=true: usedVoltageLevelIds
+  // (below) must account for a corrected yard's voltage level too, since
+  // the database's uq_substation_voltage_yard constraint is not
+  // status-aware — offering that level as "available" in the Add
+  // Switchyard dropdown would just reproduce the exact duplicate-offered-
+  // as-available defect Phase 3 UAT already found once (DuplicateVoltageYardError).
+  // "Show entered-in-error switchyards" (deletion/correction policy, Phase
+  // 3 follow-up) then filters what is actually *displayed* client-side —
+  // corrected switchyards are hidden from the default view but must
+  // remain reachable for audit purposes; this substation's own detail
+  // page is the only place a switchyard is ever shown at all (it has no
+  // separate detail page of its own).
+  const [showEnteredInErrorYards, setShowEnteredInErrorYards] = useState(false);
   const voltageYardsQuery = useQuery({
     queryKey: ["substation", substationId, "voltage-yards"],
-    queryFn: () => equipmentRegistryApi.listVoltageYards(substationId!),
+    queryFn: () =>
+      equipmentRegistryApi.listVoltageYards({
+        substation_id: substationId!,
+        include_entered_in_error: true,
+      }),
+    enabled: substationId !== undefined,
+  });
+  const enteredInErrorStatusId = referenceData.operationalStatuses.find(
+    (status) => status.code === "ENTERED_IN_ERROR",
+  )?.operational_status_id;
+  const visibleVoltageYards = (voltageYardsQuery.data ?? []).filter(
+    (yard) => showEnteredInErrorYards || yard.operational_status_id !== enteredInErrorStatusId,
+  );
+
+  // "Which transformers are installed here" — a transformer is
+  // substation-owned equipment (UAT correction), so this substation's own
+  // detail page is where that question is answered, mirroring the
+  // Switchyards section immediately below.
+  const transformersQuery = useQuery({
+    queryKey: ["substation", substationId, "transformers"],
+    queryFn: () =>
+      equipmentRegistryApi.listTransformers({ substation_id: substationId!, page_size: 200 }),
+    enabled: substationId !== undefined,
+  });
+
+  // "Engineering Connectivity" — which circuits are connected to this
+  // substation, derived from Circuit/CircuitTerminal/Substation only
+  // (equipment-registry-module.md's Engineering Connectivity addendum).
+  // This is the manually-maintained engineering baseline, distinct from
+  // any future PSS/E-derived operational topology snapshot (Phase 4) —
+  // deliberately not called "Live Topology" or "Operational Connectivity".
+  const connectedCircuitsQuery = useQuery({
+    queryKey: ["substation", substationId, "circuits"],
+    queryFn: () =>
+      equipmentRegistryApi.listCircuits({ substation_id: substationId!, page_size: 200 }),
     enabled: substationId !== undefined,
   });
 
@@ -376,16 +469,29 @@ export function SubstationDetailPage() {
         terminals connect to a specific switchyard, not the substation as a whole
         (equipment-registry-module.md §7.5a).
       </p>
+      <label htmlFor="show-entered-in-error-yards">
+        <input
+          id="show-entered-in-error-yards"
+          type="checkbox"
+          checked={showEnteredInErrorYards}
+          onChange={(e) => setShowEnteredInErrorYards(e.target.checked)}
+        />{" "}
+        Show entered-in-error switchyards
+      </label>
       <ul data-testid="voltage-yards-list">
-        {(voltageYardsQuery.data ?? []).map((yard) => (
+        {visibleVoltageYards.map((yard) => (
           <VoltageYardRow
             key={yard.voltage_yard_id}
             yard={yard}
             canWrite={canManageVoltageYards}
             onSaved={invalidateVoltageYards}
+            statusLabel={
+              referenceData.operationalStatusesById.get(yard.operational_status_id)?.label ?? ""
+            }
+            enteredInErrorStatusId={enteredInErrorStatusId}
           />
         ))}
-        {voltageYardsQuery.data?.length === 0 && <li>No switchyards registered yet.</li>}
+        {visibleVoltageYards.length === 0 && <li>No switchyards registered yet.</li>}
       </ul>
       {canManageVoltageYards && voltageYardsQuery.data !== undefined && (
         <>
@@ -459,6 +565,75 @@ export function SubstationDetailPage() {
             <p>This substation already has a switchyard at every known voltage level.</p>
           )}
         </>
+      )}
+
+      <h3>Transformers</h3>
+      <p>
+        Transformers are substation-owned equipment — every transformer installed here connects
+        two of this substation&apos;s own switchyards (HV and LV).
+      </p>
+      <ul data-testid="transformers-list">
+        {(transformersQuery.data?.items ?? []).map((transformer) => (
+          <li key={transformer.transformer_id}>
+            <Link to={`/transformers/${transformer.transformer_id}`}>
+              {transformer.generated_short_name}
+            </Link>{" "}
+            ({transformer.hv_voltage_level_label} ↔ {transformer.lv_voltage_level_label})
+          </li>
+        ))}
+        {transformersQuery.data?.items.length === 0 && <li>No transformers installed here yet.</li>}
+      </ul>
+
+      <h3>Engineering Connectivity</h3>
+      <p>
+        Circuits connected to this substation, derived from the Circuit Registry&apos;s own
+        Circuit/CircuitTerminal records — the manually maintained engineering baseline. This is not
+        PSS/E-derived operational topology; a future phase will add that as a separate, comparable
+        snapshot, never a silent overwrite of this baseline.
+      </p>
+      <p data-testid="connected-circuits-count">
+        Connected Circuits: {connectedCircuitsQuery.data?.total ?? 0}
+      </p>
+      {(connectedCircuitsQuery.data?.items.length ?? 0) === 0 ? (
+        <p>No connected circuits recorded in the engineering registry.</p>
+      ) : (
+        <table data-testid="engineering-connectivity-table">
+          <thead>
+            <tr>
+              <th>Circuit</th>
+              <th>Bay Number</th>
+              <th>Voltage Level</th>
+              <th>Line Type</th>
+              <th>Status</th>
+              <th>Other Connected Substations</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(connectedCircuitsQuery.data?.items ?? []).map((circuit) => {
+              const otherSubstations = circuit.circuit_name
+                .split("–")
+                .map((mnemonic) => mnemonic.trim())
+                .filter((mnemonic) => mnemonic !== "" && mnemonic !== substation.mnemonic);
+              return (
+                <tr key={circuit.circuit_id}>
+                  <td>{circuit.circuit_name}</td>
+                  <td>{circuit.bay_number}</td>
+                  <td>{referenceData.voltageLevelsById.get(circuit.voltage_level_id)?.label}</td>
+                  <td>{referenceData.lineTypesById.get(circuit.line_type_id)?.label}</td>
+                  <td>
+                    {referenceData.operationalStatusesById.get(circuit.operational_status_id)
+                      ?.label}
+                  </td>
+                  <td>{otherSubstations.length > 0 ? otherSubstations.join(", ") : "—"}</td>
+                  <td>
+                    <Link to={`/circuits/${circuit.circuit_id}`}>View</Link>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       )}
 
       <h3>Audit log</h3>

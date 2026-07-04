@@ -277,4 +277,35 @@ describe("CircuitListPage", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  // --- Deletion/correction policy (Phase 3 follow-up) -------------------------------
+  it("excludes entered-in-error circuits by default, and includes them once the toggle is checked", async () => {
+    authStorage.setToken("token");
+    let lastUrl = "";
+    stubFetch([
+      ...SESSION_HANDLERS([]),
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/circuits\?/,
+        respond: (url) => {
+          lastUrl = url;
+          return { status: 200, body: { items: [], page: 1, page_size: 20, total: 0 } };
+        },
+      },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderWithProviders(<CircuitListPage />, { route: "/circuits" });
+
+    await waitFor(() => {
+      expect(lastUrl).not.toContain("include_entered_in_error=true");
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Show entered-in-error circuits"));
+
+    await waitFor(() => {
+      expect(lastUrl).toContain("include_entered_in_error=true");
+    });
+  });
 });

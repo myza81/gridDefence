@@ -104,11 +104,17 @@ class SubstationRepository:
         )
         return self.db.execute(stmt).scalar_one_or_none()
 
-    def alias_mnemonic_exists_ci(self, mnemonic: str) -> bool:
-        stmt = select(SubstationAlias.alias_id).where(
+    def find_alias_mnemonic_owner_ci(self, mnemonic: str) -> uuid.UUID | None:
+        """Returns the `substation_id` that historically held this mnemonic
+        (case-insensitive), or `None` if no `substation_alias` row matches.
+        A mnemonic is permanently reserved to whichever substation first
+        held it (substation-registry.md §8 rule 1) — the caller uses this
+        to distinguish "reserved by a different substation" (reject) from
+        "reserved by this same substation" (allow reuse)."""
+        stmt = select(SubstationAlias.substation_id).where(
             func.lower(SubstationAlias.alias_mnemonic) == mnemonic.lower()
         )
-        return self.db.execute(stmt).first() is not None
+        return self.db.execute(stmt).scalars().first()
 
     # --- SubstationAuditLog -------------------------------------------------------
     def add_audit_log(self, entry: SubstationAuditLog) -> SubstationAuditLog:

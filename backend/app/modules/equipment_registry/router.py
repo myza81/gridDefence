@@ -28,6 +28,12 @@ from app.modules.equipment_registry.schemas import (
     CircuitTerminalSummary,
     CircuitTerminalUpdate,
     CircuitUpdate,
+    TransformerAuditLogPage,
+    TransformerCreate,
+    TransformerDetail,
+    TransformerPage,
+    TransformerUpdate,
+    VoltageYardAuditLogPage,
     VoltageYardCreate,
     VoltageYardSummary,
     VoltageYardUpdate,
@@ -38,6 +44,7 @@ from app.modules.iam.models import User
 
 router = APIRouter(prefix="/circuits", tags=["equipment-registry"])
 voltage_yard_router = APIRouter(prefix="/voltage-yards", tags=["equipment-registry"])
+transformer_router = APIRouter(prefix="/transformers", tags=["equipment-registry"])
 
 
 def _error_response(exc: AppError) -> HTTPException:
@@ -51,22 +58,26 @@ def _error_response(exc: AppError) -> HTTPException:
 def list_circuits(
     page: int = 1,
     page_size: int = 50,
+    substation_id: uuid.UUID | None = None,
     voltage_level_id: int | None = None,
     line_type_id: int | None = None,
     operational_status_id: int | None = None,
     is_interconnector: bool | None = None,
     search: str | None = None,
+    include_entered_in_error: bool = False,
     service: EquipmentRegistryService = Depends(get_equipment_registry_service),
     _current_user: User = Depends(get_current_user),
 ) -> CircuitPage:
     items, total = service.list_circuits(
         page=page,
         page_size=page_size,
+        substation_id=substation_id,
         voltage_level_id=voltage_level_id,
         line_type_id=line_type_id,
         operational_status_id=operational_status_id,
         is_interconnector=is_interconnector,
         search=search,
+        include_entered_in_error=include_entered_in_error,
     )
     return CircuitPage(items=items, page=page, page_size=page_size, total=total)
 
@@ -241,10 +252,13 @@ def list_audit_log(
 @voltage_yard_router.get("", response_model=list[VoltageYardSummary])
 def list_voltage_yards(
     substation_id: uuid.UUID | None = None,
+    include_entered_in_error: bool = False,
     service: EquipmentRegistryService = Depends(get_equipment_registry_service),
     _current_user: User = Depends(get_current_user),
 ) -> list[VoltageYardSummary]:
-    return service.list_voltage_yards(substation_id=substation_id)
+    return service.list_voltage_yards(
+        substation_id=substation_id, include_entered_in_error=include_entered_in_error
+    )
 
 
 @voltage_yard_router.post(
@@ -268,10 +282,117 @@ def create_voltage_yard(
         raise _error_response(exc) from exc
 
     service.db.commit()
-    summaries = service.list_voltage_yards(substation_id=yard.substation_id)
+    # include_entered_in_error=True: this re-fetch must find the exact yard
+    # just created (always ACTIVE) regardless of the default list filter.
+    summaries = service.list_voltage_yards(
+        substation_id=yard.substation_id, include_entered_in_error=True
+    )
     match = next((s for s in summaries if s.voltage_yard_id == yard.voltage_yard_id), None)
     assert match is not None
     return match
+
+
+# --- Transformer (Phase 3.5) --------------------------------------------------------
+
+
+@transformer_router.get("", response_model=TransformerPage)
+def list_transformers(
+    page: int = 1,
+    page_size: int = 50,
+    substation_id: uuid.UUID | None = None,
+    operational_status_id: int | None = None,
+    search: str | None = None,
+    include_entered_in_error: bool = False,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    _current_user: User = Depends(get_current_user),
+) -> TransformerPage:
+    items, total = service.list_transformers(
+        page=page,
+        page_size=page_size,
+        substation_id=substation_id,
+        operational_status_id=operational_status_id,
+        search=search,
+        include_entered_in_error=include_entered_in_error,
+    )
+    return TransformerPage(items=items, page=page, page_size=page_size, total=total)
+
+
+@transformer_router.post("", response_model=TransformerDetail, status_code=status.HTTP_201_CREATED)
+def create_transformer(
+    payload: TransformerCreate,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    actor: User = Depends(require_permission("equipment_registry.write")),
+) -> TransformerDetail:
+    try:
+        transformer = service.create_transformer(
+            substation_id=payload.substation_id,
+            transformer_number=payload.transformer_number,
+            hv_switchyard_id=payload.hv_switchyard_id,
+            hv_breaker_number=payload.hv_breaker_number,
+            lv_switchyard_id=payload.lv_switchyard_id,
+            lv_breaker_number=payload.lv_breaker_number,
+            capacity_mva=payload.capacity_mva,
+            commissioning_date=payload.commissioning_date,
+            operational_status_id=payload.operational_status_id,
+            transformer_type=payload.transformer_type,
+            manufacturer=payload.manufacturer,
+            remarks=payload.remarks,
+            actor_user_id=actor.user_id,
+        )
+    except ValidationAppError as exc:
+        raise _error_response(exc) from exc
+
+    service.db.commit()
+    detail = service.get_transformer(transformer.transformer_id)
+    assert detail is not None
+    return detail
+
+
+@transformer_router.get("/{transformer_id}", response_model=TransformerDetail)
+def get_transformer(
+    transformer_id: uuid.UUID,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    _current_user: User = Depends(get_current_user),
+) -> TransformerDetail:
+    detail = service.get_transformer(transformer_id)
+    if detail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Transformer not found")
+    return detail
+
+
+@transformer_router.patch("/{transformer_id}", response_model=TransformerDetail)
+def update_transformer(
+    transformer_id: uuid.UUID,
+    payload: TransformerUpdate,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    actor: User = Depends(require_permission("equipment_registry.write")),
+) -> TransformerDetail:
+    fields = payload.model_dump(exclude_unset=True)
+    try:
+        service.update_transformer(transformer_id, actor_user_id=actor.user_id, **fields)
+    except AppError as exc:
+        raise _error_response(exc) from exc
+
+    service.db.commit()
+    detail = service.get_transformer(transformer_id)
+    assert detail is not None
+    return detail
+
+
+@transformer_router.get("/{transformer_id}/audit-log", response_model=TransformerAuditLogPage)
+def list_transformer_audit_log(
+    transformer_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 50,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    _current_user: User = Depends(get_current_user),
+) -> TransformerAuditLogPage:
+    if service.get_transformer(transformer_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Transformer not found")
+    items, total = service.list_transformer_audit_log(
+        transformer_id, page=page, page_size=page_size
+    )
+    return TransformerAuditLogPage(items=items, page=page, page_size=page_size, total=total)
 
 
 @voltage_yard_router.patch("/{voltage_yard_id}", response_model=VoltageYardSummary)
@@ -288,7 +409,26 @@ def update_voltage_yard(
         raise _error_response(exc) from exc
 
     service.db.commit()
-    summaries = service.list_voltage_yards(substation_id=yard.substation_id)
+    # include_entered_in_error=True: this re-fetch must find the yard
+    # regardless of the status it was just corrected to (e.g. Entered in
+    # Error itself), not only whatever the default list filter shows.
+    summaries = service.list_voltage_yards(
+        substation_id=yard.substation_id, include_entered_in_error=True
+    )
     match = next((s for s in summaries if s.voltage_yard_id == yard.voltage_yard_id), None)
     assert match is not None
     return match
+
+
+@voltage_yard_router.get("/{voltage_yard_id}/audit-log", response_model=VoltageYardAuditLogPage)
+def list_voltage_yard_audit_log(
+    voltage_yard_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 50,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    _current_user: User = Depends(get_current_user),
+) -> VoltageYardAuditLogPage:
+    items, total = service.list_voltage_yard_audit_log(
+        voltage_yard_id, page=page, page_size=page_size
+    )
+    return VoltageYardAuditLogPage(items=items, page=page, page_size=page_size, total=total)

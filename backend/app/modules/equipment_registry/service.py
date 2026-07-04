@@ -47,14 +47,22 @@ from sqlalchemy.orm import Session
 
 from app.modules.equipment_registry.exceptions import (
     DuplicateTerminalVoltageYardError,
+    DuplicateTransformerError,
     DuplicateVoltageYardError,
+    InsufficientActiveTerminalsForActivationError,
     InsufficientTerminalsError,
     InvalidGeolocationPairError,
     InvalidInitialStatusError,
+    InvalidTransformerInitialStatusError,
+    InvalidTransformerVoltageOrderError,
     NotFoundError,
     ReferenceDataNotFoundError,
+    SameSwitchyardTerminalsError,
     SubstationNotFoundError,
+    SwitchyardEnteredInErrorError,
+    SwitchyardHasActiveReferencesError,
     TerminalVoltageLevelMismatchError,
+    TransformerYardSubstationMismatchError,
     VoltageYardNotFoundError,
 )
 from app.modules.equipment_registry.models import (
@@ -62,6 +70,10 @@ from app.modules.equipment_registry.models import (
     CircuitTerminal,
     EquipmentRegistryAuditLog,
     SubstationVoltageYard,
+    SubstationVoltageYardAuditLog,
+    Transformer,
+    TransformerAuditLog,
+    TransformerTerminal,
 )
 from app.modules.equipment_registry.repository import (
     EquipmentRegistryRepository,
@@ -72,6 +84,11 @@ from app.modules.equipment_registry.schemas import (
     CircuitDetail,
     CircuitSummary,
     CircuitTerminalSummary,
+    TransformerAuditLogEntry,
+    TransformerDetail,
+    TransformerSummary,
+    TransformerTerminalSummary,
+    VoltageYardAuditLogEntry,
     VoltageYardSummary,
 )
 from app.modules.iam.schemas import UserSummary
@@ -81,9 +98,36 @@ from app.reference_data.repository import ReferenceDataRepository
 # "Create: always starts as Planned or Active" — mirrors the same
 # creation-time exception already established for Substation Registry
 # (substation_registry/service.py), since equipment-registry-module.md §8
-# reuses the same operational_status *values*.
+# reuses the same operational_status *values*. Reused for Transformer too
+# (Phase 3.5), for the same consistency reason, even though it was not
+# explicitly requested in that phase's spec.
 _ALLOWED_INITIAL_STATUS_CODES = {"PLANNED", "ACTIVE"}
 _MINIMUM_TERMINALS = 2
+
+# Equipment Registry deletion/correction policy (Phase 3 follow-up):
+# ENTERED_IN_ERROR corrects a mistakenly-created switchyard, circuit
+# terminal, circuit, or transformer without a hard delete (CLAUDE.md
+# §11.6). ACTIVE is the status every newly-created switchyard/terminal
+# starts in. Both are looked up by code, never a hardcoded numeric id,
+# since seed insertion order is not part of this module's contract.
+_ENTERED_IN_ERROR_STATUS_CODE = "ENTERED_IN_ERROR"
+_ACTIVE_STATUS_CODE = "ACTIVE"
+
+# TNB engineering short-name prefix convention, keyed by the HV terminal's
+# nominal voltage (Transformer Registry spec, Phase 3.5). Deliberately does
+# not distinguish auto-transformers (typically SGT/XGT in real TNB usage)
+# from two-winding transformers (typically T) — this phase's `Transformer`
+# entity does not model that distinction (see models.py's Transformer
+# docstring).
+_TRANSFORMER_SHORT_NAME_PREFIX_BY_NOMINAL_KV: dict[int, str] = {
+    500: "XGT",
+    275: "SGT",
+    230: "SGT",
+    132: "T",
+    33: "T",
+    22: "T",
+    11: "T",
+}
 
 
 class TerminalInput:
@@ -159,10 +203,31 @@ class EquipmentRegistryService:
         if not self.repo.substation_exists(substation_id):
             raise SubstationNotFoundError(substation_id)
 
+    def _require_active_operational_status_id(self) -> int:
+        """Resolves ACTIVE's id — the status every newly-created switchyard
+        or circuit terminal starts in (deletion/correction policy, Phase 3
+        follow-up). ACTIVE is core reference data seeded since Phase 1."""
+        status = self.reference_data.get_operational_status_by_code(_ACTIVE_STATUS_CODE)
+        assert status is not None, "ACTIVE operational status is missing from reference data"
+        return status.operational_status_id
+
+    def _entered_in_error_status_id(self) -> int | None:
+        status = self.reference_data.get_operational_status_by_code(_ENTERED_IN_ERROR_STATUS_CODE)
+        return status.operational_status_id if status is not None else None
+
     def _require_voltage_yard(self, voltage_yard_id: uuid.UUID) -> SubstationVoltageYard:
         voltage_yard = self.repo.get_voltage_yard_by_id(voltage_yard_id)
         if voltage_yard is None:
             raise VoltageYardNotFoundError(voltage_yard_id)
+        status = self.reference_data.get_operational_status(voltage_yard.operational_status_id)
+        if status is not None and status.code == _ENTERED_IN_ERROR_STATUS_CODE:
+            # Deletion/correction policy (Phase 3 follow-up), forward-looking
+            # half of point 8: a new terminal must never be created against
+            # a switchyard that has already been corrected as a mistake.
+            display = self.repo.get_voltage_yard_display_data({voltage_yard.voltage_yard_id})
+            raise SwitchyardEnteredInErrorError(
+                self._switchyard_label(voltage_yard.voltage_yard_id, display)
+            )
         return voltage_yard
 
     def _require_voltage_yard_matches_circuit_level(
@@ -201,9 +266,7 @@ class EquipmentRegistryService:
                 raise DuplicateTerminalVoltageYardError(terminal.voltage_yard_id)
             seen_voltage_yard_ids.add(terminal.voltage_yard_id)
             voltage_yard = self._require_voltage_yard(terminal.voltage_yard_id)
-            self._require_voltage_yard_matches_circuit_level(
-                voltage_yard, circuit_voltage_level_id
-            )
+            self._require_voltage_yard_matches_circuit_level(voltage_yard, circuit_voltage_level_id)
 
     @staticmethod
     def _check_geolocation_pair(latitude: float | None, longitude: float | None) -> None:
@@ -272,6 +335,7 @@ class EquipmentRegistryService:
         # No audit row for creation itself — accountability is already
         # captured by created_by_user_id/created_at directly on the row
         # (CLAUDE.md §5.4), matching Substation Registry's own precedent.
+        active_status_id = self._require_active_operational_status_id()
         for terminal in terminals:
             self.repo.add_terminal(
                 CircuitTerminal(
@@ -281,6 +345,7 @@ class EquipmentRegistryService:
                     breaker_number=terminal.breaker_number,
                     commissioning_date=terminal.commissioning_date,
                     remarks=terminal.remarks,
+                    operational_status_id=active_status_id,
                     created_by_user_id=actor_user_id,
                     updated_by_user_id=actor_user_id,
                 )
@@ -315,6 +380,7 @@ class EquipmentRegistryService:
                 breaker_number=breaker_number,
                 commissioning_date=commissioning_date,
                 remarks=remarks,
+                operational_status_id=self._require_active_operational_status_id(),
                 created_by_user_id=actor_user_id,
                 updated_by_user_id=actor_user_id,
             )
@@ -339,7 +405,7 @@ class EquipmentRegistryService:
         self.db.flush()
         return terminal
 
-    # --- Update terminal (breaker_number / commissioning_date / remarks) -------------
+    # --- Update terminal (breaker_number / commissioning_date / remarks / status) ----
     def update_terminal(
         self,
         circuit_id: uuid.UUID,
@@ -348,8 +414,18 @@ class EquipmentRegistryService:
         breaker_number: str | None = None,
         commissioning_date: date | None = ...,
         remarks: str | None = ...,
+        operational_status_id: int | None = None,
         actor_user_id: uuid.UUID,
     ) -> CircuitTerminal:
+        """`operational_status_id` corrects a mistakenly-added terminal
+        (deletion/correction policy, Phase 3 follow-up) — always allowed,
+        never blocked here even if it would leave the parent circuit with
+        fewer than two active terminals. `CircuitTerminal` is a first-class
+        connectivity object that may legitimately require individual
+        correction; the two-active-terminal completeness rule is enforced
+        instead at the point the circuit tries to (re)enter Active
+        (`change_status`), not at correction time — a circuit may be
+        temporarily incomplete while being corrected."""
         terminal = self.repo.get_terminal_by_id(circuit_terminal_id)
         if terminal is None or terminal.circuit_id != circuit_id:
             raise NotFoundError(f"Terminal {circuit_terminal_id} not found on circuit {circuit_id}")
@@ -389,6 +465,22 @@ class EquipmentRegistryService:
             terminal.remarks = remarks
             changed = True
 
+        if (
+            operational_status_id is not None
+            and operational_status_id != terminal.operational_status_id
+        ):
+            old_code = self._require_operational_status(terminal.operational_status_id)
+            new_code = self._require_operational_status(operational_status_id)
+            self._audit_field_change(
+                circuit_id=circuit_id,
+                field_name="terminal_status",
+                old_value=old_code,
+                new_value=new_code,
+                actor_user_id=actor_user_id,
+            )
+            terminal.operational_status_id = operational_status_id
+            changed = True
+
         if changed:
             terminal.updated_by_user_id = actor_user_id
             self.db.flush()
@@ -426,12 +518,55 @@ class EquipmentRegistryService:
                 commissioning_date=commissioning_date,
                 latitude=latitude,
                 longitude=longitude,
+                operational_status_id=self._require_active_operational_status_id(),
                 created_by_user_id=actor_user_id,
                 updated_by_user_id=actor_user_id,
             )
         )
 
-    # --- Update voltage yard metadata (commissioning_date/latitude/longitude only —
+    def _audit_voltage_yard_field_change(
+        self,
+        *,
+        voltage_yard_id: uuid.UUID,
+        field_name: str,
+        old_value: object,
+        new_value: object,
+        actor_user_id: uuid.UUID,
+        change_reason: str | None = None,
+    ) -> None:
+        self.repo.add_voltage_yard_audit_log(
+            SubstationVoltageYardAuditLog(
+                voltage_yard_id=voltage_yard_id,
+                field_name=field_name,
+                old_value=None if old_value is None else str(old_value),
+                new_value=None if new_value is None else str(new_value),
+                changed_by_user_id=actor_user_id,
+                change_reason=change_reason,
+            )
+        )
+
+    def _require_no_active_references_to_voltage_yard(
+        self, voltage_yard: SubstationVoltageYard
+    ) -> None:
+        """Deletion/correction policy point 5: existing references must be
+        protected. A switchyard cannot be corrected as Entered in Error
+        while a non-entered-in-error CircuitTerminal or TransformerTerminal
+        (on a non-entered-in-error parent) still uses it."""
+        circuit_count = self.repo.count_active_circuit_terminal_references(
+            voltage_yard.voltage_yard_id
+        )
+        transformer_count = self.repo.count_active_transformer_terminal_references(
+            voltage_yard.voltage_yard_id
+        )
+        if circuit_count or transformer_count:
+            display = self.repo.get_voltage_yard_display_data({voltage_yard.voltage_yard_id})
+            raise SwitchyardHasActiveReferencesError(
+                self._switchyard_label(voltage_yard.voltage_yard_id, display),
+                circuit_count,
+                transformer_count,
+            )
+
+    # --- Update voltage yard (commissioning_date/latitude/longitude/status —
     # the substation/voltage level a yard represents are immutable after creation) ----
     def update_voltage_yard(
         self,
@@ -440,6 +575,8 @@ class EquipmentRegistryService:
         commissioning_date: date | None = ...,
         latitude: float | None = ...,
         longitude: float | None = ...,
+        operational_status_id: int | None = None,
+        change_reason: str | None = None,
         actor_user_id: uuid.UUID,
     ) -> SubstationVoltageYard:
         yard = self.repo.get_voltage_yard_by_id(voltage_yard_id)
@@ -461,6 +598,25 @@ class EquipmentRegistryService:
                 yard.longitude = new_longitude
                 changed = True
 
+        if (
+            operational_status_id is not None
+            and operational_status_id != yard.operational_status_id
+        ):
+            old_code = self._require_operational_status(yard.operational_status_id)
+            new_code = self._require_operational_status(operational_status_id)
+            if new_code == _ENTERED_IN_ERROR_STATUS_CODE:
+                self._require_no_active_references_to_voltage_yard(yard)
+            self._audit_voltage_yard_field_change(
+                voltage_yard_id=voltage_yard_id,
+                field_name="operational_status_id",
+                old_value=old_code,
+                new_value=new_code,
+                actor_user_id=actor_user_id,
+                change_reason=change_reason,
+            )
+            yard.operational_status_id = operational_status_id
+            changed = True
+
         if changed:
             yard.updated_by_user_id = actor_user_id
             self.db.flush()
@@ -468,9 +624,14 @@ class EquipmentRegistryService:
         return yard
 
     def list_voltage_yards(
-        self, *, substation_id: uuid.UUID | None = None
+        self,
+        *,
+        substation_id: uuid.UUID | None = None,
+        include_entered_in_error: bool = False,
     ) -> list[VoltageYardSummary]:
-        yards = self.repo.list_voltage_yards(substation_id=substation_id)
+        yards = self.repo.list_voltage_yards(
+            substation_id=substation_id, include_entered_in_error=include_entered_in_error
+        )
         display = self.repo.get_voltage_yard_display_data({y.voltage_yard_id for y in yards})
         summaries: list[VoltageYardSummary] = []
         for yard in yards:
@@ -496,7 +657,28 @@ class EquipmentRegistryService:
             commissioning_date=yard.commissioning_date,
             latitude=yard.latitude,
             longitude=yard.longitude,
+            operational_status_id=yard.operational_status_id,
         )
+
+    def list_voltage_yard_audit_log(
+        self, voltage_yard_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[VoltageYardAuditLogEntry], int]:
+        items, total = self.repo.list_voltage_yard_audit_log(
+            voltage_yard_id, offset=(page - 1) * page_size, limit=page_size
+        )
+        entries = [
+            VoltageYardAuditLogEntry(
+                log_id=e.log_id,
+                field_name=e.field_name,
+                old_value=e.old_value,
+                new_value=e.new_value,
+                changed_at=e.changed_at,
+                changed_by=self._resolve_user(e.changed_by_user_id),
+                change_reason=e.change_reason,
+            )
+            for e in items
+        ]
+        return entries, total
 
     # --- Update (excludes operational_status_id — see change_status) ------------------
     def update_circuit(
@@ -600,6 +782,17 @@ class EquipmentRegistryService:
         if operational_status_id == circuit.operational_status_id:
             return circuit  # idempotent no-op, no audit row
 
+        if target_code == _ACTIVE_STATUS_CODE:
+            # Deletion/correction policy (Phase 3 follow-up): a circuit may
+            # be temporarily incomplete while its terminals are being
+            # corrected (update_terminal never blocks on this), but it may
+            # not (re)enter Active with fewer than two active terminals —
+            # the same completeness rule (equipment-registry-module.md §9
+            # rule 5) enforced at the activation boundary instead.
+            active_terminal_count = self.repo.count_active_terminals(circuit_id)
+            if active_terminal_count < _MINIMUM_TERMINALS:
+                raise InsufficientActiveTerminalsForActivationError(active_terminal_count)
+
         self._audit_field_change(
             circuit_id=circuit_id,
             field_name="operational_status_id",
@@ -631,6 +824,7 @@ class EquipmentRegistryService:
                     breaker_number=terminal.breaker_number,
                     commissioning_date=terminal.commissioning_date,
                     remarks=terminal.remarks,
+                    operational_status_id=terminal.operational_status_id,
                     created_at=terminal.created_at,
                     updated_at=terminal.updated_at,
                 )
@@ -641,11 +835,21 @@ class EquipmentRegistryService:
         circuit = self.repo.get_circuit_by_id(circuit_id)
         if circuit is None:
             return None
+        # Detail view shows every terminal regardless of status — this page
+        # is this module's own audit/history view (deletion/correction
+        # policy, Phase 3 follow-up). The computed circuit_name, however,
+        # reflects only the current, corrected picture: it excludes
+        # ENTERED_IN_ERROR terminals, exactly like list_circuits' own
+        # summary computation (repo.list_terminals_for_circuits).
         terminals = self.repo.list_terminals(circuit_id)
         terminal_summaries = self._terminal_summaries(terminals)
-        circuit_name = self._compute_circuit_name(
-            [t.substation_mnemonic for t in terminal_summaries]
-        )
+        entered_in_error_id = self._entered_in_error_status_id()
+        active_mnemonics = [
+            t.substation_mnemonic
+            for t in terminal_summaries
+            if t.operational_status_id != entered_in_error_id
+        ]
+        circuit_name = self._compute_circuit_name(active_mnemonics)
         return CircuitDetail(
             circuit_id=circuit.circuit_id,
             bay_number=circuit.bay_number,
@@ -667,20 +871,24 @@ class EquipmentRegistryService:
         *,
         page: int,
         page_size: int,
+        substation_id: uuid.UUID | None = None,
         voltage_level_id: int | None = None,
         line_type_id: int | None = None,
         operational_status_id: int | None = None,
         is_interconnector: bool | None = None,
         search: str | None = None,
+        include_entered_in_error: bool = False,
     ) -> tuple[list[CircuitSummary], int]:
         items, total = self.repo.list_circuits(
             offset=(page - 1) * page_size,
             limit=page_size,
+            substation_id=substation_id,
             voltage_level_id=voltage_level_id,
             line_type_id=line_type_id,
             operational_status_id=operational_status_id,
             is_interconnector=is_interconnector,
             search=search,
+            include_entered_in_error=include_entered_in_error,
         )
         terminals_by_circuit = self.repo.list_terminals_for_circuits({c.circuit_id for c in items})
         all_voltage_yard_ids = {
@@ -721,6 +929,503 @@ class EquipmentRegistryService:
         )
         entries = [
             CircuitAuditLogEntry(
+                log_id=e.log_id,
+                field_name=e.field_name,
+                old_value=e.old_value,
+                new_value=e.new_value,
+                changed_at=e.changed_at,
+                changed_by=self._resolve_user(e.changed_by_user_id),
+                change_reason=e.change_reason,
+            )
+            for e in items
+        ]
+        return entries, total
+
+    # --- Transformer (Phase 3.5) ----------------------------------------------------
+    def _audit_transformer_field_change(
+        self,
+        *,
+        transformer_id: uuid.UUID,
+        field_name: str,
+        old_value: object,
+        new_value: object,
+        actor_user_id: uuid.UUID,
+        change_reason: str | None = None,
+    ) -> None:
+        self.repo.add_transformer_audit_log(
+            TransformerAuditLog(
+                transformer_id=transformer_id,
+                field_name=field_name,
+                old_value=None if old_value is None else str(old_value),
+                new_value=None if new_value is None else str(new_value),
+                changed_by_user_id=actor_user_id,
+                change_reason=change_reason,
+            )
+        )
+
+    def _switchyard_label(
+        self, voltage_yard_id: uuid.UUID, display: dict[uuid.UUID, VoltageYardDisplayData]
+    ) -> str:
+        info = display.get(voltage_yard_id)
+        if info is None:
+            return str(voltage_yard_id)
+        return self._compute_voltage_yard_label(info.substation_mnemonic, info.voltage_level_label)
+
+    def _compute_transformer_short_name(
+        self, hv_voltage_level_id: int, transformer_number: str
+    ) -> str:
+        """TNB engineering short-name convention (Transformer Registry
+        spec) — prefix determined by the HV side's nominal voltage. Falls
+        back to "T" for any voltage level not in the documented table,
+        rather than raising: this is a display convenience derived from
+        data that has already passed all real validation, not itself a
+        validation gate."""
+        hv_level = self.reference_data.get_voltage_level(hv_voltage_level_id)
+        nominal_kv = hv_level.nominal_kv if hv_level is not None else None
+        prefix = (
+            _TRANSFORMER_SHORT_NAME_PREFIX_BY_NOMINAL_KV.get(int(nominal_kv))
+            if nominal_kv is not None
+            else None
+        ) or "T"
+        return f"{prefix}{transformer_number}"
+
+    def _require_yard_belongs_to_substation(
+        self,
+        *,
+        side: str,
+        yard: SubstationVoltageYard,
+        substation_id: uuid.UUID,
+        selected_substation_mnemonic: str,
+    ) -> None:
+        """UAT correction: a transformer's HV and LV switchyards must both
+        belong to the substation it is being created at — transformers are
+        not modeled as spanning substations (Malaysian grid domain rule)."""
+        if yard.substation_id == substation_id:
+            return
+        display = self.repo.get_voltage_yard_display_data({yard.voltage_yard_id})
+        yard_label = self._switchyard_label(yard.voltage_yard_id, display)
+        yard_substation = self.repo.get_substation_by_id(yard.substation_id)
+        yard_substation_mnemonic = (
+            yard_substation.mnemonic if yard_substation is not None else str(yard.substation_id)
+        )
+        raise TransformerYardSubstationMismatchError(
+            side, yard_label, yard_substation_mnemonic, selected_substation_mnemonic
+        )
+
+    def create_transformer(
+        self,
+        *,
+        substation_id: uuid.UUID,
+        transformer_number: str,
+        hv_switchyard_id: uuid.UUID,
+        hv_breaker_number: str,
+        lv_switchyard_id: uuid.UUID,
+        lv_breaker_number: str,
+        capacity_mva: float | None,
+        commissioning_date: date | None,
+        operational_status_id: int,
+        transformer_type: str | None,
+        manufacturer: str | None,
+        remarks: str | None,
+        actor_user_id: uuid.UUID,
+    ) -> Transformer:
+        status_code = self._require_operational_status(operational_status_id)
+        if status_code not in _ALLOWED_INITIAL_STATUS_CODES:
+            raise InvalidTransformerInitialStatusError(status_code)
+
+        substation = self.repo.get_substation_by_id(substation_id)
+        if substation is None:
+            raise SubstationNotFoundError(substation_id)
+
+        hv_yard = self._require_voltage_yard(hv_switchyard_id)
+        lv_yard = self._require_voltage_yard(lv_switchyard_id)
+
+        # UAT correction: both switchyards must belong to the selected
+        # substation — a transformer is substation-owned equipment, never
+        # modeled as spanning two substations.
+        self._require_yard_belongs_to_substation(
+            side="HV",
+            yard=hv_yard,
+            substation_id=substation_id,
+            selected_substation_mnemonic=substation.mnemonic,
+        )
+        self._require_yard_belongs_to_substation(
+            side="LV",
+            yard=lv_yard,
+            substation_id=substation_id,
+            selected_substation_mnemonic=substation.mnemonic,
+        )
+
+        if hv_yard.voltage_yard_id == lv_yard.voltage_yard_id:
+            display = self.repo.get_voltage_yard_display_data({hv_yard.voltage_yard_id})
+            raise SameSwitchyardTerminalsError(
+                self._switchyard_label(hv_yard.voltage_yard_id, display)
+            )
+
+        hv_level = self.reference_data.get_voltage_level(hv_yard.voltage_level_id)
+        lv_level = self.reference_data.get_voltage_level(lv_yard.voltage_level_id)
+        # Both resolve: _require_voltage_yard already confirmed each yard
+        # exists, and a SubstationVoltageYard's voltage_level_id FK can
+        # never point at a missing reference row.
+        assert hv_level is not None and lv_level is not None
+        if hv_level.nominal_kv <= lv_level.nominal_kv:
+            display = self.repo.get_voltage_yard_display_data(
+                {hv_yard.voltage_yard_id, lv_yard.voltage_yard_id}
+            )
+            raise InvalidTransformerVoltageOrderError(
+                self._switchyard_label(hv_yard.voltage_yard_id, display),
+                self._switchyard_label(lv_yard.voltage_yard_id, display),
+            )
+
+        existing = self.repo.find_transformer_by_yard_pair_and_number(
+            substation_id=substation_id,
+            hv_switchyard_id=hv_switchyard_id,
+            lv_switchyard_id=lv_switchyard_id,
+            transformer_number=transformer_number,
+        )
+        if existing is not None:
+            raise DuplicateTransformerError(transformer_number, substation.mnemonic)
+
+        transformer = self.repo.add_transformer(
+            Transformer(
+                transformer_id=uuid.uuid4(),
+                substation_id=substation_id,
+                transformer_number=transformer_number,
+                capacity_mva=capacity_mva,
+                commissioning_date=commissioning_date,
+                operational_status_id=operational_status_id,
+                transformer_type=transformer_type,
+                manufacturer=manufacturer,
+                remarks=remarks,
+                created_by_user_id=actor_user_id,
+                updated_by_user_id=actor_user_id,
+            )
+        )
+        # No audit row for creation itself — accountability is already
+        # captured by created_by_user_id/created_at directly on the row
+        # (CLAUDE.md §5.4), matching Circuit's own precedent.
+        self.repo.add_transformer_terminal(
+            TransformerTerminal(
+                transformer_terminal_id=uuid.uuid4(),
+                transformer_id=transformer.transformer_id,
+                side="HV",
+                voltage_yard_id=hv_switchyard_id,
+                breaker_number=hv_breaker_number,
+                created_by_user_id=actor_user_id,
+                updated_by_user_id=actor_user_id,
+            )
+        )
+        self.repo.add_transformer_terminal(
+            TransformerTerminal(
+                transformer_terminal_id=uuid.uuid4(),
+                transformer_id=transformer.transformer_id,
+                side="LV",
+                voltage_yard_id=lv_switchyard_id,
+                breaker_number=lv_breaker_number,
+                created_by_user_id=actor_user_id,
+                updated_by_user_id=actor_user_id,
+            )
+        )
+        return transformer
+
+    def update_transformer(
+        self,
+        transformer_id: uuid.UUID,
+        *,
+        transformer_number: str | None = None,
+        hv_breaker_number: str | None = None,
+        lv_breaker_number: str | None = None,
+        capacity_mva: float | None = ...,
+        commissioning_date: date | None = ...,
+        operational_status_id: int | None = None,
+        transformer_type: str | None = ...,
+        manufacturer: str | None = ...,
+        remarks: str | None = ...,
+        actor_user_id: uuid.UUID,
+    ) -> Transformer:
+        """Neither the transformer's `substation_id` nor the switchyard each
+        terminal connects to is editable here — only `transformer_number`,
+        each terminal's `breaker_number`, and the transformer's own
+        metadata. Re-pointing a transformer to a different substation would
+        change its physical identity (UAT correction: transformers are
+        substation-owned equipment), which this phase treats as a new
+        transformer, not an edit. `operational_status_id` is a plain field
+        here, not a separate status-change endpoint like `Circuit`'s — no
+        transition-legality graph is asserted for `Transformer` (not
+        requested by this phase's spec; CLAUDE.md — Claude must not invent
+        business rules)."""
+        transformer = self.repo.get_transformer_by_id(transformer_id)
+        if transformer is None:
+            raise NotFoundError(f"Transformer {transformer_id} not found")
+
+        changed = False
+
+        if transformer_number is not None and transformer_number != transformer.transformer_number:
+            # Uniqueness (UAT correction #2) is scoped to this transformer's
+            # own substation + HV/LV switchyard pair, not the whole
+            # substation — switchyards are immutable after creation (Business
+            # Rule 6), so the existing terminals' voltage_yard_id values are
+            # this transformer's permanent pair for the purpose of this check.
+            hv_terminal = self.repo.get_transformer_terminal_by_side(transformer_id, "HV")
+            lv_terminal = self.repo.get_transformer_terminal_by_side(transformer_id, "LV")
+            assert hv_terminal is not None and lv_terminal is not None
+            existing = self.repo.find_transformer_by_yard_pair_and_number(
+                substation_id=transformer.substation_id,
+                hv_switchyard_id=hv_terminal.voltage_yard_id,
+                lv_switchyard_id=lv_terminal.voltage_yard_id,
+                transformer_number=transformer_number,
+                exclude_transformer_id=transformer_id,
+            )
+            if existing is not None:
+                substation = self.repo.get_substation_by_id(transformer.substation_id)
+                substation_mnemonic = (
+                    substation.mnemonic
+                    if substation is not None
+                    else str(transformer.substation_id)
+                )
+                raise DuplicateTransformerError(transformer_number, substation_mnemonic)
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="transformer_number",
+                old_value=transformer.transformer_number,
+                new_value=transformer_number,
+                actor_user_id=actor_user_id,
+            )
+            transformer.transformer_number = transformer_number
+            changed = True
+
+        if capacity_mva is not ... and capacity_mva != transformer.capacity_mva:
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="capacity_mva",
+                old_value=transformer.capacity_mva,
+                new_value=capacity_mva,
+                actor_user_id=actor_user_id,
+            )
+            transformer.capacity_mva = capacity_mva
+            changed = True
+
+        if commissioning_date is not ... and commissioning_date != transformer.commissioning_date:
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="commissioning_date",
+                old_value=transformer.commissioning_date,
+                new_value=commissioning_date,
+                actor_user_id=actor_user_id,
+            )
+            transformer.commissioning_date = commissioning_date
+            changed = True
+
+        if (
+            operational_status_id is not None
+            and operational_status_id != transformer.operational_status_id
+        ):
+            old_code = self._require_operational_status(transformer.operational_status_id)
+            new_code = self._require_operational_status(operational_status_id)
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="operational_status_id",
+                old_value=old_code,
+                new_value=new_code,
+                actor_user_id=actor_user_id,
+            )
+            transformer.operational_status_id = operational_status_id
+            changed = True
+
+        if transformer_type is not ... and transformer_type != transformer.transformer_type:
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="transformer_type",
+                old_value=transformer.transformer_type,
+                new_value=transformer_type,
+                actor_user_id=actor_user_id,
+            )
+            transformer.transformer_type = transformer_type
+            changed = True
+
+        if manufacturer is not ... and manufacturer != transformer.manufacturer:
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="manufacturer",
+                old_value=transformer.manufacturer,
+                new_value=manufacturer,
+                actor_user_id=actor_user_id,
+            )
+            transformer.manufacturer = manufacturer
+            changed = True
+
+        if remarks is not ... and remarks != transformer.remarks:
+            self._audit_transformer_field_change(
+                transformer_id=transformer_id,
+                field_name="remarks",
+                old_value=transformer.remarks,
+                new_value=remarks,
+                actor_user_id=actor_user_id,
+            )
+            transformer.remarks = remarks
+            changed = True
+
+        if hv_breaker_number is not None:
+            hv_terminal = self.repo.get_transformer_terminal_by_side(transformer_id, "HV")
+            if hv_terminal is not None and hv_breaker_number != hv_terminal.breaker_number:
+                self._audit_transformer_field_change(
+                    transformer_id=transformer_id,
+                    field_name="hv_breaker_number",
+                    old_value=hv_terminal.breaker_number,
+                    new_value=hv_breaker_number,
+                    actor_user_id=actor_user_id,
+                )
+                hv_terminal.breaker_number = hv_breaker_number
+                hv_terminal.updated_by_user_id = actor_user_id
+                changed = True
+
+        if lv_breaker_number is not None:
+            lv_terminal = self.repo.get_transformer_terminal_by_side(transformer_id, "LV")
+            if lv_terminal is not None and lv_breaker_number != lv_terminal.breaker_number:
+                self._audit_transformer_field_change(
+                    transformer_id=transformer_id,
+                    field_name="lv_breaker_number",
+                    old_value=lv_terminal.breaker_number,
+                    new_value=lv_breaker_number,
+                    actor_user_id=actor_user_id,
+                )
+                lv_terminal.breaker_number = lv_breaker_number
+                lv_terminal.updated_by_user_id = actor_user_id
+                changed = True
+
+        if changed:
+            transformer.updated_by_user_id = actor_user_id
+            self.db.flush()
+
+        return transformer
+
+    def _transformer_terminal_summaries(
+        self, terminals: list[TransformerTerminal]
+    ) -> list[TransformerTerminalSummary]:
+        display = self.repo.get_voltage_yard_display_data({t.voltage_yard_id for t in terminals})
+        summaries: list[TransformerTerminalSummary] = []
+        for terminal in terminals:
+            info = display.get(terminal.voltage_yard_id)
+            summaries.append(
+                TransformerTerminalSummary(
+                    transformer_terminal_id=terminal.transformer_terminal_id,
+                    side=terminal.side,
+                    voltage_yard_id=terminal.voltage_yard_id,
+                    substation_id=info.substation_id if info else uuid.UUID(int=0),
+                    substation_mnemonic=info.substation_mnemonic if info else "",
+                    substation_official_name=info.substation_official_name if info else "",
+                    voltage_level_id=info.voltage_level_id if info else 0,
+                    voltage_level_label=info.voltage_level_label if info else "",
+                    breaker_number=terminal.breaker_number,
+                )
+            )
+        return summaries
+
+    def get_transformer(self, transformer_id: uuid.UUID) -> TransformerDetail | None:
+        transformer = self.repo.get_transformer_by_id(transformer_id)
+        if transformer is None:
+            return None
+        terminals = self.repo.list_transformer_terminals(transformer_id)
+        terminal_summaries = self._transformer_terminal_summaries(terminals)
+        hv_summary = next((t for t in terminal_summaries if t.side == "HV"), None)
+        generated_short_name = (
+            self._compute_transformer_short_name(
+                hv_summary.voltage_level_id, transformer.transformer_number
+            )
+            if hv_summary is not None
+            else transformer.transformer_number
+        )
+        substation = self.repo.get_substation_by_id(transformer.substation_id)
+        return TransformerDetail(
+            transformer_id=transformer.transformer_id,
+            substation_id=transformer.substation_id,
+            substation_mnemonic=substation.mnemonic if substation is not None else "",
+            substation_official_name=substation.official_name if substation is not None else "",
+            transformer_number=transformer.transformer_number,
+            generated_short_name=generated_short_name,
+            capacity_mva=transformer.capacity_mva,
+            commissioning_date=transformer.commissioning_date,
+            operational_status_id=transformer.operational_status_id,
+            transformer_type=transformer.transformer_type,
+            manufacturer=transformer.manufacturer,
+            remarks=transformer.remarks,
+            created_at=transformer.created_at,
+            updated_at=transformer.updated_at,
+            created_by=self._resolve_user(transformer.created_by_user_id),
+            updated_by=self._resolve_user(transformer.updated_by_user_id),
+            terminals=terminal_summaries,
+        )
+
+    def list_transformers(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        substation_id: uuid.UUID | None = None,
+        operational_status_id: int | None = None,
+        search: str | None = None,
+        include_entered_in_error: bool = False,
+    ) -> tuple[list[TransformerSummary], int]:
+        items, total = self.repo.list_transformers(
+            offset=(page - 1) * page_size,
+            limit=page_size,
+            substation_id=substation_id,
+            operational_status_id=operational_status_id,
+            search=search,
+            include_entered_in_error=include_entered_in_error,
+        )
+        terminals_by_transformer = self.repo.list_transformer_terminals_for_transformers(
+            {t.transformer_id for t in items}
+        )
+        all_voltage_yard_ids = {
+            term.voltage_yard_id
+            for terminals in terminals_by_transformer.values()
+            for term in terminals
+        }
+        display = self.repo.get_voltage_yard_display_data(all_voltage_yard_ids)
+        substations = self.repo.get_substations_by_ids({t.substation_id for t in items})
+
+        summaries: list[TransformerSummary] = []
+        for transformer in items:
+            terminals = terminals_by_transformer.get(transformer.transformer_id, [])
+            hv_terminal = next((t for t in terminals if t.side == "HV"), None)
+            lv_terminal = next((t for t in terminals if t.side == "LV"), None)
+            hv_info = display.get(hv_terminal.voltage_yard_id) if hv_terminal else None
+            lv_info = display.get(lv_terminal.voltage_yard_id) if lv_terminal else None
+            generated_short_name = (
+                self._compute_transformer_short_name(
+                    hv_info.voltage_level_id, transformer.transformer_number
+                )
+                if hv_info is not None
+                else transformer.transformer_number
+            )
+            substation = substations.get(transformer.substation_id)
+            summaries.append(
+                TransformerSummary(
+                    transformer_id=transformer.transformer_id,
+                    substation_id=transformer.substation_id,
+                    substation_mnemonic=substation.mnemonic if substation is not None else "",
+                    substation_official_name=(
+                        substation.official_name if substation is not None else ""
+                    ),
+                    transformer_number=transformer.transformer_number,
+                    generated_short_name=generated_short_name,
+                    hv_voltage_level_label=hv_info.voltage_level_label if hv_info else "",
+                    lv_voltage_level_label=lv_info.voltage_level_label if lv_info else "",
+                    capacity_mva=transformer.capacity_mva,
+                    operational_status_id=transformer.operational_status_id,
+                )
+            )
+        return summaries, total
+
+    def list_transformer_audit_log(
+        self, transformer_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[TransformerAuditLogEntry], int]:
+        items, total = self.repo.list_transformer_audit_log(
+            transformer_id, offset=(page - 1) * page_size, limit=page_size
+        )
+        entries = [
+            TransformerAuditLogEntry(
                 log_id=e.log_id,
                 field_name=e.field_name,
                 old_value=e.old_value,

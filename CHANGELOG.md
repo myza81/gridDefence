@@ -11,6 +11,386 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Phase 3.5 — Transformer Registry
+
+**Scope:** `Transformer`/`TransformerTerminal` identity, inserted between Equipment Registry
+(Phase 3) and PSS/E Topology Import (Phase 4) because a transformer is a fundamental topology
+element defining connectivity between two voltage levels —
+[`docs/architecture/equipment-registry-module.md`](docs/architecture/equipment-registry-module.md)'s
+new "Phase 3.5 Addendum: Transformer Registry" section. Tertiary windings, transformer impedance,
+tap-changer modelling, transformer loading, and protection-relay modelling remain explicitly out of
+scope.
+
+**Architecture Decision Gate.** Following the same architecture-first process used for Phase 3,
+three genuine modelling ambiguities were presented with options and a recommendation before any
+code was written, and implementation began only after explicit approval of all three: (1)
+`TransformerTerminal` child rows (`side` = HV/LV) over direct `hv_*`/`lv_*` columns on
+`Transformer`, mirroring `CircuitTerminal`'s own precedent, for future tertiary-winding
+compatibility; (2) the generated engineering short name (e.g. `SGT1`) computed at read time, never
+stored, for the identical reason `Circuit`'s own canonical name is computed rather than stored; (3)
+uniqueness keyed on `(hv_switchyard_id, lv_switchyard_id, transformer_number)` — representing the
+*physical transformer's* identity — deliberately distinct from the generated short name, which is a
+separate, computed, user-facing label two physically distinct transformers at different substations
+may legitimately share.
+
+**Backend**
+
+- `Transformer` (transformer number, capacity, commissioning date, operational status, type,
+  manufacturer, remarks) and `TransformerTerminal` (one HV row, one LV row per transformer — each
+  with its own breaker number) as new persistence models, plus `transformer_audit_log` as this
+  entity family's own audit trail (CLAUDE.md A4).
+- The engineering short name (`XGT1`, `SGT1`, `T1`, ...) is computed at read time from the HV
+  terminal's voltage level, using a TNB prefix convention (500kV→`XGT`, 275/230kV→`SGT`,
+  132/33/22/11kV→`T`) — never stored, never accepted on create/update.
+- Business rules enforced at the service layer: exactly one HV and one LV terminal; HV voltage
+  level strictly higher than LV; HV and LV terminals cannot connect to the same switchyard; HV and
+  LV may belong to the same or different substations; a switchyard pair plus transformer number
+  must be unique (checked via a repository query joining `TransformerTerminal` twice via
+  `sqlalchemy.orm.aliased`, not a raw database constraint, per CLAUDE.md §11.8 — the identity spans
+  two child rows a single-table `UNIQUE` constraint cannot express); a transformer's switchyards
+  are immutable after creation.
+- `voltage_level` reference data extended with 33kV, 22kV, and 11kV (previously only
+  500/275/230/132kV existed) — the LV-side distribution voltage classes the short-name prefix table
+  and breaker-suggestion formulas name explicitly.
+- `equipment_registry.read`/`equipment_registry.write` permissions reused as-is — no new permission
+  introduced.
+- New endpoints: `GET/POST /api/v1/transformers`, `GET/PATCH /api/v1/transformers/{id}`,
+  `GET /api/v1/transformers/{id}/audit-log` (the last one beyond the originally-specified four
+  endpoints, added for consistency with Circuit's own audit-visibility pattern — a hard CLAUDE.md
+  auditability requirement, not optional polish). No `DELETE` endpoint.
+- Migration `0008_transformer_registry` — hand-written, manually reviewed, fully reversible, no
+  data backfill (new tables, no pre-existing rows). Verified directly against real PostgreSQL
+  (`alembic upgrade head`, schema inspection of all three new tables) and via live `curl` smoke
+  testing against a running server on the real dev database (create, duplicate rejection, and
+  reversed-voltage-order rejection all returned the expected human-readable errors).
+
+**Frontend**
+
+- `/transformers`, `/transformers/new`, `/transformers/:transformerId` — list (search/filter/
+  paginate), create, and detail (inline edit, audit log) pages, following Circuit Registry's exact
+  page/API-client conventions and UX pattern (list + create + detail-with-inline-edit, no separate
+  edit route).
+- Breaker-number suggestion (`suggestBreakerNumber`) — a pure, frontend-only function implementing
+  the five given formulas (275kV: `H{N}0`; 230kV: `{N}H0`; 132kV: `{N}10`; 33kV/22kV: `{N}T0`;
+  11kV: `3{N}`; no formula for 500kV, an intentional spec gap). Triggered once the HV/LV switchyard
+  and transformer number are chosen; always freely overridable; the backend never validates or
+  enforces breaker-number format.
+
+**Tests**
+
+- Backend: 42 new tests (29 service + 13 API) covering two-terminal creation, the generated
+  short-name computation (parametrized across all 7 voltage levels), HV/LV voltage-order and
+  same-switchyard rejection, same-substation-different-switchyard allowance, uniqueness rejection
+  and parallel-transformer allowance, breaker-number override never rejected, search/filter, edit,
+  and permission enforcement. 233 backend tests total, passing against both SQLite and real
+  PostgreSQL.
+- Frontend: 22 new tests (list, create, detail pages, plus the breaker-suggestion pure function)
+  covering the generated short name display, auto-suggested and freely-overridable breaker numbers,
+  list/detail rendering, edit submission, and permission-gated create/edit controls. 79 frontend
+  tests total, passing; lint/typecheck/build all clean.
+
+**Known limitations**
+
+- No manual browser UAT was performed for this phase — no browser automation tool was available in
+  the implementation environment. Verification relied on the automated backend (SQLite + real
+  PostgreSQL) and frontend (React Testing Library simulating real DOM rendering, user interaction,
+  and form submission against mocked network calls, plus lint/typecheck/build) suites, together
+  with live `curl` smoke testing of the real backend API against the real dev database.
+- `transformer_type` is free text, not a reference table — no fixed vocabulary was specified, and
+  inventing one was judged out of scope (CLAUDE.md: "Claude must not invent business rules").
+- No transition-legality graph is asserted for `Transformer.operational_status_id`, unlike
+  `Circuit`'s own dedicated status-change endpoint — `operational_status_id` is a plain field on the
+  general `PATCH` endpoint, since no transition rule was specified for transformers.
+
+### Phase 3.5 UAT blocker fix — substation-centric workflow and data model correction
+
+UAT found a critical workflow/data-model gap before acceptance: transformer creation exposed only
+HV/LV switchyard pickers with no first-class substation context, so an engineer could not answer
+"how many transformers are installed at substation X" or "which transformer belongs to X" without
+indirectly inferring it from switchyard labels — and nothing prevented a transformer's HV and LV
+switchyards from being selected at two different substations. **Malaysian transmission/distribution
+domain rule, stated explicitly during UAT: a transformer is installed within a single substation and
+is never modeled as equipment connected between two different substations.** See
+[ADR-008](docs/adr/ADR-008-substation-voltage-yard.md)'s "Transformer Registry — UAT Correction"
+addendum for the full architecture record.
+
+**Backend.** `Transformer.substation_id` added as a mandatory column (previously substation context
+was only reachable indirectly via each terminal's own `SubstationVoltageYard`). Both HV and LV
+terminals must now resolve to this same `substation_id` — enforced at the service layer on creation,
+checked before the same-switchyard/voltage-order checks so a cross-substation mismatch names the
+specific offending side and both substation mnemonics
+(`TransformerYardSubstationMismatchError`). Uniqueness moved from
+`UNIQUE (hv_switchyard_id, lv_switchyard_id, transformer_number)` (service-layer-only, cross-row) to
+**`UNIQUE(substation_id, transformer_number)`, a real single-table database constraint** — simpler
+and stronger now that identity no longer spans two child rows. `TransformerSummary`/`TransformerDetail`
+now carry `substation_id`/`substation_mnemonic`/`substation_official_name` directly (replacing the
+former `hv_substation_mnemonic`/`lv_substation_mnemonic` pair, which is redundant once both terminals
+are guaranteed to share one substation). `GET /api/v1/transformers` gained a `substation_id` filter.
+Migration `0008_transformer_registry` was edited in place (never committed to version control before
+this fix, so no new migration was needed) and re-verified end-to-end against the real dev PostgreSQL
+database (drop-and-reapply, schema inspection confirming the new column, FK, and unique constraint).
+
+**Frontend.** `TransformerCreatePage` is now substation-first: the user selects the substation before
+either switchyard, and both HV/LV switchyard dropdowns are filtered client-side to that substation's
+own switchyards only (mirroring `CircuitCreatePage`'s existing per-voltage-level filtering pattern) —
+selecting a different substation clears any already-chosen switchyard. `TransformerListPage` shows a
+"Substation" column (replacing the former HV/LV-substation "Switchyards" column) and the existing
+free-text search already matches substation mnemonic/name. `TransformerDetailPage`'s heading and a new
+"Substation" field show the parent substation explicitly. `SubstationDetailPage` gained a
+"Transformers" section (reusing the new `substation_id` filter) so "which transformers are installed
+here" is answered directly from a substation's own detail page — the specific UAT-reported
+requirement.
+
+**Tests.** Backend: 47 transformer tests total (31 service + 16 API; net +5 over the original 42) —
+new coverage for cross-substation rejection on both HV and LV sides, substation-scoped uniqueness
+allowing the same transformer number at a different substation, substation-id list/API filtering, and
+substation fields present on every create/read response; one now-unreachable "equal voltage level via
+two distinct same-substation switchyards" service test removed, since a substation can hold at most
+one switchyard per voltage level once both switchyards must share a substation. 238 backend tests
+total, passing against both SQLite and real PostgreSQL. Frontend: `TransformerCreatePage` tests
+extended to cover substation-first selection, switchyard filtering by substation, and switchyard
+reset on substation change; `TransformerListPage`/`TransformerDetailPage` tests updated for the new
+substation fields; `SubstationDetailPage` gained 2 new tests for the "Transformers" section. 84
+frontend tests total, passing; lint/typecheck/build all clean.
+
+### Phase 3 follow-up — Engineering Connectivity section (Substation Detail page)
+
+UAT clarified an architectural distinction the Transformer Registry work above surfaced but did not
+itself resolve: **Transformer Registry answers asset ownership** ("which transformers are installed
+at this substation"), while **Circuit Registry answers engineering connectivity** ("which circuits
+are connected to this substation"). Unlike `Transformer`, `Circuit` does **not** gain a
+`substation_id` column — a circuit legitimately connects two or more substations via its
+`CircuitTerminal` rows, so it remains modeled exactly as it already was (§7.4–§7.5). See
+`docs/architecture/equipment-registry-module.md`'s new "Engineering Connectivity" note for the full
+architecture record, including the explicit distinction from PSS/E's future operational topology
+snapshot.
+
+**Backend.** `GET /api/v1/circuits` gained a `substation_id` filter (mirroring the equivalent filter
+already added to `GET /api/v1/transformers`) — a circuit matches if any of its `CircuitTerminal` rows'
+`SubstationVoltageYard.substation_id` equals the given substation, expressed as a read-only SQL join
+across `Circuit`/`CircuitTerminal`/`SubstationVoltageYard` (CLAUDE.md F6 — permitted for query
+optimisation/reporting; no data duplicated, no new table). No circular service dependency was
+introduced — this stays inside Equipment Registry's own repository, reading `Substation` read-only
+exactly as the existing `search` filter already does.
+
+**Frontend.** `SubstationDetailPage` gained an "Engineering Connectivity" section (that exact
+heading — not "Live Topology" or "Operational Connectivity", to keep this manually-maintained
+engineering baseline visually and terminologically distinct from any future PSS/E-derived
+operational snapshot) showing: a connected-circuits count, and a table with circuit name, bay number,
+voltage level, line type, operational status, other connected terminal substations (derived from the
+existing computed `circuit_name`, which already lists every terminal's substation mnemonic — no new
+backend field needed), and a link to each circuit's detail page. Empty state:
+"No connected circuits recorded in the engineering registry." Existing substation details, the
+Switchyards section, and the Transformers section are unaffected; permission gating for the
+edit/status-change forms is unchanged (this new section is read-only for every user, gated on nothing
+beyond authentication, mirroring the Switchyards/Transformers sections' own read visibility).
+
+**Tests.** Backend: 3 new service tests (`TestSubstationConnectivityFilter` — a circuit appears for
+each of its own terminal substations, an unrelated substation sees nothing, the filter combines with
+existing filters) plus 1 new API test (substation-id filter end-to-end, including a third, genuinely
+unrelated substation created specifically to prove it sees nothing). 242 backend tests total, passing
+against both SQLite and real PostgreSQL — live-verified via `curl` against the real dev database
+(PKLG correctly returned its 2 real connected circuits; an unrelated substation returned zero).
+Frontend: 2 new `SubstationDetailPage` tests (section renders with connected circuits and the correct
+other-substation derivation; empty-state message shown when none exist). 86 frontend tests total,
+passing; lint/typecheck/build all clean.
+
+### Phase 3 follow-up — Deletion/Correction Policy
+
+UAT found a practical gap this module's existing no-hard-delete rule (CLAUDE.md §11.6) had not yet
+addressed: users could add switchyards, circuit terminals, and transformers by mistake, but had no
+way to correct any of them. A new `ENTERED_IN_ERROR` operational status was added once to the shared
+Core Platform `operational_status` reference table, distinct from `DECOMMISSIONED`/`RETIRED` (real
+end-of-life) in that it represents a data-entry mistake. See
+`docs/architecture/equipment-registry-module.md`'s new "Phase 3 Follow-up: Deletion/Correction
+Policy" section for the full record, including the Architecture Decision Gate outcomes.
+
+**Architecture Decision Gate.** Four questions were presented with a recommendation each before any
+code was written: (1) `TransformerTerminal` correction is disallowed at the individual-terminal
+level — a mistaken transformer is corrected only as a whole, since its HV/LV terminals are intrinsic
+to what it is (exactly one of each, always); (2) `CircuitTerminal` correction is never blocked, even
+when it would leave a circuit with fewer than two active terminals — a circuit may be temporarily
+incomplete while under correction, but must satisfy the minimum two-active-terminal rule before it
+can (re)enter an `Active` operational state, so the completeness check moved from correction-time to
+activation-time; (3) default list views exclude entered-in-error records, revealed only via an
+explicit opt-in query parameter; (4) `Circuit` and `Transformer` whole-entity correction reuse their
+existing status-change paths — no new endpoint needed.
+
+**Backend.** `SubstationVoltageYard.operational_status_id` and `CircuitTerminal.operational_status_id`
+added as new, mandatory columns (previously neither entity had a status at all); `Circuit` and
+`Transformer` simply gain a new legal value on their existing `operational_status_id` column;
+`TransformerTerminal` deliberately gains no column. New `substation_voltage_yard_audit_log` table
+closes a previously-documented gap (switchyard edits were only tracked via `updated_at`/
+`updated_by_user_id`). A switchyard cannot be corrected to `ENTERED_IN_ERROR` while a non-entered-in-
+error `CircuitTerminal` or `TransformerTerminal` still references it (on a non-entered-in-error
+parent), and no new terminal can be created against a switchyard already `ENTERED_IN_ERROR`. New
+`include_entered_in_error` query parameter (default `false`) on `GET /circuits`, `GET /transformers`,
+`GET /voltage-yards`; detail endpoints remain unfiltered by status. New
+`GET /api/v1/voltage-yards/{id}/audit-log` endpoint. Migration `0009_correction_status` — nullable
+columns backfilled to `ACTIVE`, then `NOT NULL` + FK + index; new audit table; fully reversible.
+Applied to the real dev database; schema and backfill verified via direct SQL (18/18 switchyards,
+4/4 circuit terminals correctly backfilled to `ACTIVE`).
+
+**Frontend.** "Mark as Entered in Error" action added to `SubstationDetailPage` (per switchyard) and
+`CircuitDetailPage` (per terminal) — never "Delete", since this module has no concept of an
+uncommitted draft. `SubstationDetailPage` always fetches switchyards with
+`include_entered_in_error: true` (the database's `(substation_id, voltage_level_id)` uniqueness
+constraint is not status-aware, so the "Add Switchyard" dropdown must always see corrected yards to
+avoid re-offering an already-taken voltage level); a "Show entered-in-error switchyards" checkbox
+filters the rendered list client-side only. `CircuitListPage` and `TransformerListPage` gained
+equivalent "Show entered-in-error circuits/transformers" toggles wired to the new backend parameter.
+
+**Tests.** Backend: 22 new tests (17 service + 5 API) covering switchyard/terminal correction,
+reference-protection rejection, the activation guard, and default-list filtering. 264 backend tests
+total, passing against both SQLite and real PostgreSQL. Frontend: 8 new tests across
+`SubstationDetailPage`, `CircuitDetailPage`, `CircuitListPage`, and `TransformerListPage`. 94 frontend
+tests total, passing; lint/typecheck/build all clean.
+
+**Known limitations**
+
+- `GET /api/v1/voltage-yards/{id}/audit-log` does not 404 on an unknown id — it returns an empty page,
+  consistent with the existing behaviour of this module's other audit-log endpoints.
+- No transition-legality graph is asserted for correcting a switchyard or circuit terminal to
+  `ENTERED_IN_ERROR` beyond the reference-protection check itself — any active-status record may be
+  corrected directly, mirroring `Transformer.operational_status_id`'s own unguarded status field.
+
+### Phase 3.5 UAT fix #2 — transformer numbering model (uniqueness + breaker convention)
+
+UAT found that `UNIQUE(substation_id, transformer_number)` (the Phase 3.5 UAT blocker fix above) was
+itself too coarse: real Malaysian grid practice numbers transformer bays *per transformation pair*,
+not per substation as a whole. A substation legitimately has a "Transformer Bay 1" on its 275/132kV
+pair *and a separate* "Transformer Bay 1" on its 132/33kV pair — the substation-only constraint
+wrongly rejected the second one. UAT separately found the breaker-number suggestion formulas
+insufficient: they were keyed on voltage alone, but the correct formula depends on the transformation
+pair and terminal side (e.g. 132kV needs `{N}10` as an HV side but `{N}80` as an LV side). See
+[ADR-008](docs/adr/ADR-008-substation-voltage-yard.md)'s "UAT Correction #2 (Numbering Model)"
+addendum for the full architecture record.
+
+**Backend.** Uniqueness reverts to `(substation_id, hv_switchyard_id, lv_switchyard_id,
+transformer_number)`, enforced at the service layer via an aliased double join on
+`TransformerTerminal` (mirroring the module's original, pre-Phase-3.5-UAT-fix design) — not as a raw
+database constraint, since denormalizing both switchyard ids onto `Transformer` to regain a
+single-table constraint was considered and rejected (it would reintroduce the exact two-winding-only
+assumption Decision 1 deliberately avoided baking into `Transformer`'s own column set, undermining
+future tertiary-winding compatibility). Migration `0010_transformer_yard_pair` drops the now-incorrect
+`uq_transformer_substation_number` constraint; no replacement single-table constraint is added.
+`update_transformer` previously performed **no uniqueness check at all** when `transformer_number`
+changed — a pre-existing gap, closed as part of this fix, since the exact same repository lookup now
+backs both `create_transformer` and `update_transformer`. `DuplicateTransformerError`'s message was
+reworded to name the HV/LV pair, not just the substation.
+
+**Frontend.** `transformerBreakerSuggestion.ts` rewritten from a per-voltage table to a mapping keyed
+by (HV nominal kV, LV nominal kV, side), covering the five transformation pairs the convention
+specifies (500/275, 275/132, 132/33, 132/22, 132/11kV) — any other pair (e.g. one involving 230kV) has
+no suggestion, an intentional scope limit. `TransformerCreatePage` now waits for both HV and LV
+switchyards to be selected before suggesting either breaker number, since the formula genuinely
+depends on the pair, not either voltage alone — a direct, accepted UX consequence of the corrected
+model, not a regression.
+
+**Tests.** Backend: 6 new tests (4 service + 2 API) covering same-number-different-pair allowance
+(create and update), same-pair-same-number rejection (unchanged behaviour, re-verified against the new
+implementation), and the previously-untested `update_transformer` uniqueness path. 271 backend tests
+total (36 in `test_transformer_service.py`, 18 in `test_transformer_registry_api.py`), passing against
+both SQLite and real PostgreSQL. Frontend: `transformerBreakerSuggestion.test.ts` rewritten (15 tests
+covering all five transformation pairs, both sides, and the out-of-scope-pair/non-numeric-input null
+cases); 2 `TransformerCreatePage` tests updated for the corrected LV-side formula and the
+both-switchyards-required suggestion timing. 100 frontend tests total, passing; lint/typecheck/build
+all clean.
+
+### Transformer breaker-numbering convention moved to reference data
+
+The (HV nominal kV, LV nominal kV, side)-keyed breaker-suggestion mapping introduced by the numbering-
+model fix above was itself hardcoded in a frontend TypeScript file. Moved into a new Core Platform
+reference table so the convention is auditable, seedable, and maintainable (a new transformation pair,
+or a corrected pattern, is now a data change, not a frontend code change) without changing what the
+convention actually says or its suggestion-only, never-backend-enforced nature.
+
+**Backend.** New reference table `transformer_breaker_numbering_convention`
+(`app/reference_data/models.py`) — `convention_id` (surrogate PK), `hv_voltage_level_id`/
+`lv_voltage_level_id` (real FKs to `voltage_level`, not raw nominal-kV numbers), `side` (`CHECK IN
+('HV','LV')`), `pattern` (nullable — `NULL` means no automatic suggestion), `is_standard`, `notes`.
+`UNIQUE (hv_voltage_level_id, lv_voltage_level_id, side)`. No `created_at`/`updated_at` — consistent
+with every other reference table in this module (`VoltageLevel`, `Region`, `State`, `GridOwner`,
+`OperationalStatus`, `LineType`), none of which have them. Migration `0011_breaker_convention` creates
+the table (no data — seeding is a separate step, per this project's established convention). Seeded
+idempotently by `app/reference_data/seed.py`'s `run_seed`, with the exact ten rows (five transformation
+pairs × two sides) matching the corrected convention exactly — safe to re-run, and backfills correctly
+into a database seeded before this table existed (mirroring `line_type`'s own established backfill
+guarantee). One real bug found and fixed along the way: this project's `SessionLocal` is configured
+`autoflush=False` (`app/db/session.py`), so `run_seed` needed an explicit `db.flush()` after seeding
+`voltage_level` and before seeding this new table, since it is the first seed function to depend on
+another table's rows being visible within the same call — every prior seed function only ever queried
+its own table. Exposed read-only via the existing reference-data router:
+`GET /api/v1/reference-data/transformer-breaker-numbering-conventions` (authentication required, no
+additional permission gate, matching every other reference-data endpoint). No write endpoint —
+reference data is managed exclusively via the seed script, never through the API.
+
+**Frontend.** `transformerBreakerSuggestion.ts` rewritten: the hardcoded pair/side lookup table is
+gone, replaced by a pure function that takes the fetched convention list as a parameter and looks up
+the matching row by `(hv_voltage_level_id, lv_voltage_level_id, side)`, applying `pattern`'s `{N}`
+placeholder substitution. `TransformerCreatePage` now fetches the convention list via its own query and
+gates suggestion display on four conditions: the transformer number, both switchyards' voltage levels,
+and the convention list itself being loaded — a suggestion cannot appear until all four are ready. A
+missing convention row, or a row with `pattern = null`, both correctly produce no suggestion, leaving
+the breaker-number field free for manual entry — never a rejected or blocked input.
+
+**Tests.** Backend: 3 new reference-data seed tests (exact seeded pattern/`is_standard` values matched
+against the documented convention table; a dedicated backfill-into-a-partially-seeded-database test for
+this table, mirroring `line_type`'s own) plus 2 new API tests (authentication required; every seeded
+row returned, with the non-standard/null-pattern row distinguishable from a real pattern). 282 backend
+tests total, passing against both SQLite and real PostgreSQL. Frontend: `transformerBreakerSuggestion.test.ts`
+rewritten again for the new convention-array-based signature (16 tests, same coverage as before plus an
+explicit "empty convention list" case); 1 new `TransformerCreatePage` test for the no-matching-convention/
+manual-entry path. 102 frontend tests total, passing; lint/typecheck/build all clean.
+
+### Phase 3.5 UAT fix #3 — ENTERED_IN_ERROR transformers permanently reserved their identity
+
+UAT found that a transformer corrected to `ENTERED_IN_ERROR` still permanently occupied its
+`(substation, HV switchyard, LV switchyard, transformer_number)` identity: creating "PKLG, 275kV HV,
+132kV LV, Transformer 1" was rejected as a duplicate even though the only visible PKLG transformers
+were both on the 132/11kV pair. The corrected record — hidden from every default view per the
+deletion/correction policy — was still counted as "existing" by the uniqueness check, since
+`find_transformer_by_yard_pair_and_number` never filtered on `operational_status_id`.
+
+**Investigation (performed before any code change, at the user's explicit request).** Reconstructed
+the exact submitted payload and queried `transformer`/`transformer_terminal` directly, confirming a
+third PKLG transformer existed beyond the two visible ones: a stray `ENTERED_IN_ERROR` row from an
+earlier live smoke test, sitting on exactly the 275kV/132kV pair with `transformer_number = "1"`. The
+join/comparison logic in `find_transformer_by_yard_pair_and_number` was verified correct — real
+switchyard ids, both terminals, no incorrect join — the sole gap was the missing status exclusion.
+Frontend payload construction was also verified correct (switchyard ids submitted verbatim from the
+selected options, no transformation).
+
+**Backend.** `find_transformer_by_yard_pair_and_number` now excludes `ENTERED_IN_ERROR` transformers
+(`Transformer.operational_status_id != _entered_in_error_status_id_subquery()`), mirroring the same
+exclusion already used for switchyard reference-protection and default list filtering elsewhere in this
+module. Applies automatically to both `create_transformer` and `update_transformer`, since both call
+this same repository method. The corrected transformer row itself is never deleted or altered by this
+fix — only excluded from this one uniqueness check — so it remains reachable by id and fully
+audit-visible, consistent with CLAUDE.md §11.6 (no hard delete) and the deletion/correction policy's own
+"hidden from default views, not from audit/history" principle.
+
+**Tests.** Backend: 4 new service tests (`TestTransformerUniquenessExcludesEnteredInError` —
+an `ENTERED_IN_ERROR` transformer no longer blocks recreating the same identity; an `ACTIVE`
+transformer still correctly blocks a genuine duplicate; the same exclusion applies to
+`update_transformer`) plus 1 new API test reproducing the full correction-then-recreation flow over
+HTTP end-to-end, including confirming the corrected record remains reachable by `GET` afterward. 286
+backend tests total, passing against both SQLite and real PostgreSQL. No frontend changes were
+required — the bug was entirely in the backend uniqueness query. Live-verified via `curl` against the
+real dev database: the exact reported scenario (PKLG, 275kV HV, 132kV LV, Transformer 1) now succeeds;
+a subsequent genuine duplicate against the new record is still correctly rejected; the original stray
+`ENTERED_IN_ERROR` artifact and this fix's own smoke-test transformer both remain reachable by id,
+neither hard-deleted.
+
+**Dev database cleanup.** The stray smoke-test artifact from an earlier session (`300aac73-...`,
+PKLG, 275/132kV, "1") was left exactly as found — already correctly marked `ENTERED_IN_ERROR`, which is
+itself the "neutralized" state this policy defines; hard-deleting it via raw SQL was deliberately not
+done, since it would bypass this module's own audit/correction mechanism and CLAUDE.md §11.6 prohibits
+hard delete on engineering entities regardless of whether a UI path exists for it. This fix's own new
+smoke-test transformer was corrected to `ENTERED_IN_ERROR` the same way, for consistency.
+
+---
+
 ## Phase 3 — Equipment Registry (Circuit / CircuitTerminal Management)
 
 **Scope:** Circuit and CircuitTerminal identity —
@@ -470,6 +850,52 @@ Tested:
 tests pass, the operational status lifecycle gap is resolved (ADR-005), the
 schema is verified against real PostgreSQL, and manual UAT confirms the
 end-to-end flow works as built.
+
+### Phase 2 UAT fix — mnemonic uniqueness incorrectly rejected same-substation reuse
+
+UAT found that renaming a substation's mnemonic away and then back (e.g.
+`SIDS` → `SIDST` → `SIDS`) was incorrectly rejected with "Mnemonic ... is
+already in use by a current or historical substation," even though the
+historical alias being collided with belonged to the *same* substation
+making the request. `_check_mnemonic_available`'s historical-alias check
+(`repo.alias_mnemonic_exists_ci`) tested only whether any alias row existed
+for the mnemonic, never *whose* alias it was — so a substation always
+collided with its own retired mnemonics, and `exclude_substation_id` (already
+threaded through correctly by both call sites) had no effect on this half of
+the check.
+
+**Backend.** `SubstationRepository.alias_mnemonic_exists_ci` (returned
+`bool`) replaced with `find_alias_mnemonic_owner_ci` (returns the owning
+`substation_id | None`), so the service can distinguish "this substation's
+own historical mnemonic" (allow) from "a different substation's historical
+mnemonic" (reject) — the same `exclude_substation_id` parameter used for the
+live-record check now scopes the alias check too. Split the previously
+single `DuplicateMnemonicError` into two distinct, more specific errors so a
+user is never told the wrong reason: `DuplicateMnemonicError` ("already in
+use by another *current* substation") and the new
+`MnemonicReservedByHistoricalSubstationError` ("previously used by a
+*different* substation ... permanently reserved to that substation's
+identity"). `DuplicateNameError`'s message was updated to the same "another
+current substation" phrasing for consistency; `official_name` was confirmed
+to have no equivalent historical-reservation behavior to fix — unlike
+mnemonic, substation-registry.md §8 rule 1 singles out mnemonic alone as
+"a special, gated operation," and no code path ever writes
+`SubstationAlias.alias_name`, so a name rename-and-back already worked
+correctly before this fix and required no change.
+
+**Tests.** 7 new tests: 4 in a new `TestMnemonicOwnershipAcrossRename` class
+(same-substation reactivation of a historical mnemonic allowed; a different
+substation's *current* mnemonic rejected; a different substation's
+*historical* mnemonic rejected on both create and update), 1 documenting the
+already-correct name rename-and-back behavior, and 2 new API tests
+reproducing the exact UAT repro steps end-to-end over HTTP. The pre-existing
+`test_retired_mnemonic_cannot_be_reassigned_to_a_new_substation` test was
+updated to expect the new, more specific `MnemonicReservedByHistoricalSubstationError`.
+271 backend tests total, passing against both SQLite and real PostgreSQL —
+live-verified via `curl` against the real dev database reproducing the exact
+`SIDS`-style rename-away-and-back sequence (succeeds) and a second
+substation attempting to claim the first's retired mnemonic (rejected with
+the new historical-reservation message).
 
 ---
 

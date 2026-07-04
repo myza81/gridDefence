@@ -43,6 +43,7 @@ from app.reference_data.models import (
     OperationalStatus,
     Region,
     State,
+    TransformerBreakerNumberingConvention,
     VoltageLevel,
 )
 
@@ -53,6 +54,13 @@ VOLTAGE_LEVELS: list[dict[str, object]] = [
     {"label": "275kV", "nominal_kv": 275, "sort_order": 2},
     {"label": "230kV", "nominal_kv": 230, "sort_order": 3},
     {"label": "132kV", "nominal_kv": 132, "sort_order": 4},
+    # Added by Phase 3.5 (Transformer Registry) — the LV-side distribution
+    # voltage classes named explicitly in the transformer short-name/breaker
+    # convention (132/33kV, 132/11kV, etc.); no substation or circuit in
+    # this project has needed one until a transformer's LV side did.
+    {"label": "33kV", "nominal_kv": 33, "sort_order": 5},
+    {"label": "22kV", "nominal_kv": 22, "sort_order": 6},
+    {"label": "11kV", "nominal_kv": 11, "sort_order": 7},
 ]
 
 REGIONS: list[dict[str, str]] = [
@@ -96,6 +104,13 @@ OPERATIONAL_STATUSES: list[dict[str, object]] = [
     {"code": "MOTHBALLED", "label": "Mothballed", "is_terminal": False},
     {"code": "DECOMMISSIONED", "label": "Decommissioned", "is_terminal": True},
     {"code": "RETIRED", "label": "Retired", "is_terminal": True},
+    # Added by the Equipment Registry deletion/correction policy (Phase 3
+    # follow-up) — represents a mistakenly-created record, not a real piece
+    # of equipment reaching genuine end-of-life (that remains
+    # DECOMMISSIONED/RETIRED, unaffected). Used by SubstationVoltageYard,
+    # CircuitTerminal, Circuit, and Transformer as the correction mechanism
+    # replacing hard delete (CLAUDE.md §11.6).
+    {"code": "ENTERED_IN_ERROR", "label": "Entered in Error", "is_terminal": True},
 ]
 
 # Added by Phase 3 (Equipment Registry) — the four construction types named
@@ -105,6 +120,97 @@ LINE_TYPES: list[dict[str, str]] = [
     {"code": "CABLE", "label": "Cable"},
     {"code": "SUBMARINE", "label": "Submarine"},
     {"code": "HYBRID", "label": "Hybrid"},
+]
+
+# Added by the Transformer Registry breaker-numbering-convention-as-
+# reference-data correction — the TNB convention previously hardcoded in
+# frontend/src/modules/equipment_registry/transformerBreakerSuggestion.ts
+# (equipment-registry-module.md Transformer Registry Business Rule 7).
+# `hv_label`/`lv_label` are resolved to `voltage_level_id` at seed time, not
+# stored directly — this table's own FK columns are the persisted form.
+# `pattern=None` (500kV HV side) means no automatic suggestion exists;
+# `{N}` is replaced with the transformer/bay number by the frontend.
+TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS: list[dict[str, object]] = [
+    {
+        "hv_label": "500kV",
+        "lv_label": "275kV",
+        "side": "HV",
+        "pattern": None,
+        "is_standard": False,
+        "notes": "Non-standard — no automatic suggestion for the 500kV side.",
+    },
+    {
+        "hv_label": "500kV",
+        "lv_label": "275kV",
+        "side": "LV",
+        "pattern": "T{N}0",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "275kV",
+        "lv_label": "132kV",
+        "side": "HV",
+        "pattern": "H{N}0",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "275kV",
+        "lv_label": "132kV",
+        "side": "LV",
+        "pattern": "{N}80",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "132kV",
+        "lv_label": "33kV",
+        "side": "HV",
+        "pattern": "{N}10",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "132kV",
+        "lv_label": "33kV",
+        "side": "LV",
+        "pattern": "{N}T0",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "132kV",
+        "lv_label": "22kV",
+        "side": "HV",
+        "pattern": "{N}10",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "132kV",
+        "lv_label": "22kV",
+        "side": "LV",
+        "pattern": "{N}T0",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "132kV",
+        "lv_label": "11kV",
+        "side": "HV",
+        "pattern": "{N}10",
+        "is_standard": True,
+        "notes": None,
+    },
+    {
+        "hv_label": "132kV",
+        "lv_label": "11kV",
+        "side": "LV",
+        "pattern": "3{N}",
+        "is_standard": True,
+        "notes": None,
+    },
 ]
 
 
@@ -174,18 +280,67 @@ def _seed_line_types(db: Session) -> int:
     return created
 
 
+def _seed_transformer_breaker_numbering_conventions(db: Session) -> int:
+    """Depends on `voltage_level` already being seeded and flushed —
+    `run_seed` below calls `db.flush()` after `_seed_voltage_levels` and
+    before this function specifically so a same-call, first-ever seed run
+    can resolve `hv_label`/`lv_label` to real ids (this project's session is
+    `autoflush=False`, app/db/session.py, so this cannot be left implicit)."""
+    voltage_level_id_by_label = {
+        vl.label: vl.voltage_level_id for vl in db.query(VoltageLevel).all()
+    }
+    existing = {
+        (c.hv_voltage_level_id, c.lv_voltage_level_id, c.side)
+        for c in db.query(TransformerBreakerNumberingConvention).all()
+    }
+    created = 0
+    for row in TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS:
+        hv_voltage_level_id = voltage_level_id_by_label[row["hv_label"]]
+        lv_voltage_level_id = voltage_level_id_by_label[row["lv_label"]]
+        key = (hv_voltage_level_id, lv_voltage_level_id, row["side"])
+        if key in existing:
+            continue
+        db.add(
+            TransformerBreakerNumberingConvention(
+                hv_voltage_level_id=hv_voltage_level_id,
+                lv_voltage_level_id=lv_voltage_level_id,
+                side=row["side"],
+                pattern=row["pattern"],
+                is_standard=row["is_standard"],
+                notes=row["notes"],
+            )
+        )
+        created += 1
+    return created
+
+
 def run_seed(db: Session) -> dict[str, int]:
     """Idempotently seed every Core Platform reference table. Safe to call
     on every startup/deploy — rows already present (matched by their unique
-    `code`/`label`) are left untouched, never duplicated or overwritten.
+    `code`/`label`, or `(hv_voltage_level_id, lv_voltage_level_id, side)` for
+    the transformer breaker-numbering convention) are left untouched, never
+    duplicated or overwritten.
     """
+    voltage_level_count = _seed_voltage_levels(db)
+    # `SessionLocal` is configured with `autoflush=False` (app/db/session.py)
+    # — unlike every other seed function here,
+    # `_seed_transformer_breaker_numbering_conventions` below depends on
+    # `voltage_level` rows added by the call just above being visible to its
+    # own `db.query(VoltageLevel)` lookup. An explicit flush (not a commit —
+    # the whole seed run stays one transaction) makes them visible without
+    # relying on autoflush, which this project's session deliberately
+    # disables.
+    db.flush()
     counts = {
-        "voltage_level": _seed_voltage_levels(db),
+        "voltage_level": voltage_level_count,
         "region": _seed_regions(db),
         "state": _seed_states(db),
         "grid_owner": _seed_grid_owners(db),
         "operational_status": _seed_operational_statuses(db),
         "line_type": _seed_line_types(db),
+        "transformer_breaker_numbering_convention": _seed_transformer_breaker_numbering_conventions(
+            db
+        ),
     }
     db.commit()
     logger.info("Reference data seed complete: %s", counts)

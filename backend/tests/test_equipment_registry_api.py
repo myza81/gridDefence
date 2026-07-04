@@ -401,6 +401,60 @@ def test_search_and_filter(client: TestClient, db_session: Session) -> None:
     assert filter_response.json()["total"] == 1
 
 
+def test_filter_by_substation_id_returns_engineering_connectivity(
+    client: TestClient, db_session: Session
+) -> None:
+    """Backs the Substation Detail page's "Engineering Connectivity"
+    section — derived from Circuit/CircuitTerminal/Substation only, never
+    PSS/E data."""
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+
+    # A third, real substation with no circuit connected to it at all —
+    # unrelated substations must not see PKLG–IGBK's circuit.
+    unrelated_substation = SubstationService(db_session).create_substation(
+        mnemonic="NKST",
+        official_name="NKST Substation",
+        region_id=ref["region_id"],
+        state_id=ref["state_id"],
+        grid_owner_id=ref["grid_owner_id"],
+        operational_status_id=ref["operational_status_id"],
+        psse_bus_number=None,
+        latitude=None,
+        longitude=None,
+        commissioned_date=None,
+        remarks=None,
+        actor_user_id=admin_id,
+    )
+    db_session.commit()
+
+    create_response = client.post(
+        "/api/v1/circuits", headers=headers, json=_circuit_payload(ref, voltage_yard_ids)
+    )
+    assert create_response.status_code == 201, create_response.text
+
+    pklg_response = client.get(
+        f"/api/v1/circuits?substation_id={substation_ids['PKLG']}", headers=headers
+    )
+    assert pklg_response.status_code == 200
+    assert pklg_response.json()["total"] == 1
+
+    igbk_response = client.get(
+        f"/api/v1/circuits?substation_id={substation_ids['IGBK']}", headers=headers
+    )
+    assert igbk_response.status_code == 200
+    assert igbk_response.json()["total"] == 1
+
+    unrelated_response = client.get(
+        f"/api/v1/circuits?substation_id={unrelated_substation.substation_id}", headers=headers
+    )
+    assert unrelated_response.status_code == 200
+    assert unrelated_response.json()["total"] == 0
+    assert unrelated_response.json()["items"] == []
+
+
 def test_no_delete_endpoint_exists(client: TestClient, db_session: Session) -> None:
     ref = _seed_reference_data(db_session)
     token, admin_id = _admin_setup(client, db_session)
@@ -743,3 +797,174 @@ def test_update_unknown_voltage_yard_returns_400(client: TestClient, db_session:
     )
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "validation_error"
+
+
+# --- Equipment Registry deletion/correction policy (Phase 3 follow-up) -------------------
+
+
+def _entered_in_error_status_id(db_session: Session) -> int:
+    return (
+        db_session.query(OperationalStatus)
+        .filter_by(code="ENTERED_IN_ERROR")
+        .one()
+        .operational_status_id
+    )
+
+
+def test_correct_switchyard_as_entered_in_error_hides_it_from_default_list(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    response = client.patch(
+        f"/api/v1/voltage-yards/{voltage_yard_ids['IGBK']}",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id, "change_reason": "Wrong site"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["operational_status_id"] == entered_in_error_id
+
+    default_list = client.get(
+        f"/api/v1/voltage-yards?substation_id={substation_ids['IGBK']}", headers=headers
+    )
+    assert default_list.json() == []
+
+    full_list = client.get(
+        f"/api/v1/voltage-yards?substation_id={substation_ids['IGBK']}&include_entered_in_error=true",
+        headers=headers,
+    )
+    assert len(full_list.json()) == 1
+
+    audit_response = client.get(
+        f"/api/v1/voltage-yards/{voltage_yard_ids['IGBK']}/audit-log", headers=headers
+    )
+    assert audit_response.status_code == 200
+    entries = audit_response.json()["items"]
+    assert len(entries) == 1
+    assert entries[0]["field_name"] == "operational_status_id"
+    assert entries[0]["change_reason"] == "Wrong site"
+
+
+def test_correcting_a_referenced_switchyard_returns_400(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    client.post("/api/v1/circuits", headers=headers, json=_circuit_payload(ref, voltage_yard_ids))
+
+    response = client.patch(
+        f"/api/v1/voltage-yards/{voltage_yard_ids['PKLG']}",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "validation_error"
+    assert "active circuit terminal" in response.json()["detail"]["message"]
+
+
+def test_correct_circuit_terminal_as_entered_in_error_via_api(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    create_response = client.post(
+        "/api/v1/circuits", headers=headers, json=_circuit_payload(ref, voltage_yard_ids)
+    )
+    circuit_id = create_response.json()["circuit_id"]
+    terminal_id = create_response.json()["terminals"][0]["circuit_terminal_id"]
+
+    response = client.patch(
+        f"/api/v1/circuits/{circuit_id}/terminals/{terminal_id}",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id},
+    )
+    assert response.status_code == 200, response.text
+    corrected = next(
+        t for t in response.json()["terminals"] if t["circuit_terminal_id"] == terminal_id
+    )
+    assert corrected["operational_status_id"] == entered_in_error_id
+
+    audit_response = client.get(f"/api/v1/circuits/{circuit_id}/audit-log", headers=headers)
+    field_names = {e["field_name"] for e in audit_response.json()["items"]}
+    assert "terminal_status" in field_names
+
+
+def test_activation_guard_returns_400_when_fewer_than_two_active_terminals(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    planned_status_id = (
+        db_session.query(OperationalStatus).filter_by(code="PLANNED").one().operational_status_id
+    )
+    active_status_id = ref["operational_status_id"]
+
+    create_response = client.post(
+        "/api/v1/circuits",
+        headers=headers,
+        json=_circuit_payload(ref, voltage_yard_ids, operational_status_id=planned_status_id),
+    )
+    circuit_id = create_response.json()["circuit_id"]
+    terminal_id = create_response.json()["terminals"][0]["circuit_terminal_id"]
+
+    client.patch(
+        f"/api/v1/circuits/{circuit_id}/terminals/{terminal_id}",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id},
+    )
+
+    response = client.post(
+        f"/api/v1/circuits/{circuit_id}/status",
+        headers=headers,
+        json={"operational_status_id": active_status_id, "change_reason": None},
+    )
+    assert response.status_code == 400
+    assert "fewer than two active terminals" in response.json()["detail"]["message"]
+
+
+def test_entered_in_error_circuit_hidden_from_default_list_and_reachable_via_flag(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    create_response = client.post(
+        "/api/v1/circuits", headers=headers, json=_circuit_payload(ref, voltage_yard_ids)
+    )
+    circuit_id = create_response.json()["circuit_id"]
+
+    client.post(
+        f"/api/v1/circuits/{circuit_id}/status",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id, "change_reason": "Duplicate entry"},
+    )
+
+    default_list = client.get("/api/v1/circuits", headers=headers)
+    assert default_list.json()["total"] == 0
+
+    full_list = client.get("/api/v1/circuits?include_entered_in_error=true", headers=headers)
+    assert full_list.json()["total"] == 1
+
+    # Still directly reachable — the detail page is this module's own
+    # audit/history view (deletion/correction policy).
+    detail_response = client.get(f"/api/v1/circuits/{circuit_id}", headers=headers)
+    assert detail_response.status_code == 200

@@ -15,6 +15,7 @@ from app.reference_data.models import (
     OperationalStatus,
     Region,
     State,
+    TransformerBreakerNumberingConvention,
     VoltageLevel,
 )
 
@@ -59,6 +60,16 @@ class ReferenceDataRepository:
         stmt = select(LineType).order_by(LineType.label)
         return list(self.db.execute(stmt).scalars().all())
 
+    def list_transformer_breaker_numbering_conventions(
+        self,
+    ) -> list[TransformerBreakerNumberingConvention]:
+        stmt = select(TransformerBreakerNumberingConvention).order_by(
+            TransformerBreakerNumberingConvention.hv_voltage_level_id,
+            TransformerBreakerNumberingConvention.lv_voltage_level_id,
+            TransformerBreakerNumberingConvention.side,
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
     def get_voltage_level(self, voltage_level_id: int) -> VoltageLevel | None:
         if not _in_smallint_range(voltage_level_id):
             return None
@@ -83,6 +94,14 @@ class ReferenceDataRepository:
         if not _in_smallint_range(operational_status_id):
             return None
         return self.db.get(OperationalStatus, operational_status_id)
+
+    def get_operational_status_by_code(self, code: str) -> OperationalStatus | None:
+        """Resolves a status by its stable `code` (e.g. "ACTIVE",
+        "ENTERED_IN_ERROR") rather than its numeric id — used by callers
+        that need a specific well-known status without hardcoding an id
+        that depends on seed insertion order."""
+        stmt = select(OperationalStatus).where(OperationalStatus.code == code)
+        return self.db.execute(stmt).scalar_one_or_none()
 
     def get_line_type(self, line_type_id: int) -> LineType | None:
         if not _in_smallint_range(line_type_id):

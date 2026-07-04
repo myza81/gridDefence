@@ -165,6 +165,30 @@ def voltage_yard_ids(
 
 
 @pytest.fixture()
+def lv_voltage_yard_ids(
+    db_session: Session,
+    second_voltage_level_id: int,
+    substation_ids: dict[str, uuid.UUID],
+    actor_user_id: uuid.UUID,
+) -> dict[str, uuid.UUID]:
+    """One additional `SubstationVoltageYard` per fixture substation, at
+    `second_voltage_level_id` (132kV) — the LV counterpart to
+    `voltage_yard_ids` (500kV). Transformer Registry tests (Phase 3.5) use
+    one yard from each dict to build a real HV/LV pair."""
+    service = EquipmentRegistryService(db_session)
+    ids: dict[str, uuid.UUID] = {}
+    for mnemonic, substation_id in substation_ids.items():
+        yard = service.create_voltage_yard(
+            substation_id=substation_id,
+            voltage_level_id=second_voltage_level_id,
+            actor_user_id=actor_user_id,
+        )
+        ids[mnemonic] = yard.voltage_yard_id
+    db_session.commit()
+    return ids
+
+
+@pytest.fixture()
 def bootstrapped_equipment_registry_permissions(db_session: Session) -> None:
     """Runs Equipment Registry's own permission-registration bootstrap
     against an IAM database that has already run IAM's own bootstrap."""

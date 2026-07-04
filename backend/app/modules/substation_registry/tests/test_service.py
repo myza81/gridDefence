@@ -22,6 +22,7 @@ from app.modules.substation_registry.exceptions import (
     DuplicatePsseBusNumberError,
     InvalidGeolocationPairError,
     InvalidStatusTransitionError,
+    MnemonicReservedByHistoricalSubstationError,
     NotFoundError,
     ReferenceDataNotFoundError,
 )
@@ -91,8 +92,100 @@ class TestMnemonicUniqueness:
         )
         db_session.commit()
 
-        with pytest.raises(DuplicateMnemonicError):
+        with pytest.raises(MnemonicReservedByHistoricalSubstationError):
             _create(service, reference_ids, actor_user_id, mnemonic="OLD1", official_name="Other")
+
+
+# --- Mnemonic ownership across rename (UAT regression) ---------------------------------
+class TestMnemonicOwnershipAcrossRename:
+    """UAT found that SIDS -> SIDST -> SIDS on the *same* substation was
+    incorrectly rejected: `_check_mnemonic_available` checked whether
+    "SIDS" existed anywhere in `substation_alias` without checking *whose*
+    alias it was, so a substation always collided with its own retired
+    mnemonic. Fixed by having the repository return the alias's owning
+    `substation_id` so the service can allow reuse by that same substation
+    while still rejecting reuse by a different one."""
+
+    def test_same_substation_can_reactivate_its_own_historical_mnemonic(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id, mnemonic="SIDS")
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id, mnemonic="SIDST", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        # Renaming back to its own retired mnemonic must be allowed.
+        updated = service.update_substation(
+            substation.substation_id, mnemonic="SIDS", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        assert updated.mnemonic == "SIDS"
+
+    def test_current_mnemonic_of_another_substation_is_rejected(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        _create(
+            service, reference_ids, actor_user_id, mnemonic="SIDS", official_name="Substation A"
+        )
+        db_session.commit()
+
+        with pytest.raises(DuplicateMnemonicError):
+            _create(
+                service,
+                reference_ids,
+                actor_user_id,
+                mnemonic="SIDS",
+                official_name="Substation B",
+            )
+
+    def test_historical_mnemonic_of_another_substation_is_rejected_on_create(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation_a = _create(
+            service, reference_ids, actor_user_id, mnemonic="SIDS", official_name="Substation A"
+        )
+        db_session.commit()
+        service.update_substation(
+            substation_a.substation_id, mnemonic="SIDST", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        with pytest.raises(MnemonicReservedByHistoricalSubstationError):
+            _create(
+                service,
+                reference_ids,
+                actor_user_id,
+                mnemonic="SIDS",
+                official_name="Substation B",
+            )
+
+    def test_historical_mnemonic_of_another_substation_is_rejected_on_update(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation_a = _create(
+            service, reference_ids, actor_user_id, mnemonic="SIDS", official_name="Substation A"
+        )
+        db_session.commit()
+        service.update_substation(
+            substation_a.substation_id, mnemonic="SIDST", actor_user_id=actor_user_id
+        )
+        substation_b = _create(
+            service, reference_ids, actor_user_id, mnemonic="OTHR", official_name="Substation B"
+        )
+        db_session.commit()
+
+        with pytest.raises(MnemonicReservedByHistoricalSubstationError):
+            service.update_substation(
+                substation_b.substation_id, mnemonic="SIDS", actor_user_id=actor_user_id
+            )
 
 
 # --- substation_id immutability (mandated) --------------------------------------------
@@ -246,6 +339,30 @@ class TestOtherUniquenessRules:
                 official_name="Shared Name",
             )
 
+    def test_same_substation_can_rename_back_to_its_own_former_name(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """Unlike mnemonic, official_name has no alias/reservation table
+        (substation-registry.md §8 rule 1 singles out mnemonic only), so
+        this already worked correctly before the mnemonic fix — recorded
+        here as a regression test so the two rules' parity is verified,
+        not merely assumed."""
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id, official_name="Original Name")
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id, official_name="Renamed", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        updated = service.update_substation(
+            substation.substation_id, official_name="Original Name", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        assert updated.official_name == "Original Name"
+
     def test_duplicate_psse_bus_number_raises(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
@@ -301,9 +418,10 @@ class TestReferenceDataValidation:
         be able to express it."""
         import inspect
 
-        assert "voltage_level_id" not in inspect.signature(
-            SubstationService.create_substation
-        ).parameters
+        assert (
+            "voltage_level_id"
+            not in inspect.signature(SubstationService.create_substation).parameters
+        )
 
 
 # --- Status transition legality (closed allow-list per ADR-005) -----------------------

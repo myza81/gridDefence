@@ -9,6 +9,12 @@ import type {
   CircuitTerminalSummary,
   CircuitTerminalUpdate,
   CircuitUpdate,
+  TransformerAuditLogPage,
+  TransformerCreate,
+  TransformerDetail,
+  TransformerPage,
+  TransformerUpdate,
+  VoltageYardAuditLogPage,
   VoltageYardCreate,
   VoltageYardSummary,
   VoltageYardUpdate,
@@ -17,11 +23,30 @@ import type {
 export interface CircuitListFilters {
   page?: number;
   page_size?: number;
+  substation_id?: string;
   voltage_level_id?: number;
   line_type_id?: number;
   operational_status_id?: number;
   is_interconnector?: boolean;
   search?: string;
+  // Deletion/correction policy (Phase 3 follow-up) — Entered-in-Error
+  // circuits are excluded by default; this opts back in for an
+  // audit-facing "show corrected records" view.
+  include_entered_in_error?: boolean;
+}
+
+export interface TransformerListFilters {
+  page?: number;
+  page_size?: number;
+  substation_id?: string;
+  operational_status_id?: number;
+  search?: string;
+  include_entered_in_error?: boolean;
+}
+
+export interface VoltageYardListFilters {
+  substation_id?: string;
+  include_entered_in_error?: boolean;
 }
 
 function buildQuery<T extends object>(filters: T): string {
@@ -59,12 +84,26 @@ export const equipmentRegistryApi = {
     apiClient.get<CircuitAuditLogPage>(
       `/api/v1/circuits/${circuitId}/audit-log?page=${page}&page_size=${pageSize}`,
     ),
-  listVoltageYards: (substationId?: string) =>
-    apiClient.get<VoltageYardSummary[]>(
-      `/api/v1/voltage-yards${buildQuery({ substation_id: substationId })}`,
-    ),
+  listVoltageYards: (filters: VoltageYardListFilters = {}) =>
+    apiClient.get<VoltageYardSummary[]>(`/api/v1/voltage-yards${buildQuery(filters)}`),
   createVoltageYard: (payload: VoltageYardCreate) =>
     apiClient.post<VoltageYardSummary>("/api/v1/voltage-yards", payload),
   updateVoltageYard: (voltageYardId: string, payload: VoltageYardUpdate) =>
     apiClient.patch<VoltageYardSummary>(`/api/v1/voltage-yards/${voltageYardId}`, payload),
+  listVoltageYardAuditLog: (voltageYardId: string, page = 1, pageSize = 50) =>
+    apiClient.get<VoltageYardAuditLogPage>(
+      `/api/v1/voltage-yards/${voltageYardId}/audit-log?page=${page}&page_size=${pageSize}`,
+    ),
+  listTransformers: (filters: TransformerListFilters = {}) =>
+    apiClient.get<TransformerPage>(`/api/v1/transformers${buildQuery(filters)}`),
+  getTransformer: (transformerId: string) =>
+    apiClient.get<TransformerDetail>(`/api/v1/transformers/${transformerId}`),
+  createTransformer: (payload: TransformerCreate) =>
+    apiClient.post<TransformerDetail>("/api/v1/transformers", payload),
+  updateTransformer: (transformerId: string, payload: TransformerUpdate) =>
+    apiClient.patch<TransformerDetail>(`/api/v1/transformers/${transformerId}`, payload),
+  listTransformerAuditLog: (transformerId: string, page = 1, pageSize = 50) =>
+    apiClient.get<TransformerAuditLogPage>(
+      `/api/v1/transformers/${transformerId}/audit-log?page=${page}&page_size=${pageSize}`,
+    ),
 };

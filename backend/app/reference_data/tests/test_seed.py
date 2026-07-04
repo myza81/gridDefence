@@ -16,6 +16,7 @@ from app.reference_data.models import (
     OperationalStatus,
     Region,
     State,
+    TransformerBreakerNumberingConvention,
     VoltageLevel,
 )
 from app.reference_data.seed import (
@@ -24,6 +25,7 @@ from app.reference_data.seed import (
     OPERATIONAL_STATUSES,
     REGIONS,
     STATES,
+    TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS,
     VOLTAGE_LEVELS,
     run_seed,
 )
@@ -39,6 +41,7 @@ def test_first_run_creates_every_documented_row(db_session: Session) -> None:
         "grid_owner": len(GRID_OWNERS),
         "operational_status": len(OPERATIONAL_STATUSES),
         "line_type": len(LINE_TYPES),
+        "transformer_breaker_numbering_convention": len(TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS),
     }
     assert db_session.query(VoltageLevel).count() == len(VOLTAGE_LEVELS)
     assert db_session.query(Region).count() == len(REGIONS)
@@ -46,6 +49,9 @@ def test_first_run_creates_every_documented_row(db_session: Session) -> None:
     assert db_session.query(GridOwner).count() == len(GRID_OWNERS)
     assert db_session.query(OperationalStatus).count() == len(OPERATIONAL_STATUSES)
     assert db_session.query(LineType).count() == len(LINE_TYPES)
+    assert db_session.query(TransformerBreakerNumberingConvention).count() == len(
+        TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS
+    )
 
 
 def test_second_run_creates_nothing_and_does_not_duplicate(db_session: Session) -> None:
@@ -59,6 +65,7 @@ def test_second_run_creates_nothing_and_does_not_duplicate(db_session: Session) 
         "grid_owner": 0,
         "operational_status": 0,
         "line_type": 0,
+        "transformer_breaker_numbering_convention": 0,
     }
     # Row counts are unchanged, not doubled.
     assert db_session.query(VoltageLevel).count() == len(VOLTAGE_LEVELS)
@@ -67,13 +74,19 @@ def test_second_run_creates_nothing_and_does_not_duplicate(db_session: Session) 
     assert db_session.query(GridOwner).count() == len(GRID_OWNERS)
     assert db_session.query(OperationalStatus).count() == len(OPERATIONAL_STATUSES)
     assert db_session.query(LineType).count() == len(LINE_TYPES)
+    assert db_session.query(TransformerBreakerNumberingConvention).count() == len(
+        TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS
+    )
 
 
 def test_seeded_voltage_levels_match_substation_registry_md(db_session: Session) -> None:
     run_seed(db_session)
 
     labels = {vl.label for vl in db_session.query(VoltageLevel).all()}
-    assert labels == {"500kV", "275kV", "230kV", "132kV"}
+    # 33kV/22kV/11kV added by Phase 3.5 (Transformer Registry) — LV-side
+    # distribution voltage classes needed by the transformer short-name
+    # convention (132/33kV, 132/11kV, etc.).
+    assert labels == {"500kV", "275kV", "230kV", "132kV", "33kV", "22kV", "11kV"}
 
 
 def test_seeded_line_types_match_equipment_registry_module_md(db_session: Session) -> None:
@@ -81,6 +94,37 @@ def test_seeded_line_types_match_equipment_registry_module_md(db_session: Sessio
 
     labels = {lt.label for lt in db_session.query(LineType).all()}
     assert labels == {"Overhead Line", "Cable", "Submarine", "Hybrid"}
+
+
+def test_seeded_transformer_breaker_numbering_conventions_match_the_tnb_convention(
+    db_session: Session,
+) -> None:
+    run_seed(db_session)
+
+    voltage_level_id_by_label = {
+        vl.label: vl.voltage_level_id for vl in db_session.query(VoltageLevel).all()
+    }
+    rows = db_session.query(TransformerBreakerNumberingConvention).all()
+    patterns_by_pair_side = {
+        (row.hv_voltage_level_id, row.lv_voltage_level_id, row.side): (row.pattern, row.is_standard)
+        for row in rows
+    }
+
+    def pair(hv_label: str, lv_label: str, side: str) -> tuple[str | None, bool]:
+        return patterns_by_pair_side[
+            (voltage_level_id_by_label[hv_label], voltage_level_id_by_label[lv_label], side)
+        ]
+
+    assert pair("500kV", "275kV", "HV") == (None, False)
+    assert pair("500kV", "275kV", "LV") == ("T{N}0", True)
+    assert pair("275kV", "132kV", "HV") == ("H{N}0", True)
+    assert pair("275kV", "132kV", "LV") == ("{N}80", True)
+    assert pair("132kV", "33kV", "HV") == ("{N}10", True)
+    assert pair("132kV", "33kV", "LV") == ("{N}T0", True)
+    assert pair("132kV", "22kV", "HV") == ("{N}10", True)
+    assert pair("132kV", "22kV", "LV") == ("{N}T0", True)
+    assert pair("132kV", "11kV", "HV") == ("{N}10", True)
+    assert pair("132kV", "11kV", "LV") == ("3{N}", True)
 
 
 def test_seed_is_safe_to_run_against_a_partially_seeded_table(db_session: Session) -> None:
@@ -115,6 +159,32 @@ def test_seed_backfills_a_table_added_by_a_later_phase(db_session: Session) -> N
         "grid_owner": 0,
         "operational_status": 0,
         "line_type": len(LINE_TYPES),
+        "transformer_breaker_numbering_convention": 0,
     }
     assert db_session.query(LineType).count() == len(LINE_TYPES)
+
+
+def test_seed_backfills_transformer_breaker_numbering_conventions(db_session: Session) -> None:
+    """Same backfill guarantee as `line_type` above, for the newest
+    reference table: a database seeded before this table existed must have
+    it fully populated by a later re-run, with every other table untouched."""
+    run_seed(db_session)
+    db_session.query(TransformerBreakerNumberingConvention).delete()
+    db_session.commit()
+    assert db_session.query(TransformerBreakerNumberingConvention).count() == 0
+
+    counts = run_seed(db_session)
+
+    assert counts == {
+        "voltage_level": 0,
+        "region": 0,
+        "state": 0,
+        "grid_owner": 0,
+        "operational_status": 0,
+        "line_type": 0,
+        "transformer_breaker_numbering_convention": len(TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS),
+    }
+    assert db_session.query(TransformerBreakerNumberingConvention).count() == len(
+        TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS
+    )
     assert db_session.query(VoltageLevel).count() == len(VOLTAGE_LEVELS)

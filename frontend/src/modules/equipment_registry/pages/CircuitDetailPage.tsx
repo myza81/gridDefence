@@ -14,15 +14,33 @@ interface TerminalEditRowProps {
   terminal: CircuitTerminalSummary;
   canWrite: boolean;
   onSaved: () => void;
+  statusLabel: string;
+  enteredInErrorStatusId: number | undefined;
 }
 
 /** One editable terminal row — breaker number and commissioning date are
  * editable after creation (Phase 3 UAT must-fix items 1–2); the switchyard
- * a terminal connects to is not (out of this fix package's scope). */
-function TerminalEditRow({ circuitId, terminal, canWrite, onSaved }: TerminalEditRowProps) {
+ * a terminal connects to is not (out of this fix package's scope).
+ *
+ * "Mark as Entered in Error" (deletion/correction policy, Phase 3
+ * follow-up) corrects a mistakenly-added terminal — never a delete
+ * button, since no hard delete exists for engineering registry records
+ * (CLAUDE.md §11.6). Never blocked here, even if it would leave the
+ * circuit with fewer than two active terminals — that completeness rule
+ * is enforced instead when the circuit tries to (re)enter Active. Hidden
+ * once the terminal is already corrected. */
+function TerminalEditRow({
+  circuitId,
+  terminal,
+  canWrite,
+  onSaved,
+  statusLabel,
+  enteredInErrorStatusId,
+}: TerminalEditRowProps) {
   const [breakerNumber, setBreakerNumber] = useState(terminal.breaker_number);
   const [commissioningDate, setCommissioningDate] = useState(terminal.commissioning_date ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   useEffect(() => {
     setBreakerNumber(terminal.breaker_number);
@@ -41,6 +59,23 @@ function TerminalEditRow({ circuitId, terminal, canWrite, onSaved }: TerminalEdi
     },
     onError: (err: unknown) =>
       setError(err instanceof ApiError ? err.message : "Failed to update terminal."),
+  });
+
+  const isEnteredInError = terminal.operational_status_id === enteredInErrorStatusId;
+
+  const correctionMutation = useMutation({
+    mutationFn: () =>
+      equipmentRegistryApi.updateTerminal(circuitId, terminal.circuit_terminal_id, {
+        operational_status_id: enteredInErrorStatusId,
+      }),
+    onSuccess: () => {
+      setCorrectionError(null);
+      onSaved();
+    },
+    onError: (err: unknown) =>
+      setCorrectionError(
+        err instanceof ApiError ? err.message : "Failed to correct terminal.",
+      ),
   });
 
   return (
@@ -73,6 +108,7 @@ function TerminalEditRow({ circuitId, terminal, canWrite, onSaved }: TerminalEdi
           (terminal.commissioning_date ?? "—")
         )}
       </td>
+      <td>{statusLabel}</td>
       {canWrite && (
         <td>
           <button
@@ -83,6 +119,18 @@ function TerminalEditRow({ circuitId, terminal, canWrite, onSaved }: TerminalEdi
             Save
           </button>
           {error && <p role="alert">{error}</p>}
+          {!isEnteredInError && enteredInErrorStatusId !== undefined && (
+            <>
+              <button
+                type="button"
+                onClick={() => correctionMutation.mutate()}
+                disabled={correctionMutation.isPending}
+              >
+                Mark as Entered in Error
+              </button>
+              {correctionError && <p role="alert">{correctionError}</p>}
+            </>
+          )}
         </td>
       )}
     </tr>
@@ -95,6 +143,9 @@ export function CircuitDetailPage() {
   const canWrite = permissions.has("equipment_registry.write");
   const referenceData = useReferenceData();
   const queryClient = useQueryClient();
+  const enteredInErrorStatusId = referenceData.operationalStatuses.find(
+    (status) => status.code === "ENTERED_IN_ERROR",
+  )?.operational_status_id;
 
   const circuitQuery = useQuery({
     queryKey: ["circuit", circuitId],
@@ -258,6 +309,7 @@ export function CircuitDetailPage() {
             <th>Substation — switchyard</th>
             <th>Breaker number</th>
             <th>Commissioning date</th>
+            <th>Status</th>
             {canWrite && <th></th>}
           </tr>
         </thead>
@@ -269,6 +321,11 @@ export function CircuitDetailPage() {
               terminal={terminal}
               canWrite={canWrite}
               onSaved={invalidateCircuit}
+              statusLabel={
+                referenceData.operationalStatusesById.get(terminal.operational_status_id)
+                  ?.label ?? ""
+              }
+              enteredInErrorStatusId={enteredInErrorStatusId}
             />
           ))}
         </tbody>

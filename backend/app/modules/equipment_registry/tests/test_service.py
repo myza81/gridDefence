@@ -22,12 +22,15 @@ from sqlalchemy.orm import Session
 from app.modules.equipment_registry.exceptions import (
     DuplicateTerminalVoltageYardError,
     DuplicateVoltageYardError,
+    InsufficientActiveTerminalsForActivationError,
     InsufficientTerminalsError,
     InvalidGeolocationPairError,
     InvalidInitialStatusError,
     NotFoundError,
     ReferenceDataNotFoundError,
     SubstationNotFoundError,
+    SwitchyardEnteredInErrorError,
+    SwitchyardHasActiveReferencesError,
     TerminalVoltageLevelMismatchError,
     VoltageYardNotFoundError,
 )
@@ -1012,6 +1015,95 @@ class TestSearchFilterList:
         assert first_page[0].circuit_id != second_page[0].circuit_id
 
 
+# --- Engineering Connectivity (Substation Detail page) — substation_id filter -------------
+# "Which circuits are connected to this substation" — derived from
+# Circuit/CircuitTerminal/Substation only, never PSS/E data (Phase 4 will add
+# a separate, operational-snapshot connectivity view; this is the
+# manually-maintained engineering baseline).
+class TestSubstationConnectivityFilter:
+    def test_circuit_appears_for_each_of_its_own_terminal_substations(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+
+        pklg_items, pklg_total = service.list_circuits(
+            page=1, page_size=50, substation_id=substation_ids["PKLG"]
+        )
+        assert pklg_total == 1
+        assert pklg_items[0].circuit_id == circuit.circuit_id
+
+        igbk_items, igbk_total = service.list_circuits(
+            page=1, page_size=50, substation_id=substation_ids["IGBK"]
+        )
+        assert igbk_total == 1
+        assert igbk_items[0].circuit_id == circuit.circuit_id
+
+    def test_unrelated_circuit_does_not_appear(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        """The fixture circuit connects PKLG and IGBK only — NKST and ABBA
+        (real, otherwise-unrelated substations from the same fixture set)
+        must not see it."""
+        service = EquipmentRegistryService(db_session)
+        _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+
+        nkst_items, nkst_total = service.list_circuits(
+            page=1, page_size=50, substation_id=substation_ids["NKST"]
+        )
+        assert nkst_total == 0
+        assert nkst_items == []
+
+        abba_items, abba_total = service.list_circuits(
+            page=1, page_size=50, substation_id=substation_ids["ABBA"]
+        )
+        assert abba_total == 0
+        assert abba_items == []
+
+    def test_combines_with_other_filters(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        _create_circuit(
+            service, reference_ids, voltage_yard_ids, actor_user_id, is_interconnector=True
+        )
+        db_session.commit()
+
+        matching, total = service.list_circuits(
+            page=1,
+            page_size=50,
+            substation_id=substation_ids["PKLG"],
+            is_interconnector=True,
+        )
+        assert total == 1
+
+        non_matching, total_none = service.list_circuits(
+            page=1,
+            page_size=50,
+            substation_id=substation_ids["PKLG"],
+            is_interconnector=False,
+        )
+        assert total_none == 0
+        assert non_matching == []
+
+
 # --- Full circuit edit (Phase 3 UAT must-fix item 2) --------------------------------------
 class TestFullCircuitEdit:
     def test_update_bay_number_writes_audit_row(
@@ -1285,3 +1377,449 @@ class TestTerminalEdit:
                 breaker_number="L99",
                 actor_user_id=actor_user_id,
             )
+
+
+# --- Equipment Registry deletion/correction policy (Phase 3 follow-up) -------------------
+# No hard delete exists, or will exist, for switchyards/terminals/circuits/
+# transformers (CLAUDE.md §11.6). Mistaken records are corrected via a new
+# ENTERED_IN_ERROR status, hidden from default views, still reachable for
+# audit, with existing references protected.
+class TestSwitchyardCorrection:
+    def test_new_switchyard_starts_active(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard = service.create_voltage_yard(
+            substation_id=substation_ids["PKLG"],
+            voltage_level_id=reference_ids.voltage_level_id,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+        assert yard.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
+
+    def test_marking_switchyard_entered_in_error_is_audited(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]  # unused by any circuit/transformer fixture
+
+        service.update_voltage_yard(
+            yard_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Wrong voltage level entered",
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        entries, total = service.list_voltage_yard_audit_log(yard_id, page=1, page_size=50)
+        assert total == 1
+        assert entries[0].field_name == "operational_status_id"
+        assert entries[0].new_value == "ENTERED_IN_ERROR"
+        assert entries[0].change_reason == "Wrong voltage level entered"
+
+    def test_marking_switchyard_entered_in_error_is_blocked_by_an_active_circuit_terminal(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+
+        with pytest.raises(SwitchyardHasActiveReferencesError):
+            service.update_voltage_yard(
+                voltage_yard_ids["PKLG"],
+                operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+                actor_user_id=actor_user_id,
+            )
+
+    def test_marking_switchyard_entered_in_error_is_blocked_by_an_active_transformer_terminal(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        lv_voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        service.create_transformer(
+            substation_id=substation_ids["PKLG"],
+            transformer_number="1",
+            hv_switchyard_id=voltage_yard_ids["PKLG"],
+            hv_breaker_number="H10",
+            lv_switchyard_id=lv_voltage_yard_ids["PKLG"],
+            lv_breaker_number="110",
+            capacity_mva=None,
+            commissioning_date=None,
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+            transformer_type=None,
+            manufacturer=None,
+            remarks=None,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        with pytest.raises(SwitchyardHasActiveReferencesError):
+            service.update_voltage_yard(
+                lv_voltage_yard_ids["PKLG"],
+                operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+                actor_user_id=actor_user_id,
+            )
+
+    def test_switchyard_can_be_corrected_once_no_longer_referenced(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+
+        yard = service.update_voltage_yard(
+            yard_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+        assert yard.operational_status_id == reference_ids.status_id_by_code["ENTERED_IN_ERROR"]
+
+    def test_entered_in_error_switchyard_excluded_from_default_list_but_reachable_with_flag(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        service.update_voltage_yard(
+            yard_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        default_ids = {y.voltage_yard_id for y in service.list_voltage_yards()}
+        assert yard_id not in default_ids
+
+        all_ids = {
+            y.voltage_yard_id for y in service.list_voltage_yards(include_entered_in_error=True)
+        }
+        assert yard_id in all_ids
+
+    def test_new_circuit_terminal_cannot_reference_an_entered_in_error_switchyard(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        service.update_voltage_yard(
+            voltage_yard_ids["NKST"],
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        with pytest.raises(SwitchyardEnteredInErrorError):
+            _create_circuit(
+                service,
+                reference_ids,
+                voltage_yard_ids,
+                actor_user_id,
+                terminals=[
+                    TerminalInput(voltage_yard_id=voltage_yard_ids["PKLG"], breaker_number="L1"),
+                    TerminalInput(voltage_yard_id=voltage_yard_ids["NKST"], breaker_number="N1"),
+                ],
+            )
+
+    def test_add_terminal_cannot_reference_an_entered_in_error_switchyard(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        substation_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        service.update_voltage_yard(
+            voltage_yard_ids["NKST"],
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        with pytest.raises(SwitchyardEnteredInErrorError):
+            service.add_terminal(
+                circuit.circuit_id,
+                voltage_yard_id=voltage_yard_ids["NKST"],
+                breaker_number="N1",
+                commissioning_date=None,
+                remarks=None,
+                actor_user_id=actor_user_id,
+            )
+
+
+class TestCircuitTerminalCorrection:
+    def test_marking_a_terminal_entered_in_error_is_never_blocked(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        """CircuitTerminal is a first-class connectivity object that may
+        require individual correction — never blocked here even though
+        this leaves the circuit with only one active terminal."""
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        terminal = service.list_terminals(circuit.circuit_id)[0]
+
+        updated = service.update_terminal(
+            circuit.circuit_id,
+            terminal.circuit_terminal_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+        assert updated.operational_status_id == reference_ids.status_id_by_code["ENTERED_IN_ERROR"]
+
+    def test_marking_a_terminal_entered_in_error_is_audited(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        terminal = service.list_terminals(circuit.circuit_id)[0]
+
+        service.update_terminal(
+            circuit.circuit_id,
+            terminal.circuit_terminal_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        entries, _ = service.list_audit_log(circuit.circuit_id, page=1, page_size=50)
+        assert any(e.field_name == "terminal_status" for e in entries)
+
+    def test_circuit_name_and_terminal_count_exclude_entered_in_error_terminals_in_list_view(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        pklg_terminal = next(
+            t for t in service.list_terminals(circuit.circuit_id) if t.substation_mnemonic == "PKLG"
+        )
+
+        service.update_terminal(
+            circuit.circuit_id,
+            pklg_terminal.circuit_terminal_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        items, _ = service.list_circuits(page=1, page_size=50)
+        summary = next(c for c in items if c.circuit_id == circuit.circuit_id)
+        assert summary.terminal_count == 1
+        assert "PKLG" not in summary.circuit_name
+        assert summary.circuit_name == "IGBK"
+
+    def test_get_circuit_detail_still_shows_entered_in_error_terminal_but_name_excludes_it(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        """The detail page is this module's own audit/history view — every
+        terminal remains visible there regardless of status."""
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        pklg_terminal = next(
+            t for t in service.list_terminals(circuit.circuit_id) if t.substation_mnemonic == "PKLG"
+        )
+
+        service.update_terminal(
+            circuit.circuit_id,
+            pklg_terminal.circuit_terminal_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        detail = service.get_circuit(circuit.circuit_id)
+        assert detail is not None
+        assert len(detail.terminals) == 2  # still both, for audit purposes
+        assert detail.circuit_name == "IGBK"  # but the computed name excludes the corrected one
+
+
+class TestCircuitActivationGuard:
+    def test_cannot_activate_circuit_with_fewer_than_two_active_terminals(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(
+            service, reference_ids, voltage_yard_ids, actor_user_id, status_code="PLANNED"
+        )
+        db_session.commit()
+        terminal = service.list_terminals(circuit.circuit_id)[0]
+        service.update_terminal(
+            circuit.circuit_id,
+            terminal.circuit_terminal_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        with pytest.raises(InsufficientActiveTerminalsForActivationError):
+            service.change_status(
+                circuit.circuit_id,
+                operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+                change_reason=None,
+                actor_user_id=actor_user_id,
+            )
+
+    def test_can_activate_circuit_with_two_active_terminals(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(
+            service, reference_ids, voltage_yard_ids, actor_user_id, status_code="PLANNED"
+        )
+        db_session.commit()
+
+        updated = service.change_status(
+            circuit.circuit_id,
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+            change_reason=None,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+        assert updated.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
+
+    def test_reaffirming_an_already_active_circuit_is_a_noop_even_if_now_incomplete(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        """A circuit may be temporarily incomplete while its terminals are
+        corrected — change_status's own idempotent no-op path (setting the
+        same status it already has) is not retroactively blocked by the
+        activation guard, since no real transition is happening."""
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        terminal = service.list_terminals(circuit.circuit_id)[0]
+        service.update_terminal(
+            circuit.circuit_id,
+            terminal.circuit_terminal_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        # No exception: circuit is already ACTIVE, so this is a no-op.
+        result = service.change_status(
+            circuit.circuit_id,
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+            change_reason=None,
+            actor_user_id=actor_user_id,
+        )
+        assert result.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
+
+
+class TestEnteredInErrorListFiltering:
+    def test_entered_in_error_circuit_excluded_from_default_list_but_reachable_by_id(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        service.change_status(
+            circuit.circuit_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Duplicate entry",
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        default_items, default_total = service.list_circuits(page=1, page_size=50)
+        assert circuit.circuit_id not in {c.circuit_id for c in default_items}
+        assert default_total == 0
+
+        all_items, all_total = service.list_circuits(
+            page=1, page_size=50, include_entered_in_error=True
+        )
+        assert circuit.circuit_id in {c.circuit_id for c in all_items}
+        assert all_total == 1
+
+        # Still directly reachable — the detail page is this module's own
+        # audit/history view.
+        assert service.get_circuit(circuit.circuit_id) is not None
+
+    def test_explicit_operational_status_id_filter_bypasses_default_exclusion(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        circuit = _create_circuit(service, reference_ids, voltage_yard_ids, actor_user_id)
+        db_session.commit()
+        service.change_status(
+            circuit.circuit_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason=None,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        items, total = service.list_circuits(
+            page=1,
+            page_size=50,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+        )
+        assert total == 1
+        assert items[0].circuit_id == circuit.circuit_id

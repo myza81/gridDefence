@@ -18,11 +18,27 @@
 > reconciliation — rule 6 itself (yard-, not substation-, scoped
 > uniqueness) is unchanged.
 
+> **Note (Transformer Registry UAT corrections):** the "Transformer Registry —
+> Architecture Decision Gate Outcomes" addendum below records the original
+> Decision 3 (`UNIQUE (hv_switchyard_id, lv_switchyard_id,
+> transformer_number)`, service-layer only). "Transformer Registry — UAT
+> Correction (Substation Ownership)" supersedes that specific decision with
+> `Transformer.substation_id` (mandatory column, both terminals must belong
+> to it) and `UNIQUE(substation_id, transformer_number)` as a real database
+> constraint. **"Transformer Registry — UAT Correction #2 (Numbering
+> Model)" supersedes the uniqueness key a second time**: it reverts to
+> `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)`,
+> enforced at the service layer, not as a database constraint — the
+> substation-only key incorrectly collapsed every transformation level at a
+> substation into one shared bay-number namespace. `substation_id` itself
+> remains a mandatory column (unaffected). Read all three addenda together;
+> the third is authoritative for uniqueness.
+
 - **Status:** Accepted
 - **Date:** 2026-07-06
 - **Governing standard:** [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) v1.1 (§5.1, §8, §11.2, A5)
 - **Depends on:** [ADR-006](ADR-006-connectivity-registry-vs-psse-topology-architecture.md), [ADR-007](ADR-007-canonical-engineering-reference-object.md)
-- **Affects:** [docs/architecture/equipment-registry-module.md](../architecture/equipment-registry-module.md) §7.5–§7.7, §9 rule 6a (addendum below), §11 (`CircuitTerminal`'s connection point); `docs/architecture/substation-registry.md` (unaffected in ownership — see Decision); `backend/app/modules/equipment_registry/models.py` (`SubstationVoltageYard` gains optional `commissioning_date`/`latitude`/`longitude` metadata, Phase 3 UAT follow-up — no change to this ADR's ownership decision)
+- **Affects:** [docs/architecture/equipment-registry-module.md](../architecture/equipment-registry-module.md) §7.5–§7.7, §9 rule 6a (addendum below), §11 (`CircuitTerminal`'s connection point), and its "Phase 3.5 Addendum: Transformer Registry" section (addendum below — `Transformer`/`TransformerTerminal` reuse this ADR's `SubstationVoltageYard` connection point as a second consuming entity); `docs/architecture/substation-registry.md` (unaffected in ownership — see Decision); `backend/app/modules/equipment_registry/models.py` (`SubstationVoltageYard` gains optional `commissioning_date`/`latitude`/`longitude` metadata, Phase 3 UAT follow-up — no change to this ADR's ownership decision)
 
 ---
 
@@ -109,3 +125,97 @@ As Phase 3 closes out, the project asked whether `SubstationVoltageYard` should 
 **Positive:** User-facing terminology now anticipates the module's own documented future scope (§17 of equipment-registry-module.md) without any migration risk. Internal identifiers remain stable, so this decision carries zero risk to existing data, tests, or API consumers.
 
 **Negative:** A temporary terminology split exists between code (still "voltage yard" internally) and UI/most-of-docs (now "switchyard") — mitigated by this addendum and equipment-registry-module.md's own Appendix entry recording the decision, so a future reader is not left to guess why the two differ.
+
+---
+
+## Addendum (2026-07-04): Transformer Registry — Architecture Decision Gate Outcomes (Phase 3.5)
+
+This addendum is additive; nothing above is revised. It records the three genuine modelling ambiguities identified before Phase 3.5 (Transformer Registry) implementation began, and the Project Owner's explicit approval of all three, per the same architecture-first, stop-before-implementing process used throughout Phase 3. Full specification: [equipment-registry-module.md](../architecture/equipment-registry-module.md)'s "Phase 3.5 Addendum: Transformer Registry" section.
+
+### Context
+
+A `Transformer` connects exactly two `SubstationVoltageYard` (Switchyard) rows — one HV, one LV — the same connection point this ADR already established for `CircuitTerminal`. Extending that connection point to a second consuming entity surfaced three questions this ADR's original decision did not need to answer for `CircuitTerminal` alone.
+
+### Decision 1 — `TransformerTerminal` child rows vs. direct `hv_*`/`lv_*` columns on `Transformer`
+
+**Option B — `TransformerTerminal` child rows (`side` = `HV`/`LV`, each with its own `voltage_yard_id` and `breaker_number`) — approved**, structurally mirroring `CircuitTerminal`'s own shape exactly, over Option A (`hv_switchyard_id`/`hv_breaker_number`/`lv_switchyard_id`/`lv_breaker_number` as direct columns on `Transformer`).
+
+**Why:** `side` is a CHECK-constrained string (`'HV'`/`'LV'`), not a fixed pair of columns — a future tertiary-winding phase can add a third `side` value via a constraint change alone, with zero migration to `Transformer` itself. Option A would have baked a permanent two-winding assumption directly into the `Transformer` table's own column set, which a tertiary-winding phase could only undo with a breaking schema change.
+
+### Decision 2 — generated engineering short name: stored or computed at read time
+
+**Computed at read time — approved**, never stored on `Transformer`, for the identical reason this document's sibling entity `Circuit`'s own canonical name is computed rather than stored (equipment-registry-module.md §7.4): storing it separately would create a second place it could drift out of sync with the HV terminal's voltage level or the transformer number, either of which can change after creation.
+
+### Decision 3 — the transformer uniqueness rule
+
+**`UNIQUE (hv_switchyard_id, lv_switchyard_id, transformer_number)` — approved**, enforced at the service layer (not a raw database `UNIQUE` constraint, since the identity spans two child `TransformerTerminal` rows joined by `transformer_id`, which a single-table constraint cannot express — CLAUDE.md §11.8).
+
+**This uniqueness constraint represents the physical transformer's own identity — the specific pair of switchyards it connects, plus its bay/transformer number — whereas the generated engineering short name (e.g. `SGT1`) is a separate, computed, user-facing label derived from the HV voltage level and transformer number.** Two physically distinct transformers at two different substations may legitimately share the same computed short name (e.g. two transformers both computing to `SGT1`, one at PKLG and one at IGBK) without violating uniqueness, because uniqueness is keyed on physical switchyard identity, not on the display label derived from it. This separation is also the most suitable key for future PSS/E topology reconciliation (Phase 4), which will need to correlate a physical transformer to its two real switchyard connection points, not to a display label two unrelated transformers can share.
+
+### Consequences
+
+**Positive:** All three decisions extend this ADR's own `SubstationVoltageYard` connection-point pattern and `Circuit`'s own computed-name precedent consistently, rather than introducing a third, divergent convention for a second consuming entity. The uniqueness/short-name separation gives Phase 4's PSS/E reconciliation a stable physical key untangled from a display label that is expected to collide by design.
+
+**Negative:** None identified — no data migration risk (new tables, no pre-existing rows), and no existing `Circuit`/`CircuitTerminal` behaviour is touched by this addendum.
+
+---
+
+## Addendum (2026-07-04): Transformer Registry — UAT Correction (Substation Ownership)
+
+This addendum is additive; it supersedes Decision 3 of the addendum immediately above, and does not reopen Decisions 1–2 or this ADR's own original decision.
+
+### Context
+
+UAT on the Transformer Registry (the addendum above) found a workflow/data-model gap before acceptance: transformer creation exposed only two switchyard pickers, with no first-class substation context anywhere in the create workflow, list, or detail views. An engineer at a given substation had no way to answer "how many transformers are installed here" or "which transformer belongs to this substation" without indirectly inferring it from switchyard labels. Worse, nothing in the original design prevented a transformer's HV and LV switchyards from being selected at two different substations — the original Decision 3 uniqueness key (`hv_switchyard_id`, `lv_switchyard_id`, `transformer_number`) does not itself require the two switchyards to share a substation.
+
+**Malaysian transmission/distribution domain rule, stated explicitly during UAT:** a transformer is installed within a single substation. It is never modeled as equipment connected between two different substations — unlike a `Circuit`, which by definition connects two (or more) substations.
+
+### Decision
+
+**`Transformer.substation_id` is added as a mandatory, first-class column** (not merely derivable by joining through a terminal's own `SubstationVoltageYard`). Both of a transformer's `TransformerTerminal` rows must resolve, via their `voltage_yard_id` → `SubstationVoltageYard.substation_id`, to this same `substation_id` — enforced at the service layer on creation (`EquipmentRegistryService._require_yard_belongs_to_substation`), checked before the same-switchyard and voltage-order checks so a cross-substation mismatch is reported precisely (naming the offending side and both substation mnemonics), not conflated with either of those other errors.
+
+**Decision 3 of the addendum above is superseded:** uniqueness moves from `UNIQUE (hv_switchyard_id, lv_switchyard_id, transformer_number)`, enforced at the service layer only, to **`UNIQUE(substation_id, transformer_number)`, enforced as a real, single-table database constraint** — once `substation_id` is a column on `Transformer` itself, the physical transformer's identity no longer needs to span two child `TransformerTerminal` rows to be expressed, so CLAUDE.md §11.8's "enforce by the database where possible" applies cleanly, without the aliased-double-join workaround the original design required. The generated engineering short name (Decision 2, unchanged) remains a separate, computed, user-facing label — still not part of the uniqueness key, and still may legitimately collide across substations (e.g. two `SGT1`s).
+
+Creation is also now **substation-first** in the frontend workflow: the user selects the substation before either switchyard, and both HV/LV switchyard pickers are filtered client-side to that substation's own switchyards, mirroring `CircuitCreatePage`'s existing per-voltage-level filtering pattern (§9 rule 6a's own precedent). `GET /api/v1/transformers` gained a `substation_id` filter, and `SubstationDetailPage` gained a "Transformers" section (reusing that filter) so "which transformers are installed here" is answered directly from a substation's own detail page — the specific UAT-reported requirement.
+
+### Consequences
+
+**Positive:** The corrected model matches the real Malaysian grid domain rule exactly (a transformer cannot span substations, structurally, not just by convention). Uniqueness enforcement is simpler and stronger (a real database constraint, not a service-layer-only cross-row check). Every read response (list and detail) now carries substation context directly, removing the need to infer it from terminal data. The fix required no new tables and no change to `TransformerTerminal`'s own shape (Decision 1 stands unchanged).
+
+**Negative:** None identified — this correction was made before the Transformer Registry migration was ever committed to version control, so the migration was edited in place (no additional migration was needed) and no production data was affected. The three genuine architecture decisions from the addendum above (Decisions 1–2, and Decision 3's *shape*, just not its exact key) all stand.
+
+---
+
+## Addendum (2026-07-05): Transformer Registry — UAT Correction #2 (Numbering Model)
+
+This addendum is additive; it supersedes the uniqueness decision made by the addendum immediately above, and does not reopen Decisions 1–2, this ADR's own original decision, or the substation-ownership correction (`Transformer.substation_id`, unaffected and unchanged).
+
+### Context
+
+UAT found that the substation-ownership correction above went one step too far: `UNIQUE(substation_id, transformer_number)` collapses every transformation level at a substation into one shared bay-number namespace. Real Malaysian grid practice numbers transformer bays *per transformation pair*, not per substation as a whole — a substation legitimately has a "Transformer Bay 1" on its 275/132kV pair *and a separate* "Transformer Bay 1" on its 132/33kV pair. The corrected constraint rejected the second one outright.
+
+UAT also found the breaker-number suggestion formulas insufficient for the same underlying reason: they were keyed on voltage alone, but the correct formula depends on the transformation pair and terminal side, not the voltage in isolation. 132kV, for example, needs `{N}10` as the HV side of a 132/33, 132/22, or 132/11kV transformer, but `{N}80` as the LV side of a 275/132kV transformer — a per-voltage table cannot express this.
+
+### Decision
+
+**Uniqueness reverts to `(substation_id, hv_switchyard_id, lv_switchyard_id, transformer_number)`, enforced at the service layer** — the same shape as the original Decision 3 above, now additionally scoped by `substation_id` (redundant with the HV/LV pair for uniqueness purposes, since a switchyard belongs to exactly one substation, but kept for symmetry with the substation-ownership correction and because it is the natural first filter the query already needs). This is **not** re-expressed as a raw single-table database `UNIQUE` constraint: doing so would require denormalizing `hv_switchyard_id`/`lv_switchyard_id` onto `Transformer` itself, which was considered and rejected — it would reintroduce the exact two-winding-only assumption Decision 1 deliberately avoided baking into `Transformer`'s own column set (a future tertiary-winding phase would need a third denormalized column, defeating Decision 1's "zero migration to `Transformer` itself" benefit). The `uq_transformer_substation_number` database constraint is dropped (migration `0010_transformer_yard_pair`); no replacement single-table constraint is added.
+
+The one-time single-table-constraint simplification the previous addendum made ("once `substation_id` is a column on `Transformer` itself, the physical transformer's identity no longer needs to span two child rows") is itself superseded: it is correct that the identity *can* be expressed without the two child rows once `substation_id` is present, but *should not be*, because the whole HV/LV pair — not just the substation — is part of what makes a transformer number locally meaningful. `substation_id` alone was too coarse a scope.
+
+**Breaker-number suggestion formulas are re-specified as a mapping keyed by (HV nominal kV, LV nominal kV, side)**, replacing the previous per-voltage table:
+
+| Transformation pair | HV side | LV side |
+|---|---|---|
+| 500/275kV | non-standard, no suggestion | `T{N}0` |
+| 275/132kV | `H{N}0` | `{N}80` |
+| 132/33kV | `{N}10` | `{N}T0` |
+| 132/22kV | `{N}10` | `{N}T0` |
+| 132/11kV | `{N}10` | `3{N}` |
+
+Any transformation pair outside this table (e.g. one involving 230kV) has no suggestion — an intentional scope limit matching what was actually specified, not an inferred extrapolation. This remains a frontend-only display convenience (Business Rule 7, unchanged): the backend never validates or enforces breaker-number format, and the user may always override.
+
+### Consequences
+
+**Positive:** The corrected uniqueness key matches real Malaysian grid engineering practice exactly — a bay number is a designator local to one transformation pair, not one whole substation. The breaker-number convention now produces the numbers engineers actually expect for every side of every specified pair, rather than a value keyed on voltage alone. `TransformerTerminal`'s shape (Decision 1) is untouched, so this correction imposes no cost on a future tertiary-winding phase.
+
+**Negative:** Uniqueness enforcement is once again a service-layer, cross-row check (an aliased double join on `TransformerTerminal`) rather than a raw database constraint, reversing the previous addendum's specific CLAUDE.md §11.8 simplification — accepted as the correct trade-off, since the alternative (denormalizing both switchyard ids onto `Transformer`) would have cost more architecturally (violating Decision 1's own rationale) than it would have gained. A breaker-number suggestion is now unavailable until *both* HV and LV switchyards are selected (previously, a suggestion could appear from either side alone) — a direct, accepted consequence of the formula now genuinely depending on the pair, not a regression to be worked around.

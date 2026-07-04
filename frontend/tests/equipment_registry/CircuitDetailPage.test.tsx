@@ -30,6 +30,7 @@ function terminal(overrides: Record<string, unknown>) {
     breaker_number: "A1",
     commissioning_date: null,
     remarks: null,
+    operational_status_id: 1,
     created_at: "2026-07-05T00:00:00Z",
     updated_at: "2026-07-05T00:00:00Z",
     ...overrides,
@@ -102,7 +103,15 @@ const REFERENCE_DATA_HANDLERS: FetchHandler[] = [
     pattern: /\/reference-data\/operational-statuses$/,
     respond: () => ({
       status: 200,
-      body: [{ operational_status_id: 1, code: "ACTIVE", label: "Active", is_terminal: false }],
+      body: [
+        { operational_status_id: 1, code: "ACTIVE", label: "Active", is_terminal: false },
+        {
+          operational_status_id: 7,
+          code: "ENTERED_IN_ERROR",
+          label: "Entered in Error",
+          is_terminal: true,
+        },
+      ],
     }),
   },
   {
@@ -408,5 +417,72 @@ describe("CircuitDetailPage", () => {
       ).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Add voltage yard" })).not.toBeInTheDocument();
+  });
+
+  // --- Deletion/correction policy (Phase 3 follow-up) -------------------------------
+  it("shows each terminal's status and a Mark as Entered in Error action with write permission", async () => {
+    authStorage.setToken("token");
+    stubSession(["equipment_registry.write"]);
+
+    renderDetailPage();
+
+    // Wait on the permission-gated element itself — the roles fetch
+    // (which determines canWrite) resolves independently of the circuit
+    // fetch, so asserting on circuit content alone can race ahead of the
+    // permission-derived correction buttons.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+    });
+    const terminalsTable = screen.getByText("Substation — switchyard").closest("table");
+    expect(terminalsTable).not.toBeNull();
+    expect(within(terminalsTable!).getAllByText("Active")).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Mark as Entered in Error" })).toHaveLength(3);
+  });
+
+  it("does not show a Mark as Entered in Error action without write permission", async () => {
+    authStorage.setToken("token");
+    stubSession([]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Circuit: ABBA–NLAI–SMRK")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Mark as Entered in Error" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("corrects a terminal as Entered in Error, never blocked, and it is never a delete action", async () => {
+    authStorage.setToken("token");
+    let updatePayload: unknown = null;
+    stubSession(
+      ["equipment_registry.write"],
+      [
+        {
+          method: "PATCH",
+          pattern: new RegExp(`/api/v1/circuits/${CIRCUIT_ID}/terminals/t1$`),
+          respond: (_url, init) => {
+            updatePayload = init?.body ? JSON.parse(init.body as string) : null;
+            return { status: 200, body: CIRCUIT_DETAIL };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    const breakerInput = await screen.findByLabelText("Breaker number for ABBA — 500kV");
+    const row = breakerInput.closest("tr");
+    expect(row).not.toBeNull();
+    const user = userEvent.setup();
+    await user.click(within(row!).getByRole("button", { name: "Mark as Entered in Error" }));
+
+    await waitFor(() => {
+      expect(updatePayload).toMatchObject({ operational_status_id: 7 });
+    });
+    // Never a "Delete" button anywhere on this page (CLAUDE.md §11.6 — no
+    // hard delete for engineering registry records).
+    expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
 });

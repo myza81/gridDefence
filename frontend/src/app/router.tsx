@@ -5,6 +5,9 @@ import { StatusPage } from "../components/layout/StatusPage";
 import { CircuitCreatePage } from "../modules/equipment_registry/pages/CircuitCreatePage";
 import { CircuitDetailPage } from "../modules/equipment_registry/pages/CircuitDetailPage";
 import { CircuitListPage } from "../modules/equipment_registry/pages/CircuitListPage";
+import { TransformerCreatePage } from "../modules/equipment_registry/pages/TransformerCreatePage";
+import { TransformerDetailPage } from "../modules/equipment_registry/pages/TransformerDetailPage";
+import { TransformerListPage } from "../modules/equipment_registry/pages/TransformerListPage";
 import { LoginPage } from "../modules/iam/pages/LoginPage";
 import { PermissionsPage } from "../modules/iam/pages/PermissionsPage";
 import { RolesPage } from "../modules/iam/pages/RolesPage";
@@ -18,8 +21,9 @@ import { SubstationListPage } from "../modules/substation_registry/pages/Substat
  * Root route table. Each business module registers its own routes here once
  * it exists (docs/architecture/implementation-plan.md §3). IAM (Phase 1)
  * adds /login plus its protected management pages; Substation Registry
- * (Phase 2) adds /substations; Equipment Registry (Phase 3) adds /circuits.
- * The landing/status route from Phase 0 stays public.
+ * (Phase 2) adds /substations; Equipment Registry (Phase 3) adds /circuits;
+ * Transformer Registry (Phase 3.5) adds /transformers. The landing/status
+ * route from Phase 0 stays public.
  */
 const router = createBrowserRouter([
   {
@@ -124,6 +128,36 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <CircuitDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/transformers",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <TransformerListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/transformers/new",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <TransformerCreatePage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/transformers/:transformerId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <TransformerDetailPage />
         </ProtectedRoute>
       </AppShell>
     ),

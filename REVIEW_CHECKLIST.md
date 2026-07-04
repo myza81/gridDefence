@@ -126,6 +126,32 @@ phase — never overwritten.
   `get_current_user`/`require_permission` where it should apply; no
   business logic leaked into the router itself.
 
+### Phase 2 UAT fix — mnemonic uniqueness ownership across rename
+
+- **`backend/app/modules/substation_registry/service.py`** —
+  `_check_mnemonic_available`'s historical-alias check now compares the
+  alias's *owning* `substation_id` against `exclude_substation_id`, not
+  merely whether the mnemonic exists in `substation_alias` at all. Review
+  for: any future change to this method must preserve the distinction
+  between "this substation's own historical mnemonic" (allow) and "a
+  different substation's historical mnemonic" (reject) — collapsing the
+  check back to a bare existence test reintroduces the exact UAT bug this
+  fix corrected (`SIDS` → `SIDST` → `SIDS` incorrectly rejected).
+- **`backend/app/modules/substation_registry/repository.py`** —
+  `find_alias_mnemonic_owner_ci` returns the owning `substation_id`, not a
+  `bool`. Review for: any caller must compare the returned id against the
+  substation making the request, not just check for `None` — treating a
+  non-`None` return as "always reject" reintroduces the same bug in a new
+  location.
+- **`official_name` deliberately received no equivalent alias-reservation
+  fix.** `SubstationAlias.alias_name` exists in the schema but no code path
+  writes it — substation-registry.md §8 rule 1 treats mnemonic alone as
+  requiring this "special, gated" historical-reservation treatment; name
+  changes are an ordinary audited update. Review for: do not add
+  historical-name reservation logic without an explicit architecture
+  decision — the current asymmetry between mnemonic and name is
+  intentional, not an oversight this fix missed.
+
 ### Phase 3 — Equipment Registry (Circuit / CircuitTerminal Management)
 
 - **`backend/app/modules/equipment_registry/models.py`** — deviates from
@@ -361,6 +387,273 @@ phase — never overwritten.
   walkthrough sections for an unrelated reason, update their "Line 1"-
   style examples to the current convention as a low-cost side effect,
   rather than perpetuating the split indefinitely.
+
+### Phase 3.5 — Transformer Registry
+
+- **UAT blocker fix (substation ownership) — read this before reviewing anything else in this
+  section.** The original Phase 3.5 design (bullets below, as originally written) allowed a
+  transformer's HV and LV switchyards to belong to two different substations, and exposed no
+  first-class substation context anywhere. UAT correctly rejected this: in the Malaysian
+  transmission/distribution domain, a transformer is substation-owned equipment, never modeled as
+  spanning two substations. Fixed by adding `Transformer.substation_id` (mandatory), requiring both
+  terminals to belong to it (`EquipmentRegistryService._require_yard_belongs_to_substation`,
+  raising `TransformerYardSubstationMismatchError` on mismatch), and moving uniqueness to a real
+  `UNIQUE(substation_id, transformer_number)` database constraint. See
+  [ADR-008](docs/adr/ADR-008-substation-voltage-yard.md)'s "UAT Correction" addendum for the full
+  record. The bullets below describe the *current, corrected* state, not the original design.
+- **`backend/app/modules/equipment_registry/repository.py`** — **superseded by UAT fix #2, see the
+  dedicated subsection below.** `find_transformer_by_substation_and_number` (a bare `(substation_id,
+  transformer_number)` lookup backed by a real database `UNIQUE` constraint) no longer exists — it was
+  replaced by `find_transformer_by_yard_pair_and_number`, a service-layer-only check spanning the
+  HV/LV switchyard pair too. Do not reintroduce the single-table constraint this bullet used to
+  describe; see below for why.
+- **`backend/app/modules/equipment_registry/service.py`** —
+  `_compute_transformer_short_name` and
+  `_TRANSFORMER_SHORT_NAME_PREFIX_BY_NOMINAL_KV` are the sole source of
+  the generated short name; it is computed on every read (`get_transformer`,
+  `list_transformers`), never stored. Review for: a future edit that adds
+  a `generated_short_name` column to persist this value would reopen the
+  exact drift risk this phase's Architecture Decision Gate rejected
+  (Decision 2) — the computed-at-read-time approach must be preserved
+  unless a new ADR revisits it.
+- **`backend/app/modules/equipment_registry/models.py`** — `Transformer`
+  and `TransformerTerminal` are new, independent entities (own PKs, own
+  audit log), not attached to the shared `Equipment` backbone described in
+  §7.1 of the architecture doc — same deliberate scoping choice already
+  applied to `Circuit`/`CircuitTerminal` in Phase 3, extended consistently
+  rather than reopened. `TransformerTerminal.side` is a
+  CHECK-constrained string (`'HV'`/`'LV'`), not an enum type or reference
+  table — chosen specifically so a future tertiary-winding phase can add a
+  third `side` value via a constraint change alone. `Transformer.substation_id`
+  (UAT correction) is a plain FK to `substation`, `ON DELETE RESTRICT` —
+  there is no database-level constraint forcing both `TransformerTerminal`
+  rows' switchyards to belong to this same substation (a cross-table
+  equality check spanning three tables is not expressible as a
+  single-table constraint), so that invariant depends entirely on
+  `create_transformer` being the only write path. Review for: this scoping
+  decision remains documented (module docstring, this phase's
+  implementation report, and the ADR-008 addendum) and is revisited when
+  tertiary windings are actually implemented, not silently perpetuated;
+  any future direct-write path to `TransformerTerminal` must re-implement
+  the substation-membership check or the invariant silently breaks.
+- **`frontend/src/modules/equipment_registry/transformerBreakerSuggestion.ts`** —
+  a pure, frontend-only function; the backend never validates or enforces
+  breaker-number format (per the spec: "backend must NEVER reject a
+  custom breaker number"). Review for: no future change should add
+  backend-side format validation for `breaker_number` without an explicit
+  new requirement, since doing so would silently break the "always
+  overridable" guarantee this phase was built around.
+- **`backend/alembic/versions/0008_transformer_registry.py`** — no data
+  backfill (new tables, no pre-existing rows) — simpler than
+  `0005_substation_voltage_yard`'s backfill migration, but still manually
+  reviewed and verified against real PostgreSQL (schema inspection of all
+  three new tables) rather than assumed correct from the model definitions
+  alone. Review for: `ON DELETE RESTRICT` on every foreign key and the
+  `ck_transformer_terminal_side`/`uq_transformer_terminal_side`/
+  `uq_transformer_substation_number` constraints are present in both the
+  SQLAlchemy models and the migration, byte-for-byte consistent
+  (DEVELOPMENT.md §8). This migration was edited in place for the UAT
+  correction (never committed to version control beforehand — see
+  DEVELOPMENT.md's migration rules on when in-place edits are permitted);
+  it was downgraded/re-upgraded against the real dev database rather than
+  assumed safe, since the table had already been created once under the
+  original schema.
+- **No manual browser UAT was performed** — no browser automation tool was
+  available in the implementation environment; the workflow/data-model UAT
+  finding that produced this section's own fix was reported directly by
+  the user, not caught by this phase's own automated tests, which is
+  exactly the class of gap functional review catches that RTL/API tests
+  do not (neither kind of test can notice that a *legal-per-the-schema*
+  cross-substation transformer is operationally nonsensical, only a human
+  reviewing the actual workflow against real domain rules can). Review
+  for: before this phase is frozen/tagged, a human should still exercise
+  the corrected Transformer Create/List/Detail workflow, and the new
+  Substation Detail "Transformers" section, in a real browser against a
+  real backend at least once, the same gate every prior phase's UAT step
+  applied.
+
+### Phase 3.5 UAT fix #2 — transformer numbering model (uniqueness + breaker convention)
+
+- **Do not re-add a single-table `UNIQUE` constraint on `transformer` for transformer-number
+  uniqueness, and do not denormalize `hv_switchyard_id`/`lv_switchyard_id` onto `Transformer` to make
+  one possible.** Both were tried, in sequence, and both were wrong: the substation-only key
+  (`UNIQUE(substation_id, transformer_number)`, the Phase 3.5 UAT blocker fix above) incorrectly
+  rejected the same bay number on two different transformation pairs at one substation — real
+  Malaysian grid practice numbers bays per pair, not per substation. Denormalizing the two switchyard
+  ids onto `Transformer` to regain a single-table constraint was considered next and rejected, because
+  it would reintroduce the exact two-winding-only assumption Decision 1 (ADR-008 addendum) deliberately
+  kept out of `Transformer`'s own column set — a future tertiary-winding phase would need a third
+  denormalized column, breaking Decision 1's "zero migration to `Transformer` itself" guarantee.
+  Uniqueness is enforced at the service layer only, scoped to `(substation_id, hv_switchyard_id,
+  lv_switchyard_id, transformer_number)`, via `EquipmentRegistryRepository.find_transformer_by_yard_pair_and_number`
+  (an aliased double join on `TransformerTerminal`). Review for: any future PR proposing to "simplify"
+  this back to a database constraint should be rejected unless it also revisits Decision 1 via a new ADR.
+- **`backend/app/modules/equipment_registry/service.py`** — `update_transformer` previously performed
+  **no uniqueness check whatsoever** when `transformer_number` changed — a pre-existing gap (not
+  introduced by this fix) that would have let a `PATCH` silently create a duplicate identity, either
+  under the old or the new uniqueness scope. Closed by calling the same
+  `find_transformer_by_yard_pair_and_number` lookup used by `create_transformer`, using the
+  transformer's own existing (immutable, per Business Rule 6) HV/LV terminal switchyard ids and
+  `exclude_transformer_id=transformer_id` so a transformer never collides with itself. Review for: any
+  future field added to `update_transformer` that can affect identity uniqueness must get its own
+  explicit re-check — this class of gap (an update path silently skipping a check its own create path
+  enforces) is exactly what went unnoticed here until UAT found it.
+- **`frontend/src/modules/equipment_registry/transformerBreakerSuggestion.ts`** — rewritten from a
+  per-voltage table to a mapping keyed by (HV nominal kV, LV nominal kV, side); only the five
+  transformation pairs the convention specifies have an entry. Review for: do not add a formula for an
+  unspecified pair (e.g. one involving 230kV) by inferring or interpolating one — CLAUDE.md ("Claude
+  must not invent business rules") applies to display-only suggestions too, not just backend
+  validation; a missing suggestion (user types the breaker number manually) is the correct behaviour
+  for an out-of-scope pair, not a bug to "fix" by guessing.
+- **`frontend/src/modules/equipment_registry/pages/TransformerCreatePage.tsx`** — a breaker-number
+  suggestion for either side now only appears once **both** HV and LV switchyards are selected (the
+  formula genuinely depends on the pair). Review for: this is an accepted, direct consequence of the
+  corrected model, not a regression to "fix" by reintroducing a per-side-only suggestion — doing so
+  would silently resurrect the exact wrong-formula bug this fix corrected.
+
+### Transformer breaker-numbering convention moved to reference data
+
+- **Do not reintroduce a hardcoded pair/side lookup table in
+  `frontend/src/modules/equipment_registry/transformerBreakerSuggestion.ts`.** The whole point of this
+  change was to make the convention a data change (`app/reference_data/seed.py`), not a frontend code
+  change. Review for: any future PR that adds a new transformation pair or corrects a pattern by
+  editing this `.ts` file directly, rather than the seed data, should be rejected — it silently
+  reintroduces the exact hardcoding this correction removed.
+- **`backend/app/reference_data/seed.py`** — `_seed_transformer_breaker_numbering_conventions` depends
+  on `voltage_level` rows added earlier in the *same* `run_seed` call being visible to its own query,
+  which required adding an explicit `db.flush()` between the two seed calls — this project's
+  `SessionLocal` is `autoflush=False` (`app/db/session.py`), so this cannot be left implicit. Review
+  for: any future reference table whose seed function queries a *different* table populated earlier in
+  the same `run_seed` call needs the same explicit flush (or must be ordered after an existing one) —
+  every seed function before this one only ever queried its own table, so this dependency is new and
+  easy to miss by copying an existing seed function as a template without noticing the difference.
+- **`backend/app/reference_data/models.py`** — `TransformerBreakerNumberingConvention` deliberately has
+  no `created_at`/`updated_at` columns, for consistency with every other reference table in this module.
+  Review for: do not add them here alone as a "nice to have" — if audit history for reference-data
+  changes is ever needed, it should be designed once for every reference table (a new ADR), not
+  introduced piecemeal on whichever table happened to be touched most recently.
+- **This remains suggestion-only, not backend validation** — moving the convention to the database
+  changed *where the suggestion comes from*, not *whether it is enforced*. Review for: any future PR
+  that adds backend-side format validation for `TransformerTerminal.breaker_number` against this
+  convention table should be rejected without an explicit new requirement — Business Rule 7
+  (equipment-registry-module.md) states this convention is a display-only convenience, unchanged by
+  this correction.
+- **No manual browser UAT was performed** for this change, for the same environment reason as prior
+  phases. Review for: exercise `TransformerCreatePage`'s breaker-number suggestions in a real browser
+  against the real seeded reference data before this phase is frozen/tagged.
+
+### Phase 3.5 UAT fix #3 — ENTERED_IN_ERROR transformers permanently reserved their identity
+
+- **`backend/app/modules/equipment_registry/repository.py`** —
+  `find_transformer_by_yard_pair_and_number` now excludes `Transformer.operational_status_id ==
+  ENTERED_IN_ERROR` from its uniqueness check. Review for: any future uniqueness or reference-lookup
+  query added to this module that reads `Transformer`, `Circuit`, `SubstationVoltageYard`, or
+  `CircuitTerminal` rows must apply the same exclusion unless there is a specific, documented reason
+  not to — the deletion/correction policy's whole premise is that a corrected record is "not a real
+  engineering asset," and a query that silently treats it as one reintroduces exactly this bug in a new
+  location. Grep for `_entered_in_error_status_id_subquery()` usage sites as a checklist before adding
+  a new query against any entity this policy covers.
+- **This was found by the user reproducing a real workflow, not by this module's own automated tests.**
+  Every existing uniqueness test used only `ACTIVE` transformers, so none of them could have caught a
+  bug that only manifests once a corrected record exists. Review for: when adding tests for any new
+  uniqueness/reference rule in this module going forward, include at least one case with an
+  `ENTERED_IN_ERROR` row present, not only `ACTIVE` rows — this class of gap is easy to miss precisely
+  because it requires a specific prior history (a mistake, then a correction) to surface.
+- **The corrected transformer row is never deleted by this fix** — only excluded from the uniqueness
+  check. Review for: do not "simplify" this into an actual row deletion or a data-migration cleanup
+  script; CLAUDE.md §11.6 prohibits hard delete on engineering entities, and this module has no
+  `DELETE` endpoint for exactly that reason.
+- **Dev database cleanup performed via the application's own status-correction endpoint, not raw
+  SQL.** The stray smoke-test artifact (`300aac73-...`) was left as `ENTERED_IN_ERROR` (already the
+  correct, neutralized state) rather than hard-deleted. Review for: any future dev-database cleanup in
+  this module should use `PATCH .../transformers/{id}` (or the equivalent status-correction path for
+  other entities), never a direct `DELETE FROM` against a live database — even for disposable
+  smoke-test data — since it bypasses audit logging and risks violating FK constraints from rows this
+  session cannot see.
+
+### Phase 3 follow-up — Engineering Connectivity (Substation Detail page)
+
+- **Do not repeat the Transformer Registry's original mistake here.** `Circuit` must **not** gain a
+  `substation_id` column — a circuit legitimately connects two or more substations via
+  `CircuitTerminal`, unlike a transformer, which is substation-owned equipment (the distinction UAT
+  itself drew explicitly). Review for: any future PR that proposes `Circuit.substation_id` "for
+  consistency with Transformer" should be rejected; the asymmetry between the two entities is
+  intentional and documented (equipment-registry-module.md's Engineering Connectivity note).
+- **`backend/app/modules/equipment_registry/repository.py`** — `list_circuits`'s new
+  `substation_id` filter is a read-only subquery through
+  `CircuitTerminal` → `SubstationVoltageYard`, structurally identical to the pattern already used by
+  `list_circuits`'s own `search` filter and by `list_transformers`'s `substation_id` filter. Review
+  for: no write path was added alongside it, and no new table/column was introduced — this filter
+  derives its answer entirely from data Equipment Registry already owns (CLAUDE.md §5.1 — no
+  duplication).
+- **`frontend/src/modules/substation_registry/pages/SubstationDetailPage.tsx`** — "Other Connected
+  Substations" is derived by parsing the existing computed `circuit_name` (splitting on the en dash
+  `"–"` the backend's own `_compute_circuit_name` joins with) rather than adding a new backend field.
+  Review for: if `_compute_circuit_name`'s separator or sorting convention ever changes, this
+  frontend parsing logic must change with it — the two are coupled by convention, not by a shared
+  constant, since the frontend has no authoritative source for the separator character other than
+  matching the backend's current implementation.
+- **Naming discipline.** The section is titled exactly "Engineering Connectivity," deliberately not
+  "Live Topology" or "Operational Connectivity" — those names are reserved for the future,
+  PSS/E-derived operational snapshot (Phase 4). Review for: any future PSS/E connectivity UI must use
+  different, clearly operational-sounding terminology, and must never silently merge with or
+  overwrite this section — the architecture note in equipment-registry-module.md states GridDefence
+  should compare the two, never let one silently supersede the other.
+- **No manual browser UAT was performed** for this follow-up either, for the same environment reason
+  as above. Review for: exercise the new "Engineering Connectivity" section in a real browser
+  alongside the Transformer Create/List/Detail workflow before this phase is frozen/tagged.
+
+### Phase 3 follow-up — Deletion/Correction Policy
+
+- **Do not add a status column to `TransformerTerminal`.** This was a deliberate Architecture
+  Decision Gate outcome (Q1), not an oversight: a transformer's HV and LV terminals are intrinsic to
+  what it is (exactly one of each, always), so a single mistaken terminal cannot be corrected in
+  isolation without leaving an invalid transformer on record. Review for: any future PR that adds
+  `TransformerTerminal.operational_status_id` "for consistency with `CircuitTerminal`" should be
+  rejected — the correction unit for a mistaken transformer is the whole `Transformer`, via its own
+  pre-existing `operational_status_id` field.
+- **Do not block `CircuitTerminal` correction, even below the two-active-terminal minimum.** This was
+  explicit, detailed user guidance (Q2), not a relaxed default: `CircuitTerminal` is a first-class
+  connectivity object that may legitimately require individual correction, and a circuit may be
+  temporarily incomplete while under correction. The two-active-terminal rule (equipment-
+  registry-module.md §9 rule 5) is enforced only at the point a circuit tries to (re)enter `Active`
+  (`change_status`), never at terminal-correction time. Review for: any future PR that adds a guard
+  to `update_terminal` preventing correction below the threshold should be rejected — it would
+  contradict this explicit decision and reintroduce the exact rigidity UAT flagged.
+- **`backend/app/modules/equipment_registry/service.py`** — `_require_voltage_yard` now raises
+  `SwitchyardEnteredInErrorError` for any yard whose status is `ENTERED_IN_ERROR`, which is what
+  actually protects every terminal-creation call site (`_validate_terminal_inputs`, `add_terminal`,
+  `create_transformer`) — there is no separate guard duplicated at each call site. Review for: any
+  new terminal-creation path added in a future phase must route through `_require_voltage_yard` (or
+  an equivalent check) rather than fetching the yard directly, or it will silently bypass this
+  protection.
+- **`backend/app/modules/equipment_registry/repository.py`** — `list_circuits`/`list_transformers`/
+  `list_voltage_yards`'s default `ENTERED_IN_ERROR` exclusion is bypassed whenever an explicit
+  `operational_status_id` filter is supplied (`if not include_entered_in_error and
+  operational_status_id is None`). Review for: this is intentional — without it, directly filtering
+  for `?operational_status_id=<entered_in_error_id>` would always return zero results, which would
+  make the audit/history view for entered-in-error records unreachable by status filter.
+- **List-vs-detail visibility asymmetry is intentional, not a bug.** `list_terminals_for_circuits`
+  (used by `list_circuits`'s computed `circuit_name`/`terminal_count`) excludes entered-in-error
+  terminals; `get_circuit`'s own `terminals` array is always unfiltered. Review for: a future PR
+  "fixing" `get_circuit` to also filter by status would remove this module's only audit/history view
+  for a corrected terminal — a circuit's own detail page is deliberately that view, reachable by id
+  regardless of any terminal's status.
+- **`frontend/src/modules/substation_registry/pages/SubstationDetailPage.tsx`** — the switchyard
+  fetch always requests `include_entered_in_error: true` at the network layer; the "Show
+  entered-in-error switchyards" checkbox filters only what is rendered, client-side. Review for: any
+  future PR that makes the fetch itself conditional on the checkbox would reintroduce a
+  previously-fixed defect — the `(substation_id, voltage_level_id)` uniqueness constraint is not
+  status-aware, so `usedVoltageLevelIds` must always see corrected yards or it will re-offer an
+  already-taken voltage level as available in the "Add Switchyard" dropdown.
+- **UI action naming.** Every correction control reads "Mark as Entered in Error," never "Delete."
+  Review for: any future PR introducing a "Delete" label for a persisted record in this module should
+  be rejected outright — this module has no concept of an uncommitted draft (every create is one
+  atomic, already-committed transaction), so the policy's own draft exception never applies here.
+- **No manual browser UAT was performed** for this follow-up, for the same environment reason as
+  prior phases. Review for: exercise switchyard correction, circuit terminal correction, the
+  reference-protection rejection, and the activation guard in a real browser before this phase is
+  frozen/tagged.
 
 ### Future Phases
 

@@ -2,7 +2,7 @@
 
 Engineering platform for managing transmission grid defence schemes (UFLS, UVLS, EMLS) in Peninsular Malaysia — the single source of truth for grid defence planning, implementation, auditing, and simulation.
 
-Full architecture documentation lives in [`docs/architecture/`](docs/architecture/) and [`docs/adr/`](docs/adr/); engineering standards are defined in [`.claude/CLAUDE.md`](.claude/CLAUDE.md). This repository is currently at **Phase 0 — Repository Foundation** (see [`docs/architecture/implementation-plan.md`](docs/architecture/implementation-plan.md)): the project skeleton, tooling, and infrastructure exist, but no business modules (IAM, Substation Registry, UFLS, etc.) have been implemented yet.
+Full architecture documentation lives in [`docs/architecture/`](docs/architecture/) and [`docs/adr/`](docs/adr/); engineering standards are defined in [`.claude/CLAUDE.md`](.claude/CLAUDE.md). This repository is currently at **Phase 3 — Equipment Registry, complete and frozen after UAT** (see [`CHANGELOG.md`](CHANGELOG.md) and [`docs/architecture/implementation-plan.md`](docs/architecture/implementation-plan.md)): IAM, Substation Registry, and Equipment Registry (Circuit/CircuitTerminal, Transformer/TransformerTerminal, the deletion/correction policy, and the transformer breaker-numbering convention as reference data) are implemented and UAT-accepted; UFLS/UVLS/EMLS and PSS/E Topology Import remain future work.
 
 ---
 
@@ -44,6 +44,7 @@ points to. Existing baselines:
 | Tag | Commit | Marks |
 |---|---|---|
 | `v0.2.0` | `ff830a4f0999c5d9eeca79d55647da4e53f6b3f8` | Phase 2 — Substation Registry, accepted with PostgreSQL verification |
+| `v0.3.0-foundation` | `2379d95` | Phase 3 — Equipment Registry (Circuit/CircuitTerminal), frozen after UAT as the baseline Phase 3.5/4 build on |
 
 ---
 
@@ -148,7 +149,7 @@ python -m app.modules.equipment_registry.bootstrap     # registers equipment_reg
 
 Every business module added in a future phase gets its own `bootstrap.py` following this same pattern — add its command to this list when that phase ships. All four commands are idempotent (safe to re-run against an already-bootstrapped database) and order-tolerant except that `iam.bootstrap` must run before a business module's own bootstrap can actually grant its permissions to a role (a module's bootstrap run before IAM's own will register the permission but skip the role grants, logging a warning — re-running it afterward completes the grants, per each `bootstrap.py`'s own docstring).
 
-**`python -m app.reference_data.seed` must be re-run every time it changes, not only once.** It is idempotent (only ever inserts rows that don't already exist — see `app/reference_data/seed.py`'s `run_seed()`), but nothing runs it automatically when a later phase adds a new reference table or new rows to an existing one. Pulling code that adds to `seed.py` does not update your already-running local/dev database on its own — you must re-run the command by hand against that specific database. The same is true for each module's `bootstrap.py` whenever it adds a new permission.
+**`python -m app.reference_data.seed` must be re-run every time it changes, not only once.** It is idempotent (only ever inserts rows that don't already exist — see `app/reference_data/seed.py`'s `run_seed()`), but nothing runs it automatically when a later phase adds a new reference table or new rows to an existing one. Pulling code that adds to `seed.py` does not update your already-running local/dev database on its own — you must re-run the command by hand against that specific database. The same is true for each module's `bootstrap.py` whenever it adds a new permission. (Phase 3.5 added 33kV/22kV/11kV to `voltage_level`; the deletion/correction policy follow-up added `ENTERED_IN_ERROR` to `operational_status`; the breaker-numbering-convention follow-up added a new `transformer_breaker_numbering_convention` table with ten seeded rows — re-run the seed command after pulling any of these changes. Transformer Registry itself introduces no new bootstrap step — it reuses `equipment_registry.read`/`.write`, already registered by `app.modules.equipment_registry.bootstrap`.)
 
 **Two deployment gaps were found and fixed during Phase 3 UAT, both of the same shape** — code was correct and fully tested, but the persistent dev database was never re-synchronized with it:
 

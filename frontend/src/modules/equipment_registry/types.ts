@@ -22,6 +22,11 @@ export interface VoltageYardUpdate {
   commissioning_date?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  // Deletion/correction policy (Phase 3 follow-up) — corrects a
+  // mistakenly-created switchyard via ENTERED_IN_ERROR, never a hard
+  // delete. change_reason is optional context for the audit trail.
+  operational_status_id?: number;
+  change_reason?: string | null;
 }
 
 export interface VoltageYardSummary {
@@ -35,6 +40,24 @@ export interface VoltageYardSummary {
   commissioning_date: string | null;
   latitude: number | null;
   longitude: number | null;
+  operational_status_id: number;
+}
+
+export interface VoltageYardAuditLogEntry {
+  log_id: number;
+  field_name: string;
+  old_value: string | null;
+  new_value: string | null;
+  changed_at: string;
+  changed_by: UserSummary | null;
+  change_reason: string | null;
+}
+
+export interface VoltageYardAuditLogPage {
+  items: VoltageYardAuditLogEntry[];
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 export interface CircuitTerminalCreate {
@@ -78,6 +101,11 @@ export interface CircuitTerminalUpdate {
   breaker_number?: string;
   commissioning_date?: string | null;
   remarks?: string | null;
+  // Deletion/correction policy (Phase 3 follow-up) — corrects a
+  // mistakenly-added terminal via ENTERED_IN_ERROR, never a hard delete;
+  // never rejected by the backend, even below the two-active-terminal
+  // completeness rule (that is enforced instead at circuit activation).
+  operational_status_id?: number;
 }
 
 export interface CircuitTerminalSummary {
@@ -91,6 +119,7 @@ export interface CircuitTerminalSummary {
   breaker_number: string;
   commissioning_date: string | null;
   remarks: string | null;
+  operational_status_id: number;
   created_at: string;
   updated_at: string;
 }
@@ -141,6 +170,111 @@ export interface CircuitAuditLogEntry {
 
 export interface CircuitAuditLogPage {
   items: CircuitAuditLogEntry[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+// Transformer Registry (Phase 3.5). A transformer connects exactly two
+// switchyards (HV/LV) — see docs/architecture/equipment-registry-module.md's
+// Transformer Registry section. `generated_short_name` is computed by the
+// backend at read time, never stored (Architecture Decision Gate outcome) —
+// it is present on every response shape but never accepted on a request.
+
+export interface TransformerCreate {
+  // Substation-first (UAT correction): a transformer is substation-owned
+  // equipment, never modeled as spanning two substations. Both switchyards
+  // below must belong to this same substation — enforced by the backend.
+  substation_id: string;
+  transformer_number: string;
+  hv_switchyard_id: string;
+  hv_breaker_number: string;
+  lv_switchyard_id: string;
+  lv_breaker_number: string;
+  capacity_mva?: number | null;
+  commissioning_date?: string | null;
+  operational_status_id: number;
+  transformer_type?: string | null;
+  manufacturer?: string | null;
+  remarks?: string | null;
+}
+
+export interface TransformerUpdate {
+  transformer_number?: string;
+  hv_breaker_number?: string;
+  lv_breaker_number?: string;
+  capacity_mva?: number | null;
+  commissioning_date?: string | null;
+  operational_status_id?: number;
+  transformer_type?: string | null;
+  manufacturer?: string | null;
+  remarks?: string | null;
+}
+
+export interface TransformerTerminalSummary {
+  transformer_terminal_id: string;
+  side: "HV" | "LV";
+  voltage_yard_id: string;
+  substation_id: string;
+  substation_mnemonic: string;
+  substation_official_name: string;
+  voltage_level_id: number;
+  voltage_level_label: string;
+  breaker_number: string;
+}
+
+export interface TransformerSummary {
+  transformer_id: string;
+  substation_id: string;
+  substation_mnemonic: string;
+  substation_official_name: string;
+  transformer_number: string;
+  generated_short_name: string;
+  hv_voltage_level_label: string;
+  lv_voltage_level_label: string;
+  capacity_mva: number | null;
+  operational_status_id: number;
+}
+
+export interface TransformerPage {
+  items: TransformerSummary[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface TransformerDetail {
+  transformer_id: string;
+  substation_id: string;
+  substation_mnemonic: string;
+  substation_official_name: string;
+  transformer_number: string;
+  generated_short_name: string;
+  capacity_mva: number | null;
+  commissioning_date: string | null;
+  operational_status_id: number;
+  transformer_type: string | null;
+  manufacturer: string | null;
+  remarks: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: UserSummary | null;
+  updated_by: UserSummary | null;
+  terminals: TransformerTerminalSummary[];
+}
+
+export interface TransformerAuditLogEntry {
+  log_id: number;
+  field_name: string;
+  old_value: string | null;
+  new_value: string | null;
+  changed_at: string;
+  changed_by: UserSummary | null;
+  change_reason: string | null;
+}
+
+export interface TransformerAuditLogPage {
+  items: TransformerAuditLogEntry[];
   page: number;
   page_size: number;
   total: number;

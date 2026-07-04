@@ -11,80 +11,74 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../iam/AuthContext";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
 import { equipmentRegistryApi } from "../api";
-import type { CircuitSummary } from "../types";
+import type { TransformerSummary } from "../types";
 
-const columnHelper = createColumnHelper<CircuitSummary>();
+const columnHelper = createColumnHelper<TransformerSummary>();
 
-export function CircuitListPage() {
+export function TransformerListPage() {
   const { permissions } = useAuth();
   const canWrite = permissions.has("equipment_registry.write");
   const referenceData = useReferenceData();
 
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [voltageLevelId, setVoltageLevelId] = useState<string>("");
-  const [lineTypeId, setLineTypeId] = useState<string>("");
   const [statusId, setStatusId] = useState<string>("");
   // Deletion/correction policy (Phase 3 follow-up): Entered-in-Error
-  // circuits are hidden by default; this is the audit-facing toggle to
-  // reveal them, mirroring the equivalent toggle on the Substation Detail
-  // page's own Switchyards section.
+  // transformers are hidden by default; this is the audit-facing toggle
+  // to reveal them, mirroring the equivalent toggle on Circuit's own list
+  // page and the Substation Detail page's Switchyards section.
   const [showEnteredInError, setShowEnteredInError] = useState(false);
   const pageSize = 20;
 
-  const circuitsQuery = useQuery({
-    queryKey: [
-      "circuits",
-      { page, search, voltageLevelId, lineTypeId, statusId, showEnteredInError },
-    ],
+  const transformersQuery = useQuery({
+    queryKey: ["transformers", { page, search, statusId, showEnteredInError }],
     queryFn: () =>
-      equipmentRegistryApi.listCircuits({
+      equipmentRegistryApi.listTransformers({
         page,
         page_size: pageSize,
         search: search || undefined,
-        voltage_level_id: voltageLevelId ? Number(voltageLevelId) : undefined,
-        line_type_id: lineTypeId ? Number(lineTypeId) : undefined,
         operational_status_id: statusId ? Number(statusId) : undefined,
         include_entered_in_error: showEnteredInError,
       }),
   });
 
   const columns = [
-    columnHelper.accessor("circuit_name", { header: "Circuit" }),
-    columnHelper.accessor("bay_number", { header: "Bay / Circuit No." }),
-    columnHelper.accessor("voltage_level_id", {
-      header: "Voltage",
-      cell: (info) => referenceData.voltageLevelsById.get(info.getValue())?.label ?? info.getValue(),
+    columnHelper.accessor("substation_mnemonic", {
+      header: "Substation",
+      cell: (info) =>
+        `${info.getValue()} — ${info.row.original.substation_official_name}`,
     }),
-    columnHelper.accessor("line_type_id", {
-      header: "Line type",
-      cell: (info) => referenceData.lineTypesById.get(info.getValue())?.label ?? info.getValue(),
+    columnHelper.accessor("generated_short_name", { header: "Short Name" }),
+    columnHelper.display({
+      id: "voltage_transformation",
+      header: "Voltage Transformation",
+      cell: (info) =>
+        `${info.row.original.hv_voltage_level_label} ↔ ${info.row.original.lv_voltage_level_label}`,
     }),
-    columnHelper.accessor("terminal_count", { header: "Terminals" }),
+    columnHelper.accessor("capacity_mva", {
+      header: "Capacity (MVA)",
+      cell: (info) => info.getValue() ?? "—",
+    }),
     columnHelper.accessor("operational_status_id", {
       header: "Status",
       cell: (info) =>
         referenceData.operationalStatusesById.get(info.getValue())?.label ?? info.getValue(),
     }),
-    columnHelper.accessor("is_interconnector", {
-      header: "Interconnector",
-      cell: (info) => (info.getValue() ? "Yes" : "No"),
-    }),
     columnHelper.display({
       id: "actions",
       header: "",
-      cell: (info) => <Link to={`/circuits/${info.row.original.circuit_id}`}>View</Link>,
+      cell: (info) => <Link to={`/transformers/${info.row.original.transformer_id}`}>View</Link>,
     }),
   ];
 
   const table = useReactTable({
-    data: circuitsQuery.data?.items ?? [],
+    data: transformersQuery.data?.items ?? [],
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
-  const isFiltered = Boolean(search || voltageLevelId || lineTypeId || statusId);
-  const hasNoCircuitsAtAll = circuitsQuery.data?.total === 0 && !isFiltered;
+  const isFiltered = Boolean(search || statusId);
+  const hasNoTransformersAtAll = transformersQuery.data?.total === 0 && !isFiltered;
 
   return (
     <section>
@@ -96,10 +90,10 @@ export function CircuitListPage() {
           marginBottom: "1rem",
         }}
       >
-        <h2>Circuits</h2>
+        <h2>Transformers</h2>
         {canWrite && (
           <Link
-            to="/circuits/new"
+            to="/transformers/new"
             style={{
               padding: "0.5rem 1rem",
               backgroundColor: "#1a73e8",
@@ -109,51 +103,21 @@ export function CircuitListPage() {
               fontWeight: 600,
             }}
           >
-            New Circuit
+            New Transformer
           </Link>
         )}
       </div>
 
       <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap" }}>
         <input
-          aria-label="Search circuits"
-          placeholder="Search bay/circuit no. or substation..."
+          aria-label="Search transformers"
+          placeholder="Search transformer number or substation..."
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
             setPage(1);
           }}
         />
-        <select
-          aria-label="Filter by voltage level"
-          value={voltageLevelId}
-          onChange={(e) => {
-            setVoltageLevelId(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="">All voltage levels</option>
-          {referenceData.voltageLevels.map((level) => (
-            <option key={level.voltage_level_id} value={level.voltage_level_id}>
-              {level.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by line type"
-          value={lineTypeId}
-          onChange={(e) => {
-            setLineTypeId(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="">All line types</option>
-          {referenceData.lineTypes.map((type) => (
-            <option key={type.line_type_id} value={type.line_type_id}>
-              {type.label}
-            </option>
-          ))}
-        </select>
         <select
           aria-label="Filter by status"
           value={statusId}
@@ -169,9 +133,9 @@ export function CircuitListPage() {
             </option>
           ))}
         </select>
-        <label htmlFor="show-entered-in-error-circuits">
+        <label htmlFor="show-entered-in-error-transformers">
           <input
-            id="show-entered-in-error-circuits"
+            id="show-entered-in-error-transformers"
             type="checkbox"
             checked={showEnteredInError}
             onChange={(e) => {
@@ -179,19 +143,19 @@ export function CircuitListPage() {
               setPage(1);
             }}
           />{" "}
-          Show entered-in-error circuits
+          Show entered-in-error transformers
         </label>
       </div>
 
-      {circuitsQuery.isLoading && <p>Loading circuits...</p>}
-      {circuitsQuery.isError && <p role="alert">Failed to load circuits.</p>}
+      {transformersQuery.isLoading && <p>Loading transformers...</p>}
+      {transformersQuery.isError && <p role="alert">Failed to load transformers.</p>}
 
-      {circuitsQuery.data && (
+      {transformersQuery.data && (
         <>
-          {hasNoCircuitsAtAll ? (
+          {hasNoTransformersAtAll ? (
             <div style={{ padding: "2rem", textAlign: "center", border: "1px dashed #ccc" }}>
-              <p>No circuits have been registered yet.</p>
-              {canWrite && <Link to="/circuits/new">Register your first circuit</Link>}
+              <p>No transformers have been registered yet.</p>
+              {canWrite && <Link to="/transformers/new">Register your first transformer</Link>}
             </div>
           ) : (
             <table>
@@ -218,14 +182,14 @@ export function CircuitListPage() {
                 ))}
                 {table.getRowModel().rows.length === 0 && (
                   <tr>
-                    <td colSpan={columns.length}>No circuits match your search or filters.</td>
+                    <td colSpan={columns.length}>No transformers match your search or filters.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           )}
 
-          {!hasNoCircuitsAtAll && (
+          {!hasNoTransformersAtAll && (
             <div
               style={{ marginTop: "1rem", display: "flex", gap: "0.75rem", alignItems: "center" }}
             >
@@ -233,11 +197,11 @@ export function CircuitListPage() {
                 Previous
               </button>
               <span>
-                Page {page} of {Math.max(1, Math.ceil(circuitsQuery.data.total / pageSize))}
+                Page {page} of {Math.max(1, Math.ceil(transformersQuery.data.total / pageSize))}
               </span>
               <button
                 type="button"
-                disabled={page * pageSize >= circuitsQuery.data.total}
+                disabled={page * pageSize >= transformersQuery.data.total}
                 onClick={() => setPage((p) => p + 1)}
               >
                 Next

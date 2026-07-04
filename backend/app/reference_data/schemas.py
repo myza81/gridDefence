@@ -56,3 +56,15 @@ class LineTypeSummary(BaseModel):
     line_type_id: int
     code: str
     label: str
+
+
+class TransformerBreakerNumberingConventionSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    convention_id: int
+    hv_voltage_level_id: int
+    lv_voltage_level_id: int
+    side: str
+    pattern: str | None
+    is_standard: bool
+    notes: str | None

@@ -162,6 +162,68 @@ def test_duplicate_mnemonic_returns_400(client: TestClient, db_session: Session)
     assert second.json()["detail"]["code"] == "validation_error"
 
 
+def test_rename_back_to_own_historical_mnemonic_is_allowed(
+    client: TestClient, db_session: Session
+) -> None:
+    """UAT regression: SIDS -> SIDST -> SIDS on the same substation must
+    succeed. Previously rejected because the historical-mnemonic check did
+    not distinguish "owned by this substation" from "owned by any
+    substation"."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "SIDS", "official_name": "Sungai Sidas", **ref},
+    )
+    assert create_response.status_code == 201, create_response.text
+    substation_id = create_response.json()["substation_id"]
+
+    rename_away = client.patch(
+        f"/api/v1/substations/{substation_id}", headers=headers, json={"mnemonic": "SIDST"}
+    )
+    assert rename_away.status_code == 200, rename_away.text
+
+    rename_back = client.patch(
+        f"/api/v1/substations/{substation_id}", headers=headers, json={"mnemonic": "SIDS"}
+    )
+    assert rename_back.status_code == 200, rename_back.text
+    assert rename_back.json()["mnemonic"] == "SIDS"
+
+
+def test_another_substation_cannot_claim_a_historical_mnemonic_returns_400(
+    client: TestClient, db_session: Session
+) -> None:
+    """UAT regression: Substation A's retired mnemonic SIDS must remain
+    permanently reserved to A — Substation B may never claim it, even
+    though A no longer currently uses it."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    substation_a = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "SIDS", "official_name": "Substation A", **ref},
+    )
+    assert substation_a.status_code == 201
+    client.patch(
+        f"/api/v1/substations/{substation_a.json()['substation_id']}",
+        headers=headers,
+        json={"mnemonic": "SIDST"},
+    )
+
+    substation_b = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "SIDS", "official_name": "Substation B", **ref},
+    )
+    assert substation_b.status_code == 400
+    assert substation_b.json()["detail"]["code"] == "validation_error"
+
+
 def test_get_unknown_substation_returns_404(client: TestClient, db_session: Session) -> None:
     token = _admin_token(client, db_session)
     response = client.get(

@@ -5,6 +5,7 @@ import type {
   OperationalStatusSummary,
   RegionSummary,
   StateSummary,
+  TransformerBreakerNumberingConventionSummary,
   VoltageLevelSummary,
 } from "./types";
 
@@ -18,4 +19,8 @@ export const referenceDataApi = {
   listOperationalStatuses: () =>
     apiClient.get<OperationalStatusSummary[]>("/api/v1/reference-data/operational-statuses"),
   listLineTypes: () => apiClient.get<LineTypeSummary[]>("/api/v1/reference-data/line-types"),
+  listTransformerBreakerNumberingConventions: () =>
+    apiClient.get<TransformerBreakerNumberingConventionSummary[]>(
+      "/api/v1/reference-data/transformer-breaker-numbering-conventions",
+    ),
 };

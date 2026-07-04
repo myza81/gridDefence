@@ -80,8 +80,32 @@ const REFERENCE_DATA_HANDLERS = [
           label: "Decommissioned",
           is_terminal: false,
         },
+        {
+          operational_status_id: 7,
+          code: "ENTERED_IN_ERROR",
+          label: "Entered in Error",
+          is_terminal: true,
+        },
       ],
     }),
+  },
+  {
+    method: "GET",
+    pattern: /\/reference-data\/line-types$/,
+    respond: () => ({
+      status: 200,
+      body: [{ line_type_id: 1, code: "OVERHEAD", label: "Overhead Line" }],
+    }),
+  },
+  {
+    method: "GET",
+    pattern: /\/api\/v1\/transformers\?/,
+    respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 200, total: 0 } }),
+  },
+  {
+    method: "GET",
+    pattern: /\/api\/v1\/circuits\?/,
+    respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 200, total: 0 } }),
   },
 ];
 
@@ -321,8 +345,12 @@ describe("SubstationDetailPage", () => {
         pattern: /\/api\/v1\/voltage-yards\?/,
         respond: () => ({ status: 200, body: existingYards }),
       },
-      ...REFERENCE_DATA_HANDLERS,
+      // Overrides must come before REFERENCE_DATA_HANDLERS — stubFetch
+      // resolves the first pattern match, so an override handler (e.g. a
+      // custom /transformers response) must be checked before
+      // REFERENCE_DATA_HANDLERS's own default empty-transformers handler.
       ...overrideHandlers,
+      ...REFERENCE_DATA_HANDLERS,
     ]);
   }
 
@@ -343,6 +371,7 @@ describe("SubstationDetailPage", () => {
         voltage_level_id: 1,
         voltage_level_label: "500kV",
         display_label: "SUB1 — 500kV",
+        operational_status_id: 1,
       },
     ]);
 
@@ -373,6 +402,7 @@ describe("SubstationDetailPage", () => {
           voltage_level_id: 1,
           voltage_level_label: "500kV",
           display_label: "SUB1 — 500kV",
+          operational_status_id: 1,
         },
       ],
       [
@@ -391,6 +421,7 @@ describe("SubstationDetailPage", () => {
                 voltage_level_id: 2,
                 voltage_level_label: "132kV",
                 display_label: "SUB1 — 132kV",
+                operational_status_id: 1,
               },
             };
           },
@@ -408,8 +439,15 @@ describe("SubstationDetailPage", () => {
       expect(screen.getByLabelText("New switchyard voltage level")).toBeInTheDocument();
     });
     // Scope to the voltage yards list specifically — voltage level is no
-    // longer shown anywhere else on this page (ADR-009).
-    expect(within(screen.getByTestId("voltage-yards-list")).getByText("500kV")).toBeInTheDocument();
+    // longer shown anywhere else on this page (ADR-009). Matched via a
+    // function matcher (not a plain string) since the yard row now also
+    // shows its status inline ("500kV (Active)"), and via getAllByText
+    // since "500kV" also appears inside the field labels below it.
+    expect(
+      within(screen.getByTestId("voltage-yards-list")).getAllByText((_, element) =>
+        element?.tagName.toLowerCase() === "li" && (element.textContent ?? "").includes("500kV"),
+      ),
+    ).toHaveLength(1);
 
     const user = userEvent.setup();
     // Only "132kV" is offered — the substation's existing "500kV" yard is
@@ -422,6 +460,126 @@ describe("SubstationDetailPage", () => {
         substation_id: SUBSTATION_ID,
         voltage_level_id: 2,
       });
+    });
+  });
+
+  // --- Deletion/correction policy (Phase 3 follow-up) -------------------------------
+  it("lets a user with equipment_registry.write mark a switchyard as Entered in Error", async () => {
+    authStorage.setToken("token");
+    let updatePayload: unknown = null;
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [
+        {
+          voltage_yard_id: "yard-1",
+          substation_id: SUBSTATION_ID,
+          substation_mnemonic: "SUB1",
+          substation_official_name: "Substation One",
+          voltage_level_id: 1,
+          voltage_level_label: "500kV",
+          display_label: "SUB1 — 500kV",
+          operational_status_id: 1,
+        },
+      ],
+      [
+        {
+          method: "PATCH",
+          pattern: /\/api\/v1\/voltage-yards\/yard-1$/,
+          respond: (_url, init) => {
+            updatePayload = init?.body ? JSON.parse(init.body as string) : null;
+            return {
+              status: 200,
+              body: {
+                voltage_yard_id: "yard-1",
+                substation_id: SUBSTATION_ID,
+                substation_mnemonic: "SUB1",
+                substation_official_name: "Substation One",
+                voltage_level_id: 1,
+                voltage_level_label: "500kV",
+                display_label: "SUB1 — 500kV",
+                operational_status_id: 7,
+              },
+            };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    const user = userEvent.setup();
+    const button = await screen.findByRole("button", { name: "Mark as Entered in Error" });
+    await user.click(button);
+
+    await waitFor(() => {
+      expect(updatePayload).toMatchObject({ operational_status_id: 7 });
+    });
+    // Never a "Delete" button anywhere for a switchyard (CLAUDE.md §11.6 —
+    // no hard delete for engineering registry records).
+    expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+  });
+
+  it("does not offer to correct a switchyard without equipment_registry.write", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["substation_registry.write"], [
+      {
+        voltage_yard_id: "yard-1",
+        substation_id: SUBSTATION_ID,
+        substation_mnemonic: "SUB1",
+        substation_official_name: "Substation One",
+        voltage_level_id: 1,
+        voltage_level_label: "500kV",
+        display_label: "SUB1 — 500kV",
+        operational_status_id: 1,
+      },
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("voltage-yards-list")).getByText(/500kV/),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Mark as Entered in Error" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides an entered-in-error switchyard by default and reveals it via the toggle", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["equipment_registry.write"], [
+      {
+        voltage_yard_id: "yard-1",
+        substation_id: SUBSTATION_ID,
+        substation_mnemonic: "SUB1",
+        substation_official_name: "Substation One",
+        voltage_level_id: 1,
+        voltage_level_label: "500kV",
+        display_label: "SUB1 — 500kV",
+        operational_status_id: 7,
+      },
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("No switchyards registered yet.")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Show entered-in-error switchyards"));
+
+    // Matched via a function matcher, not a plain regex, since "500kV"
+    // also appears inside this row's own field labels once it renders
+    // editable (canWrite=true here).
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("voltage-yards-list")).getAllByText((_, element) =>
+          element?.tagName.toLowerCase() === "li" &&
+          (element.textContent ?? "").includes("Entered in Error"),
+        ),
+      ).toHaveLength(1);
     });
   });
 
@@ -439,6 +597,7 @@ describe("SubstationDetailPage", () => {
           voltage_level_id: 1,
           voltage_level_label: "500kV",
           display_label: "SUB1 — 500kV",
+          operational_status_id: 1,
           commissioning_date: null,
           latitude: null,
           longitude: null,
@@ -460,6 +619,7 @@ describe("SubstationDetailPage", () => {
                 voltage_level_id: 2,
                 voltage_level_label: "132kV",
                 display_label: "SUB1 — 132kV",
+                operational_status_id: 1,
                 commissioning_date: "2020-06-01",
                 latitude: 3.140853,
                 longitude: 101.693207,
@@ -512,6 +672,7 @@ describe("SubstationDetailPage", () => {
           voltage_level_id: 1,
           voltage_level_label: "500kV",
           display_label: "SUB1 — 500kV",
+          operational_status_id: 1,
           commissioning_date: "2018-01-01",
           latitude: 3.0,
           longitude: 101.0,
@@ -534,6 +695,7 @@ describe("SubstationDetailPage", () => {
                 voltage_level_id: 1,
                 voltage_level_label: "500kV",
                 display_label: "SUB1 — 500kV",
+                operational_status_id: 1,
                 commissioning_date: "2021-03-15",
                 latitude: 3.5,
                 longitude: 101.5,
@@ -583,6 +745,7 @@ describe("SubstationDetailPage", () => {
         voltage_level_id: 1,
         voltage_level_label: "500kV",
         display_label: "SUB1 — 500kV",
+        operational_status_id: 1,
         commissioning_date: "2018-01-01",
         latitude: 3.0,
         longitude: 101.0,
@@ -610,6 +773,7 @@ describe("SubstationDetailPage", () => {
         voltage_level_id: 1,
         voltage_level_label: "500kV",
         display_label: "SUB1 — 500kV",
+        operational_status_id: 1,
       },
       {
         voltage_yard_id: "yard-2",
@@ -619,6 +783,7 @@ describe("SubstationDetailPage", () => {
         voltage_level_id: 2,
         voltage_level_label: "132kV",
         display_label: "SUB1 — 132kV",
+        operational_status_id: 1,
       },
     ]);
 
@@ -677,6 +842,144 @@ describe("SubstationDetailPage", () => {
       expect(screen.getByText("No switchyards registered yet.")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Add switchyard" })).not.toBeInTheDocument();
+  });
+
+  it("shows which transformers are installed at this substation (UAT requirement)", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(
+      [],
+      [
+        {
+          voltage_yard_id: "yard-1",
+          substation_id: SUBSTATION_ID,
+          substation_mnemonic: "SUB1",
+          substation_official_name: "Substation One",
+          voltage_level_id: 1,
+          voltage_level_label: "500kV",
+          display_label: "SUB1 — 500kV",
+          operational_status_id: 1,
+        },
+      ],
+      [
+        {
+          method: "GET",
+          pattern: /\/api\/v1\/transformers\?/,
+          respond: () => ({
+            status: 200,
+            body: {
+              items: [
+                {
+                  transformer_id: "txf-1",
+                  substation_id: SUBSTATION_ID,
+                  substation_mnemonic: "SUB1",
+                  substation_official_name: "Substation One",
+                  transformer_number: "1",
+                  generated_short_name: "XGT1",
+                  hv_voltage_level_label: "500kV",
+                  lv_voltage_level_label: "132kV",
+                  capacity_mva: 500,
+                  operational_status_id: 1,
+                },
+              ],
+              page: 1,
+              page_size: 200,
+              total: 1,
+            },
+          }),
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("transformers-list")).getByText("XGT1")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/500kV ↔ 132kV/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "XGT1" })).toHaveAttribute(
+      "href",
+      "/transformers/txf-1",
+    );
+  });
+
+  it("shows a message when no transformers are installed at this substation", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession([], []);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("No transformers installed here yet.")).toBeInTheDocument();
+    });
+  });
+
+  it("renders the Engineering Connectivity section with connected circuits", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(
+      [],
+      [],
+      [
+        {
+          method: "GET",
+          pattern: /\/api\/v1\/circuits\?/,
+          respond: () => ({
+            status: 200,
+            body: {
+              items: [
+                {
+                  circuit_id: "circuit-1",
+                  bay_number: "1",
+                  circuit_name: "IGBK–SUB1",
+                  voltage_level_id: 1,
+                  line_type_id: 1,
+                  operational_status_id: 1,
+                  is_interconnector: false,
+                  terminal_count: 2,
+                },
+              ],
+              page: 1,
+              page_size: 200,
+              total: 1,
+            },
+          }),
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Engineering Connectivity" })).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("connected-circuits-count")).toHaveTextContent(
+      "Connected Circuits: 1",
+    );
+    const table = screen.getByTestId("engineering-connectivity-table");
+    expect(within(table).getByText("IGBK–SUB1")).toBeInTheDocument();
+    expect(within(table).getByText("1")).toBeInTheDocument();
+    expect(within(table).getByText("500kV")).toBeInTheDocument();
+    expect(within(table).getByText("Overhead Line")).toBeInTheDocument();
+    expect(within(table).getByText("Active")).toBeInTheDocument();
+    // "Other Connected Substations" excludes this substation's own mnemonic (SUB1).
+    expect(within(table).getByText("IGBK")).toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: "View" })).toHaveAttribute(
+      "href",
+      "/circuits/circuit-1",
+    );
+  });
+
+  it("shows the empty-state message when no circuits are connected to this substation", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession([], []);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("No connected circuits recorded in the engineering registry."),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("engineering-connectivity-table")).not.toBeInTheDocument();
   });
 
   it("lets a user with substation_registry.write submit an edit", async () => {

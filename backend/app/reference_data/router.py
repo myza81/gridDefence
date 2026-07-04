@@ -28,6 +28,7 @@ from app.reference_data.schemas import (
     OperationalStatusSummary,
     RegionSummary,
     StateSummary,
+    TransformerBreakerNumberingConventionSummary,
     VoltageLevelSummary,
 )
 
@@ -74,3 +75,13 @@ def list_line_types(
     db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
 ) -> list[LineTypeSummary]:
     return ReferenceDataRepository(db).list_line_types()
+
+
+@router.get(
+    "/transformer-breaker-numbering-conventions",
+    response_model=list[TransformerBreakerNumberingConventionSummary],
+)
+def list_transformer_breaker_numbering_conventions(
+    db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> list[TransformerBreakerNumberingConventionSummary]:
+    return ReferenceDataRepository(db).list_transformer_breaker_numbering_conventions()
