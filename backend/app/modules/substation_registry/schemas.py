@@ -18,7 +18,6 @@ from app.shared.pagination import Page
 class SubstationCreate(BaseModel):
     mnemonic: str = Field(min_length=1, max_length=10)
     official_name: str = Field(min_length=1, max_length=150)
-    voltage_level_id: int
     region_id: int
     state_id: int
     grid_owner_id: int
@@ -40,7 +39,6 @@ class SubstationUpdate(BaseModel):
 
     mnemonic: str | None = Field(default=None, min_length=1, max_length=10)
     official_name: str | None = Field(default=None, min_length=1, max_length=150)
-    voltage_level_id: int | None = None
     region_id: int | None = None
     state_id: int | None = None
     grid_owner_id: int | None = None
@@ -64,7 +62,6 @@ class SubstationSummary(BaseModel):
     substation_id: uuid.UUID
     mnemonic: str
     official_name: str
-    voltage_level_id: int
     region_id: int
     state_id: int
     grid_owner_id: int
@@ -85,7 +82,6 @@ class SubstationDetail(BaseModel):
     substation_id: uuid.UUID
     mnemonic: str
     official_name: str
-    voltage_level_id: int
     region_id: int
     state_id: int
     grid_owner_id: int

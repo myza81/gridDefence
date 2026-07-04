@@ -10,7 +10,6 @@ export interface SubstationSummary {
   substation_id: string;
   mnemonic: string;
   official_name: string;
-  voltage_level_id: number;
   region_id: number;
   state_id: number;
   grid_owner_id: number;
@@ -29,7 +28,6 @@ export interface SubstationDetail {
   substation_id: string;
   mnemonic: string;
   official_name: string;
-  voltage_level_id: number;
   region_id: number;
   state_id: number;
   grid_owner_id: number;
@@ -48,7 +46,6 @@ export interface SubstationDetail {
 export interface SubstationCreate {
   mnemonic: string;
   official_name: string;
-  voltage_level_id: number;
   region_id: number;
   state_id: number;
   grid_owner_id: number;
@@ -63,7 +60,6 @@ export interface SubstationCreate {
 export interface SubstationUpdate {
   mnemonic?: string;
   official_name?: string;
-  voltage_level_id?: number;
   region_id?: number;
   state_id?: number;
   grid_owner_id?: number;

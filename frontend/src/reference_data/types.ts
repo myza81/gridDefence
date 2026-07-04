@@ -36,3 +36,9 @@ export interface OperationalStatusSummary {
   label: string;
   is_terminal: boolean;
 }
+
+export interface LineTypeSummary {
+  line_type_id: number;
+  code: string;
+  label: string;
+}

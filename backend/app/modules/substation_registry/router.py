@@ -50,7 +50,6 @@ def list_substations(
     page_size: int = 50,
     region_id: int | None = None,
     state_id: int | None = None,
-    voltage_level_id: int | None = None,
     grid_owner_id: int | None = None,
     operational_status_id: int | None = None,
     search: str | None = None,
@@ -62,7 +61,6 @@ def list_substations(
         page_size=page_size,
         region_id=region_id,
         state_id=state_id,
-        voltage_level_id=voltage_level_id,
         grid_owner_id=grid_owner_id,
         operational_status_id=operational_status_id,
         search=search,
@@ -80,7 +78,6 @@ def create_substation(
         substation = service.create_substation(
             mnemonic=payload.mnemonic,
             official_name=payload.official_name,
-            voltage_level_id=payload.voltage_level_id,
             region_id=payload.region_id,
             state_id=payload.state_id,
             grid_owner_id=payload.grid_owner_id,

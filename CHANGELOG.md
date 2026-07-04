@@ -11,6 +11,367 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Phase 3 — Equipment Registry (Circuit / CircuitTerminal Management)
+
+**Scope:** Circuit and CircuitTerminal identity —
+[`docs/architecture/equipment-registry-module.md`](docs/architecture/equipment-registry-module.md),
+incorporating [ADR-006](docs/adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md)
+and [ADR-007](docs/adr/ADR-007-canonical-engineering-reference-object.md). This phase implements
+Circuit & CircuitTerminal management specifically — not the full Equipment Registry module (load
+transformers, auto-transformers, and relays remain unimplemented; see "Known limitations" below).
+
+**Backend**
+
+- `Circuit` (bay number, voltage level, line type, interconnector flag, operational status,
+  remarks) and `CircuitTerminal` (one row per substation terminal — breaker number,
+  commissioning date, remarks) as new persistence models, with `Circuit.bay_number` and
+  `CircuitTerminal.breaker_number` deliberately separated per ADR-007's corrected field
+  placement.
+- A circuit is created with two or more terminals atomically; `CircuitTerminal` may be added
+  later to extend a two-terminal circuit into a tee-off, using the same entity shape.
+- `line_type` added as a new Core Platform reference table (Overhead Line / Cable / Submarine /
+  Hybrid), following the exact `voltage_level` pattern.
+- Full Router → Service → Repository → Models layering; `equipment_registry_audit_log` records
+  every circuit-level field change and every terminal addition.
+- `equipment_registry.read`/`equipment_registry.write` permissions registered and granted to the
+  baseline Administrator/Engineer/Viewer roles, mirroring Substation Registry's own bootstrap.
+- Migration `0004_equipment_registry_circuits` — hand-written, manually reviewed, and verified
+  directly against real PostgreSQL (schema inspection, FK/unique-constraint verification,
+  downgrade/upgrade reversibility).
+
+**Frontend**
+
+- `/circuits`, `/circuits/new`, `/circuits/:circuitId` — list (search/filter/paginate), create
+  (dynamic terminal rows, minimum two, addable for tee-offs), and detail (edit, status change,
+  add-terminal, audit log) pages, following Substation Registry's existing page/API-client
+  conventions exactly.
+
+**Tests**
+
+- Backend: 27 new tests (service + bootstrap + API) covering two-terminal creation, tee-off/
+  N-terminal creation, bay_number-vs-breaker_number field placement, validation failures
+  (insufficient terminals, duplicate terminal substation, unknown substation, invalid reference
+  data, invalid initial status), and search/filter/pagination — run against both SQLite and real
+  PostgreSQL.
+- Frontend: 10 new tests (list, create, detail pages) covering reference-data label resolution,
+  the two-terminal minimum, tee-off extension, permission-gated write UI, and full-form
+  submission.
+
+**Known limitations**
+
+- This phase does not implement the full Equipment Registry module — `LoadTransformerDetail`,
+  `AutoTransformerDetail`, `RelayDetail`, `RelayControlledEquipment`, and the shared `Equipment`
+  identity backbone those types would sit on (equipment-registry-module.md §7.1, §7.5, §7.8) are
+  out of scope and unimplemented. `CircuitTerminal` carries its own identity directly rather than
+  attaching to that backbone; see this phase's implementation report for the full reasoning.
+- `EquipmentTopologyMap` (PSS/E correlation) and the scheme-module `circuit_id` migration
+  (equipment-registry-module.md §7.10, §7.11) remain unimplemented, as documented — both were
+  already sequenced to later phases before this implementation began.
+- No manual browser UAT was performed for this phase; verification relied on the automated
+  backend (SQLite + PostgreSQL) and frontend (lint/typecheck/test/build) suites.
+
+### Phase 3 UAT follow-up — New Circuit button/empty-state fix, and a deployment gap found
+
+**UAT defect 1 — missing create affordance.** `/circuits` had no visible way to create a circuit
+and no helpful empty state when the database was empty. Fixed in `CircuitListPage.tsx`: a
+prominent, permission-gated "New Circuit" button next to the page heading, and a genuine empty
+state ("No circuits have been registered yet." + "Register your first circuit") shown only when
+the circuit list is truly empty and no search/filter is active — distinct from the
+filtered-empty-results case. 3 new frontend tests (navigation on click, empty state with/without
+write permission); 2 existing tests updated for the renamed control.
+
+**UAT defect 2 — the fix above didn't fix it; root cause was a missing deployment step, not
+frontend code.** After the button/empty-state fix, the Administrator account still could not see
+the write-gated controls. Root cause, confirmed by querying the live dev database directly:
+`equipment_registry.read`/`equipment_registry.write` were never registered in `permission`, and
+never granted to any role, because **no part of the application (no `main.py` startup hook, no
+lazy bootstrap on login) ever invokes any module's `bootstrap.py` automatically** — every
+module's permission catalog is registered only by manually running
+`python -m app.modules.<name>.bootstrap` against the target database, a step that was previously
+undocumented outside the automated test suite's own disposable-database fixtures. The frontend
+was behaving correctly throughout, faithfully reflecting an incomplete backend deployment state.
+Fixed by running `python -m app.modules.equipment_registry.bootstrap` against the dev database
+(verified end-to-end via a live login + `GET /users/{id}/roles` call showing
+`equipment_registry.write` now present for Administrator) and documenting the full required
+seed/bootstrap sequence in README.md's new "Seeding and Bootstrapping" section, so this does not
+recur for the next module or the next fresh environment.
+
+**UAT defect 3 — same shape of bug again, in reference data this time.** The Line Type dropdown
+on Create Circuit was empty. Investigation, in order: (1) `line_type` table exists on the dev
+database — the Phase 3 migration ran correctly; (2) it had zero rows; (3) the other five
+reference tables (`voltage_level`, `region`, `state`, `grid_owner`, `operational_status`) all held
+their full, correct row counts, proving `python -m app.reference_data.seed` *had* been run at some
+point — just before Phase 3 added `line_type` to it, and never re-run since; (4)/(5)/(6) the
+backend endpoint, frontend API client, `useReferenceData` hook, and `CircuitCreatePage` were all
+verified correct by inspection and by a live authenticated call to
+`GET /api/v1/reference-data/line-types` — no code defect anywhere in that chain. Fixed by
+re-running `python -m app.reference_data.seed` against the dev database (idempotent — it left the
+other five tables untouched and inserted exactly the four missing `line_type` rows), confirmed via
+direct SQL query and the same live API call afterward. No test or code change was needed — the
+seed logic itself already had full, passing coverage (`app/reference_data/tests/test_seed.py`);
+the gap was operational (a persistent database not re-synchronized after a code change), and is
+now covered by the re-run guidance added to README.md's "Seeding and Bootstrapping" section.
+
+### Phase 3 UAT fix package — commissioning date entry, full circuit edit, multi-voltage substations
+
+Three must-fix items found during Phase 3 UAT before Phase 4 (PSS/E topology import) could begin,
+implemented as one scoped fix package. See
+[ADR-008](docs/adr/ADR-008-substation-voltage-yard.md) for the architecture decision.
+
+**1. Commissioning date entry.** `CircuitTerminal.commissioning_date` was shown on the detail page
+but had no input anywhere. Added to both `CircuitCreatePage`'s terminal rows and as an editable
+field on the detail page (see item 2).
+
+**2. Full circuit edit.** Circuit edit previously covered only `bay_number` and status; `line_type`
+and `voltage_level` were already editable in the backend service (`update_circuit`) but not exposed
+in the frontend form — added. Per-terminal `breaker_number`/`commissioning_date`/`remarks` editing
+required a genuinely new backend capability (`EquipmentRegistryService.update_terminal`,
+`PATCH /circuits/{id}/terminals/{terminal_id}`) — added, with its own audit trail
+(`terminal_breaker_number`/`terminal_commissioning_date`/`terminal_remarks` fields). No DELETE
+functionality was added, per the task's explicit constraint.
+
+**3. Multi-voltage substation modeling.** The root cause the other two items were blocked behind:
+`CircuitTerminal` referenced `Substation` directly, which cannot express which of a multi-voltage
+substation's voltage levels (e.g. PKLG's own 275kV yard vs. its own 132kV yard) a circuit actually
+terminates at. Added `SubstationVoltageYard` (owned by Equipment Registry, referencing Substation
+Registry and Core Platform reference data only — no substation attributes duplicated) and changed
+`CircuitTerminal.substation_id` to `CircuitTerminal.voltage_yard_id`. Business rule 6 (no duplicate
+terminal on the same circuit) is now scoped to voltage yards, not substations — a circuit may
+legitimately terminate twice at the same multi-voltage substation, once per voltage yard.
+
+**Migration** (`0005_substation_voltage_yard`): creates `substation_voltage_yard`; backfills one
+default yard per existing substation from that substation's own `voltage_level_id` (real, `NOT
+NULL` on every existing row — the "no reliable voltage_level" fallback was not needed); repoints
+every existing `circuit_terminal` row at its substation's new default yard; drops the old
+`substation_id` column only after the new column is fully populated. Adds
+`circuit_terminal.updated_at`/`updated_by_user_id` (backfilled from `created_at`/
+`created_by_user_id`) to support terminal editability. Verified directly against the real,
+persistent dev database (5 pre-existing substations → 5 yards; 4 pre-existing terminals correctly
+repointed, confirmed by joining back to substation mnemonic and voltage level) — full
+`upgrade → downgrade → upgrade` cycle run and re-verified against that same real data, not only in
+the abstract. Downgrade restores `substation_id` by joining back through
+`substation_voltage_yard`.
+
+**New endpoints:** `GET/POST /api/v1/voltage-yards` (list, filterable by `substation_id`; create,
+`equipment_registry.write`-gated); `PATCH /api/v1/circuits/{id}/terminals/{terminal_id}` (update).
+`SubstationDetailPage` gained a "Voltage yards" section (list + add-yard form) — gated on
+`equipment_registry.write`, not `substation_registry.write`, since voltage yards are owned by
+Equipment Registry (ADR-008).
+
+**Tests:** 46 new/updated backend tests (service + API), including a dedicated multi-voltage-
+substation test class (`TestMultiVoltageSubstations`) proving a circuit may terminate twice at the
+same substation across two different voltage yards; 168 backend tests total, passing against both
+SQLite and real PostgreSQL. 12 new/updated frontend tests across `CircuitCreatePage`,
+`CircuitDetailPage`, and `SubstationDetailPage`.
+
+**Known limitation:** the voltage yard a terminal connects to is not editable after creation in
+this fix package — only `breaker_number`/`commissioning_date`/`remarks`. Re-pointing a terminal to
+a different yard was judged a materially different, out-of-scope operation.
+
+### Phase 3 UAT validation fix — add-voltage-yard workflow was unusable, not just undiscoverable
+
+UAT reported being unable to add a voltage yard from the Substation Detail page, despite the
+button/form (added above) being present and permission-gated correctly. Root cause: the "New
+voltage yard voltage level" dropdown offered *every* voltage level, including ones the substation
+already had a yard at (most substations have exactly one, from the `0005` migration's backfill).
+Picking one — the natural first attempt, since nothing distinguished available from taken — always
+failed with `DuplicateVoltageYardError`, whose message embedded a raw internal `voltage_level_id`
+("voltage level '4'") instead of a human-readable label, making a correctly-rejected duplicate look
+like an unexplained, generic failure. The automated test written for this workflow in the previous
+fix package coincidentally selected the one already-used voltage level in its own mock data and
+still "passed," because the mock POST handler didn't enforce the real duplicate constraint the way
+the actual backend does — masking the exact defect a real user hit.
+
+**Fix:** (1) `DuplicateVoltageYardError` now takes the substation's mnemonic and the voltage
+level's label, not raw ids — e.g. `"Substation 'PKLG' already has a voltage yard at '132kV'"`. (2)
+Both add-voltage-yard forms (`SubstationDetailPage`, and `CircuitDetailPage`'s "Need a different
+voltage yard?" mini-form) now filter the voltage-level dropdown to exclude levels already used by
+the selected substation, and show a clear message ("already has a voltage yard at every known
+voltage level") instead of an empty-looking form when none remain. Verified live against the real
+dev database: reproduced the exact failing scenario, confirmed the new message, then confirmed a
+valid creation succeeds and immediately appears in the global voltage-yard list Circuit Create/Edit
+terminal selection reads from.
+
+**Tests:** 1 new backend test assertion (human-readable duplicate message, both service- and
+API-level); 5 new frontend tests — dropdown correctly excludes an already-used voltage level on
+both forms, all-levels-exhausted empty state, and a newly-created yard becoming selectable in the
+add-terminal dropdown without a page reload.
+
+### Phase 3 UAT follow-up — `Substation.voltage_level_id` deprecated (ADR-009)
+
+UAT found that `SubstationVoltageYard` (ADR-008) and `Substation.voltage_level_id` had become two
+competing representations of the same fact. Substation Create still required a single voltage
+level; List/Detail still displayed it as if authoritative even after a substation could hold
+several voltage yards; and it was independently editable via `PATCH /substations/{id}` with no
+relationship to the yards table at all, so the two could silently diverge.
+
+**Fix (ADR-009):** `Substation.voltage_level_id` is deprecated, not dropped — the database column
+stays (nullable, FK intact, no existing row's value touched) but is removed entirely from the API
+contract (`SubstationCreate`/`Update`/`Summary`/`Detail`) and from both frontend forms. Substation
+Create no longer asks for a voltage level; a new substation legitimately has zero voltage yards
+until one is added via the existing `POST /voltage-yards` workflow. `SubstationVoltageYard` is now
+the sole authoritative representation of a substation's voltage level(s), for both List and Detail.
+The Substation List page composes this client-side (fetching Equipment Registry's
+`GET /api/v1/voltage-yards` and grouping by `substation_id`), the same pattern `CircuitDetailPage`
+already used — Substation Registry (Master Data) must never depend on Equipment Registry (Network
+Data), so this is never a backend join (CLAUDE.md A2/F2). A substation with multiple voltage yards
+now renders as e.g. "PKLG: 275kV, 230kV, 132kV, 500kV" instead of a single, potentially-stale value.
+
+**Migration:** `0006_deprecate_substation_vlevel` — a single `ALTER COLUMN ... DROP NOT NULL`, no
+data backfill (every existing row keeps its original value; only new rows are expected to be NULL
+going forward). Verified against the real dev database: column confirmed nullable, all 7 existing
+substations' legacy values confirmed untouched, and a substation created through the live API with
+no `voltage_level_id` in the payload succeeded with the column landing `NULL` in PostgreSQL.
+
+**Removed:** the Substation List "filter by voltage level" query parameter — nothing in this
+project depended on it, and it would have silently given increasingly incomplete answers once new
+substations stop populating the legacy column. Rebuilding it against voltage yards is deferred
+to a later, separately-scoped piece of work if needed.
+
+**Tests:** backend — `create_substation`'s signature no longer accepts `voltage_level_id`
+(regression test), reference-data validation coverage moved to `region_id`; frontend — 4 new tests
+(`SubstationCreatePage` no longer offers a voltage level field; `SubstationListPage` renders a
+substation's voltage yards, including the multi-yard join case; `SubstationDetailPage` no longer
+shows a standalone "Voltage level" field). 169 backend tests / 51 frontend tests passing.
+
+### Phase 3 UAT follow-up — inline voltage yard creation removed from Circuit Detail (ADR-009 addendum)
+
+UAT flagged that `CircuitDetailPage`'s "Need a different voltage yard?" section let a Circuit page
+create `SubstationVoltageYard` rows directly — master topology data owned by the Substation
+Registry workflow (per this ADR's main decision), created from a downstream, consuming module. The
+ownership hierarchy is Substation → Voltage Yard → Circuit → Protection Scheme; a circuit should
+consume voltage yards, not create them, and allowing it set a bad precedent for every future
+topology entity (busbars, bus couplers, transformers, disconnectors, reactors, capacitors, PSS/E
+import).
+
+**Fix:** the entire "Need a different voltage yard?" section — substation select, voltage level
+select, "Add voltage yard" button, and the supporting query/mutation logic
+(`substationsQuery`, `addVoltageYardMutation`, `invalidateVoltageYards`) — is removed from
+`CircuitDetailPage`. Voltage yard creation remains exclusively on the Substation Detail page. When
+the "Add terminal" dropdown has no available voltage yard to offer, the page now shows static
+guidance ("No suitable voltage yard exists for this circuit. Please add the required voltage yard
+from the Substation Registry.") instead of a creation shortcut — helper text, not a navigation
+link, per the explicit requirement that this stay a hard boundary.
+
+**Architecture:** recorded as an addendum to ADR-009 (additive, not a rewrite of its existing
+decision) generalizing the principle: *master data entities are created and managed only within
+their owning module; dependent modules may reference them but must not create or modify them
+inline without a compelling, separately-documented exception.* This applies to every future
+topology entity, not only voltage yards.
+
+**Tests:** 2 obsolete tests removed (mini-form dropdown filtering, newly-created-yard-becomes-
+selectable — both exercised the now-removed inline creation path); 2 new tests added (confirms no
+inline creation controls render at all; confirms the guidance text renders, and no "Add voltage
+yard" button, when no voltage yard is available). Net test count unchanged (8 in this file, 51
+frontend total). Backend untouched — `POST /api/v1/voltage-yards` still exists, still exclusively
+reachable from the Substation Detail page's own workflow.
+
+### Phase 3 close-out — terminal voltage-level guardrail and voltage yard metadata
+
+Two final UAT-driven refinements before closing Phase 3.
+
+**1. Terminal voltage-level guardrail (equipment-registry-module.md §9 rule 6a).** UAT found the
+Add Terminal dropdown (Circuit Create and Circuit Detail) could offer a voltage yard at a
+different voltage level than the circuit itself. A `Circuit` represents one physical transmission
+line at one voltage class; enforced at the service layer on both `create_circuit` and
+`add_terminal`, not only the frontend — a mismatched voltage yard submitted directly to the API
+now returns a clear `TerminalVoltageLevelMismatchError`
+(e.g. `"Voltage yard 'SIDST — 132kV' does not match this circuit's voltage level '500kV'"`).
+`CircuitCreatePage` and `CircuitDetailPage` both filter their voltage-yard dropdowns to the
+selected/current circuit voltage level.
+
+**Architecture note:** this rule interacts with ADR-008's own rule-6 illustration (a circuit
+terminating twice at the same multi-voltage substation, across two different voltage levels) —
+combined with the existing one-yard-per-substation-per-level constraint, a single circuit can no
+longer terminate twice at the same substation at all under the current model (no `Transformer`
+equipment type exists yet to represent a same-site, cross-voltage connection). Recorded as an
+addendum to ADR-008, not a rewrite; the conflicting test was replaced with an equivalent one using
+two different substations at the same non-default voltage level.
+
+**2. `SubstationVoltageYard` metadata — `commissioning_date`, `latitude`, `longitude`.** All
+optional, and deliberately on the voltage yard, not the parent `Substation`: a multi-voltage site
+may have yards commissioned at different dates with slightly different GIS coordinates. Migration
+`0007_voltage_yard_metadata` adds the three nullable columns plus the same range/pair CHECK
+constraints already established for `Substation`'s own geolocation fields, and
+`updated_at`/`updated_by_user_id` for edit accountability (mirroring `CircuitTerminal`'s own
+precedent). No data backfill — every existing row remains valid with `NULL` metadata. New
+`PATCH /api/v1/voltage-yards/{id}` endpoint supports partial updates (Ellipsis-sentinel pattern,
+consistent with every other partial-update endpoint in this codebase). `SubstationDetailPage`'s
+voltage yard list now displays and lets an authorized user edit each yard's metadata inline; the
+add-voltage-yard form accepts all three fields optionally.
+
+**Known limitation:** voltage yard metadata edits are tracked via `updated_at`/`updated_by_user_id`
+only, not a field-level audit log (unlike `Substation`/`Circuit`'s own attribute changes) — judged
+proportionate for this incremental addition; a full `substation_voltage_yard_audit_log` can be
+added later analogous to the existing audit log pattern if required.
+
+**Tests:** backend — 4 new service tests + 2 new API tests for the terminal-voltage-level
+guardrail (create-circuit rejection, add-terminal rejection, human-readable message, valid
+non-default-level circuit still succeeds); 8 new service tests + 5 new API tests for voltage yard
+metadata (create/update/partial-update/clear/geo-pair validation/range validation/not-found).
+1 pre-existing backend test rewritten (its cross-voltage-level scenario is no longer constructible
+under rule 6a). Frontend — 2 new tests on `CircuitCreatePage` (no yard offered before a voltage
+level is chosen; dropdown filtered per selected level) replacing 1 obsolete test, 1 new test on
+`CircuitDetailPage` (excludes a mismatched-level yard), 4 new tests on `SubstationDetailPage`
+(metadata submitted on create, metadata displayed and editable, read-only without
+`equipment_registry.write`). 190 backend tests / 56 frontend tests passing (SQLite, real
+PostgreSQL, and lint/typecheck/build all clean).
+
+### Phase 3 freeze package — bay number semantics, canonical circuit naming, Switchyard terminology
+
+Five final UAT/architecture cleanup items before freezing Phase 3.
+
+**1. Bay number semantics.** Users were unsure whether to enter "1" or "Line 1" for `bay_number`.
+Decision: it is a bay/circuit *designator* only ("1", "2", "Main", "Transfer"), never a route
+description. UI placeholders/labels updated (`CircuitCreatePage`/`CircuitDetailPage`/
+`CircuitListPage`); deliberately **no** numeric-only validation added, since real bay designators
+are frequently non-numeric.
+
+**2 & 3. Duplicate circuit-number display and canonical circuit naming.** Investigation confirmed
+`circuit_name` is fully computed, never stored (`EquipmentRegistryService._compute_circuit_name`)
+— so both defects were fixable with zero migration. Root causes: (a) the computed name embedded
+`bay_number` (e.g. `"PKLG–IGBK Line 1"`), which duplicated visually against a separately-displayed
+`bay_number` field; (b) terminal mnemonics were joined in terminal-insertion order, so the same
+physical circuit could display as `"PKLG–IGBK"` or `"IGBK–PKLG"` depending on which terminal was
+entered first. Fix: `_compute_circuit_name` now takes only the terminal mnemonics, sorted
+alphabetically (case-insensitive), and never appends `bay_number`. `CircuitDetailPage` now shows
+"Circuit: {name}" and a separately-labeled "Bay / Circuit No." field, never combined.
+
+**Architecture conflict found and resolved:** the new canonical-naming rule interacts with rule 6a
+(the terminal voltage-level guardrail added in the prior fix package) in a way that makes ADR-008's
+own rule-6 illustration (a circuit terminating twice at the same multi-voltage substation, across
+two voltage levels) no longer constructible — combined with the one-yard-per-substation-per-level
+constraint, a single circuit can no longer terminate twice at the *same* substation at all under
+the current model (no `Transformer` equipment type exists yet). Recorded as a new business rule 6a
+in `equipment-registry-module.md` §9 and an ADR-008 addendum; the one pre-existing test relying on
+the old scenario was replaced with an equivalent one using two different substations.
+
+**4. "Voltage Yard" vs "Switchyard" terminology.** Recommendation: keep internal model/table/
+column/API names unchanged (`SubstationVoltageYard`, `substation_voltage_yard`, `voltage_yard_id`,
+`/api/v1/voltage-yards`); adopt **"Switchyard"** as the user-facing term in UI labels, buttons, and
+user-facing error messages (`VoltageYardNotFoundError`, `DuplicateVoltageYardError`,
+`TerminalVoltageLevelMismatchError` message text updated); architecture docs use "Voltage Yard /
+Switchyard" to bridge existing terminology. A full rename (table + FKs + every reference across two
+modules and three ADRs) was judged disproportionate churn for a naming-only change. Recorded as an
+ADR-008 addendum.
+
+**5. Architecture document finalized.** `equipment-registry-module.md` gained a new "Phase 3 Final
+Model Summary" section (conceptual hierarchy diagram, terminal voltage-level guardrail, ADR-009's
+master-data ownership principle, `Substation.voltage_level_id` deprecation summary, canonical
+naming rule, `bay_number` semantics, explicit note that transformers/busbars/bays remain future
+scope) plus corrected §7.4/§7.6 definitions, an updated Glossary, and three new Appendix entries.
+
+**Migration impact:** none — every change in this package is code/UI/documentation only.
+
+**Tests:** backend — 2 rewritten (naming format), 1 new (deterministic ordering regardless of
+terminal entry order); frontend — 1 rewritten test replaced with 2 (`CircuitCreatePage`), 1 new
+regression test (`CircuitListPage`, proving the route name and bay number never duplicate), test
+label/text updates across `CircuitCreatePage`/`CircuitDetailPage`/`SubstationDetailPage`/
+`CircuitListPage` for the Switchyard terminology and new naming format. 191 backend tests / 57
+frontend tests passing (SQLite, real PostgreSQL, and lint/typecheck/build all clean).
+
+---
+
 ## Phase 2 — Substation Registry
 
 **Scope:** The platform's master data anchor —

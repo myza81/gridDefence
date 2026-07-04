@@ -14,7 +14,6 @@ export interface SubstationListFilters {
   page_size?: number;
   region_id?: number;
   state_id?: number;
-  voltage_level_id?: number;
   grid_owner_id?: number;
   operational_status_id?: number;
   search?: string;

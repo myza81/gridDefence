@@ -51,7 +51,6 @@ class SubstationRepository:
         limit: int,
         region_id: int | None = None,
         state_id: int | None = None,
-        voltage_level_id: int | None = None,
         grid_owner_id: int | None = None,
         operational_status_id: int | None = None,
         search: str | None = None,
@@ -61,8 +60,6 @@ class SubstationRepository:
             stmt = stmt.where(Substation.region_id == region_id)
         if state_id is not None:
             stmt = stmt.where(Substation.state_id == state_id)
-        if voltage_level_id is not None:
-            stmt = stmt.where(Substation.voltage_level_id == voltage_level_id)
         if grid_owner_id is not None:
             stmt = stmt.where(Substation.grid_owner_id == grid_owner_id)
         if operational_status_id is not None:

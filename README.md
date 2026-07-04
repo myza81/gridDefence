@@ -135,6 +135,28 @@ The frontend dev server runs at `http://localhost:5173` and expects the backend 
 
 The backend expects PostgreSQL to be reachable at the connection string in `DATABASE_URL`. See [`docs/development/postgresql-setup.md`](docs/development/postgresql-setup.md) for the full setup walkthrough (installation, dedicated database/user creation, connection verification, migration workflow, and troubleshooting) — the short version: create a dedicated `engineering_platform` database owned by a dedicated `engineering_app` user (never use the default `postgres` database for the application), point `DATABASE_URL` at it in the repository-root `.env`, then run `alembic upgrade head` from `backend/`.
 
+### Seeding and Bootstrapping (required before first login or UAT)
+
+`alembic upgrade head` only creates schema — it does not populate reference data, create the bootstrap Administrator, or register any module's permissions. **Every module's `bootstrap.py` is a manual step; none of it runs automatically on server startup or on first login.** A freshly migrated database has an empty `permission` table and no usable account until these are run, in order, from `backend/` with `.venv` activated:
+
+```bash
+python -m app.reference_data.seed          # voltage levels, regions, states, grid owners, operational statuses, line types
+python -m app.modules.iam.bootstrap         # bootstrap Administrator account + baseline Administrator/Engineer/Viewer roles
+python -m app.modules.substation_registry.bootstrap    # registers substation_registry.read/.write, grants to baseline roles
+python -m app.modules.equipment_registry.bootstrap     # registers equipment_registry.read/.write, grants to baseline roles
+```
+
+Every business module added in a future phase gets its own `bootstrap.py` following this same pattern — add its command to this list when that phase ships. All four commands are idempotent (safe to re-run against an already-bootstrapped database) and order-tolerant except that `iam.bootstrap` must run before a business module's own bootstrap can actually grant its permissions to a role (a module's bootstrap run before IAM's own will register the permission but skip the role grants, logging a warning — re-running it afterward completes the grants, per each `bootstrap.py`'s own docstring).
+
+**`python -m app.reference_data.seed` must be re-run every time it changes, not only once.** It is idempotent (only ever inserts rows that don't already exist — see `app/reference_data/seed.py`'s `run_seed()`), but nothing runs it automatically when a later phase adds a new reference table or new rows to an existing one. Pulling code that adds to `seed.py` does not update your already-running local/dev database on its own — you must re-run the command by hand against that specific database. The same is true for each module's `bootstrap.py` whenever it adds a new permission.
+
+**Two deployment gaps were found and fixed during Phase 3 UAT, both of the same shape** — code was correct and fully tested, but the persistent dev database was never re-synchronized with it:
+
+- `equipment_registry.write` was never granted to any role, because `python -m app.modules.equipment_registry.bootstrap` had never been run against the persistent dev database (only inside the automated test suite, which bootstraps its own disposable database per test). The write-permission-gated controls on `/circuits` were correctly hidden — the frontend was accurately reflecting an incomplete backend deployment.
+- The Line Type dropdown on Create Circuit was empty, because `line_type` was added to `app/reference_data/seed.py` by Phase 3, but `python -m app.reference_data.seed` was last run against the dev database *before* that change — leaving the `line_type` table created (by the Phase 3 migration) but empty. Re-running the seed command (idempotent — it left the other five already-populated reference tables untouched and inserted only the four missing `line_type` rows) resolved it.
+
+**A third category exists alongside seeding and bootstrapping: Alembic migrations that backfill data, not just schema.** `0005_substation_voltage_yard` (Phase 3 UAT fix package — see [`docs/adr/ADR-008-substation-voltage-yard.md`](docs/adr/ADR-008-substation-voltage-yard.md)) is the first migration in this project that both changes schema *and* backfills real rows from existing data (one default `SubstationVoltageYard` per existing substation, and every existing `circuit_terminal` repointed at it) — this happens automatically as part of `alembic upgrade head`, unlike seeding/bootstrapping, which are always separate manual commands. Do not confuse the three: **migrations** (`alembic upgrade head`, schema plus, occasionally, structural backfill) run first; **reference-data seeding** (`python -m app.reference_data.seed`) and **module permission bootstrap** (`python -m app.modules.<name>.bootstrap`) are separate, independently-rerunnable steps that must be repeated by hand whenever their own source changes, exactly as described above.
+
 ---
 
 ## Running with Docker Compose

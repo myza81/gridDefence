@@ -154,7 +154,6 @@ describe("SubstationCreatePage", () => {
               substation_id: "44444444-4444-4444-4444-444444444444",
               mnemonic: "SUB1",
               official_name: "Substation One",
-              voltage_level_id: 1,
               region_id: 1,
               state_id: 1,
               grid_owner_id: 1,
@@ -179,7 +178,6 @@ describe("SubstationCreatePage", () => {
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText("Mnemonic"), "SUB1");
     await user.type(screen.getByLabelText("Official name"), "Substation One");
-    await user.selectOptions(screen.getByLabelText("Voltage level"), "1");
     await user.selectOptions(screen.getByLabelText("Region"), "1");
     await user.selectOptions(screen.getByLabelText("State"), "1");
     await user.selectOptions(screen.getByLabelText("Grid owner"), "1");
@@ -190,12 +188,22 @@ describe("SubstationCreatePage", () => {
       expect(createdPayload).toMatchObject({
         mnemonic: "SUB1",
         official_name: "Substation One",
-        voltage_level_id: 1,
         region_id: 1,
         state_id: 1,
         grid_owner_id: 1,
         operational_status_id: 1,
       });
+      expect(createdPayload).not.toHaveProperty("voltage_level_id");
     });
+  });
+
+  it("does not offer a voltage level field — voltage level is set via voltage yards after creation (ADR-009)", async () => {
+    authStorage.setToken("token");
+    stubSession();
+
+    renderWithProviders(<SubstationCreatePage />, { route: "/substations/new" });
+
+    await screen.findByLabelText("Mnemonic");
+    expect(screen.queryByLabelText("Voltage level")).not.toBeInTheDocument();
   });
 });

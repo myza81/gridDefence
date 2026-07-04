@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +21,6 @@ const SUBSTATION_DETAIL = {
   substation_id: SUBSTATION_ID,
   mnemonic: "SUB1",
   official_name: "Substation One",
-  voltage_level_id: 1,
   region_id: 1,
   state_id: 1,
   grid_owner_id: 1,
@@ -43,7 +42,10 @@ const REFERENCE_DATA_HANDLERS = [
     pattern: /\/reference-data\/voltage-levels$/,
     respond: () => ({
       status: 200,
-      body: [{ voltage_level_id: 1, label: "500kV", nominal_kv: 500, sort_order: 1 }],
+      body: [
+        { voltage_level_id: 1, label: "500kV", nominal_kv: 500, sort_order: 1 },
+        { voltage_level_id: 2, label: "132kV", nominal_kv: 132, sort_order: 2 },
+      ],
     }),
   },
   {
@@ -215,6 +217,466 @@ describe("SubstationDetailPage", () => {
         ),
       ).toBeInTheDocument();
     });
+  });
+
+  it("no longer shows a single 'Voltage level' field — voltage yards are the sole authoritative representation (ADR-009)", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/users\/me$/,
+        respond: () => ({ status: 200, body: CURRENT_USER }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
+        respond: () => ({ status: 200, body: SUBSTATION_DETAIL }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`),
+        respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 50, total: 0 } }),
+      },
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/voltage-yards\?/,
+        respond: () => ({ status: 200, body: [] }),
+      },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Substation One")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Voltage level")).not.toBeInTheDocument();
+  });
+
+  function stubVoltageYardSession(
+    myPermissions: string[],
+    existingYards: Array<Record<string, unknown>>,
+    overrideHandlers: Array<{
+      method: string;
+      pattern: RegExp;
+      respond: (url: string, init?: RequestInit) => { status?: number; body?: unknown };
+    }> = [],
+  ) {
+    stubFetch([
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/users\/me$/,
+        respond: () => ({ status: 200, body: CURRENT_USER }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({
+          status: 200,
+          body: [
+            {
+              role: {
+                role_id: "role-1",
+                name: "Administrator",
+                description: null,
+                is_system_role: true,
+                status: "active",
+              },
+              granted_at: "2026-01-01T00:00:00Z",
+              // equipment_registry.write, not substation_registry.write —
+              // voltage yards are owned by Equipment Registry
+              // (equipment-registry-module.md §7.5a; ADR-008).
+              permissions: myPermissions,
+            },
+          ],
+        }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
+        respond: () => ({ status: 200, body: SUBSTATION_DETAIL }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`),
+        respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 50, total: 0 } }),
+      },
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/voltage-yards\?/,
+        respond: () => ({ status: 200, body: existingYards }),
+      },
+      ...REFERENCE_DATA_HANDLERS,
+      ...overrideHandlers,
+    ]);
+  }
+
+  it("excludes voltage levels the substation already has a yard at, from the add-voltage-yard dropdown (UAT regression)", async () => {
+    // Regression test for a Phase 3 UAT fix-package defect: the dropdown
+    // previously offered every voltage level, including ones this
+    // substation already had a yard at. Picking one — the most natural
+    // first attempt, since nothing distinguished them — always failed with
+    // a confusing, non-actionable backend error, making the whole
+    // add-voltage-yard workflow look broken.
+    authStorage.setToken("token");
+    stubVoltageYardSession(["equipment_registry.write"], [
+      {
+        voltage_yard_id: "yard-1",
+        substation_id: SUBSTATION_ID,
+        substation_mnemonic: "SUB1",
+        substation_official_name: "Substation One",
+        voltage_level_id: 1,
+        voltage_level_label: "500kV",
+        display_label: "SUB1 — 500kV",
+      },
+    ]);
+
+    renderDetailPage();
+
+    const yardSelect = await screen.findByLabelText("New switchyard voltage level");
+    await waitFor(() => {
+      expect(yardSelect.querySelectorAll("option").length).toBeGreaterThan(1);
+    });
+    const optionLabels = Array.from(yardSelect.querySelectorAll("option")).map((o) =>
+      o.textContent?.trim(),
+    );
+    expect(optionLabels).toEqual(["Select voltage level...", "132kV"]);
+    expect(optionLabels).not.toContain("500kV");
+  });
+
+  it("shows existing voltage yards and lets a user with equipment_registry.write add one at an available voltage level", async () => {
+    authStorage.setToken("token");
+    let createYardPayload: unknown = null;
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [
+        {
+          voltage_yard_id: "yard-1",
+          substation_id: SUBSTATION_ID,
+          substation_mnemonic: "SUB1",
+          substation_official_name: "Substation One",
+          voltage_level_id: 1,
+          voltage_level_label: "500kV",
+          display_label: "SUB1 — 500kV",
+        },
+      ],
+      [
+        {
+          method: "POST",
+          pattern: /\/api\/v1\/voltage-yards$/,
+          respond: (_url, init) => {
+            createYardPayload = init?.body ? JSON.parse(init.body as string) : null;
+            return {
+              status: 201,
+              body: {
+                voltage_yard_id: "yard-2",
+                substation_id: SUBSTATION_ID,
+                substation_mnemonic: "SUB1",
+                substation_official_name: "Substation One",
+                voltage_level_id: 2,
+                voltage_level_label: "132kV",
+                display_label: "SUB1 — 132kV",
+              },
+            };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    // Wait on the permission-gated form control itself — the roles fetch
+    // (which determines canManageVoltageYards) and the voltage-yards fetch
+    // resolve independently, so waiting on yard content alone can race
+    // ahead of the permission-derived form rendering.
+    await waitFor(() => {
+      expect(screen.getByLabelText("New switchyard voltage level")).toBeInTheDocument();
+    });
+    // Scope to the voltage yards list specifically — voltage level is no
+    // longer shown anywhere else on this page (ADR-009).
+    expect(within(screen.getByTestId("voltage-yards-list")).getByText("500kV")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    // Only "132kV" is offered — the substation's existing "500kV" yard is
+    // correctly excluded (see the regression test above).
+    await user.selectOptions(screen.getByLabelText("New switchyard voltage level"), "2");
+    await user.click(screen.getByRole("button", { name: "Add switchyard" }));
+
+    await waitFor(() => {
+      expect(createYardPayload).toMatchObject({
+        substation_id: SUBSTATION_ID,
+        voltage_level_id: 2,
+      });
+    });
+  });
+
+  it("submits commissioning date, latitude, and longitude when adding a voltage yard", async () => {
+    authStorage.setToken("token");
+    let createYardPayload: unknown = null;
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [
+        {
+          voltage_yard_id: "yard-1",
+          substation_id: SUBSTATION_ID,
+          substation_mnemonic: "SUB1",
+          substation_official_name: "Substation One",
+          voltage_level_id: 1,
+          voltage_level_label: "500kV",
+          display_label: "SUB1 — 500kV",
+          commissioning_date: null,
+          latitude: null,
+          longitude: null,
+        },
+      ],
+      [
+        {
+          method: "POST",
+          pattern: /\/api\/v1\/voltage-yards$/,
+          respond: (_url, init) => {
+            createYardPayload = init?.body ? JSON.parse(init.body as string) : null;
+            return {
+              status: 201,
+              body: {
+                voltage_yard_id: "yard-2",
+                substation_id: SUBSTATION_ID,
+                substation_mnemonic: "SUB1",
+                substation_official_name: "Substation One",
+                voltage_level_id: 2,
+                voltage_level_label: "132kV",
+                display_label: "SUB1 — 132kV",
+                commissioning_date: "2020-06-01",
+                latitude: 3.140853,
+                longitude: 101.693207,
+              },
+            };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("New switchyard voltage level")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText("New switchyard voltage level"), "2");
+    await user.type(
+      screen.getByLabelText("New switchyard commissioning date"),
+      "2020-06-01",
+    );
+    await user.type(screen.getByLabelText("New switchyard latitude"), "3.140853");
+    await user.type(screen.getByLabelText("New switchyard longitude"), "101.693207");
+    await user.click(screen.getByRole("button", { name: "Add switchyard" }));
+
+    await waitFor(() => {
+      expect(createYardPayload).toMatchObject({
+        substation_id: SUBSTATION_ID,
+        voltage_level_id: 2,
+        commissioning_date: "2020-06-01",
+        latitude: 3.140853,
+        longitude: 101.693207,
+      });
+    });
+  });
+
+  it("displays a voltage yard's commissioning date and coordinates, and lets an authorized user edit them", async () => {
+    authStorage.setToken("token");
+    let updateYardPayload: unknown = null;
+    let updatedYardId: string | null = null;
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [
+        {
+          voltage_yard_id: "yard-1",
+          substation_id: SUBSTATION_ID,
+          substation_mnemonic: "SUB1",
+          substation_official_name: "Substation One",
+          voltage_level_id: 1,
+          voltage_level_label: "500kV",
+          display_label: "SUB1 — 500kV",
+          commissioning_date: "2018-01-01",
+          latitude: 3.0,
+          longitude: 101.0,
+        },
+      ],
+      [
+        {
+          method: "PATCH",
+          pattern: /\/api\/v1\/voltage-yards\/yard-1$/,
+          respond: (url, init) => {
+            updatedYardId = url;
+            updateYardPayload = init?.body ? JSON.parse(init.body as string) : null;
+            return {
+              status: 200,
+              body: {
+                voltage_yard_id: "yard-1",
+                substation_id: SUBSTATION_ID,
+                substation_mnemonic: "SUB1",
+                substation_official_name: "Substation One",
+                voltage_level_id: 1,
+                voltage_level_label: "500kV",
+                display_label: "SUB1 — 500kV",
+                commissioning_date: "2021-03-15",
+                latitude: 3.5,
+                longitude: 101.5,
+              },
+            };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+
+    const commissioningDateInput = await screen.findByLabelText("Commissioning date for 500kV");
+    expect(commissioningDateInput).toHaveValue("2018-01-01");
+    expect(screen.getByLabelText("Latitude for 500kV")).toHaveValue(3);
+    expect(screen.getByLabelText("Longitude for 500kV")).toHaveValue(101);
+
+    const user = userEvent.setup();
+    await user.clear(commissioningDateInput);
+    await user.type(commissioningDateInput, "2021-03-15");
+    const latitudeInput = screen.getByLabelText("Latitude for 500kV");
+    await user.clear(latitudeInput);
+    await user.type(latitudeInput, "3.5");
+    const longitudeInput = screen.getByLabelText("Longitude for 500kV");
+    await user.clear(longitudeInput);
+    await user.type(longitudeInput, "101.5");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(updateYardPayload).toMatchObject({
+        commissioning_date: "2021-03-15",
+        latitude: 3.5,
+        longitude: 101.5,
+      });
+    });
+    expect(updatedYardId).toContain("yard-1");
+  });
+
+  it("shows read-only commissioning date and coordinates without equipment_registry.write", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["substation_registry.write"], [
+      {
+        voltage_yard_id: "yard-1",
+        substation_id: SUBSTATION_ID,
+        substation_mnemonic: "SUB1",
+        substation_official_name: "Substation One",
+        voltage_level_id: 1,
+        voltage_level_label: "500kV",
+        display_label: "SUB1 — 500kV",
+        commissioning_date: "2018-01-01",
+        latitude: 3.0,
+        longitude: 101.0,
+      },
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("voltage-yards-list")).getByText(/2018-01-01/),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("Commissioning date for 500kV")).not.toBeInTheDocument();
+  });
+
+  it("shows a clear message instead of the form when every voltage level already has a yard", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["equipment_registry.write"], [
+      {
+        voltage_yard_id: "yard-1",
+        substation_id: SUBSTATION_ID,
+        substation_mnemonic: "SUB1",
+        substation_official_name: "Substation One",
+        voltage_level_id: 1,
+        voltage_level_label: "500kV",
+        display_label: "SUB1 — 500kV",
+      },
+      {
+        voltage_yard_id: "yard-2",
+        substation_id: SUBSTATION_ID,
+        substation_mnemonic: "SUB1",
+        substation_official_name: "Substation One",
+        voltage_level_id: 2,
+        voltage_level_label: "132kV",
+        display_label: "SUB1 — 132kV",
+      },
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("This substation already has a switchyard at every known voltage level."),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByLabelText("New switchyard voltage level"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add switchyard" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer to add a voltage yard without equipment_registry.write", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/users\/me$/,
+        respond: () => ({ status: 200, body: CURRENT_USER }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
+        respond: () => ({ status: 200, body: SUBSTATION_DETAIL }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`),
+        respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 50, total: 0 } }),
+      },
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/voltage-yards\?/,
+        respond: () => ({ status: 200, body: [] }),
+      },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("No switchyards registered yet.")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Add switchyard" })).not.toBeInTheDocument();
   });
 
   it("lets a user with substation_registry.write submit an edit", async () => {

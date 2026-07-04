@@ -48,3 +48,11 @@ class OperationalStatusSummary(BaseModel):
     code: str
     label: str
     is_terminal: bool
+
+
+class LineTypeSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    line_type_id: int
+    code: str
+    label: str

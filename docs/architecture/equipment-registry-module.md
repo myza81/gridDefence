@@ -2,17 +2,72 @@
 
 Governing standard: [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) v1.1. This document follows the Canonical Module Architecture Document Template (CLAUDE.md **A8**).
 
-Related documents: [domain-model.md](domain-model.md), [substation-registry.md](substation-registry.md) (§14, which first reserved this module), [psse-integration-module.md](psse-integration-module.md) (§17, which anticipated the same linkage from its own side), [ufls-module.md](ufls-module.md) §7.4 (Open Questions 1–2, which this document resolves the second half of), [uvls-module.md](uvls-module.md), [emls-module.md](emls-module.md), [ADR-000](../adr/ADR-000-architecture-principles.md) through [ADR-004](../adr/ADR-004-cross-scheme-compliance-mechanism.md).
+**This is the single implementation specification for Phase 3.** It incorporates every accepted decision from [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md) (module ownership) and [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) (canonical reference object) directly into the sections below. A developer or coding agent implementing Phase 3 should not need to read either ADR or the connectivity validation document to know what to build — they exist as historical rationale for *why* this document says what it says, not as additional requirements layered on top of it. Where this document's current text differs from an earlier draft of it, or from the connectivity validation's tentative proposals, see the **Superseded Design Decisions** appendix at the end of this document.
+
+Related documents: [domain-model.md](domain-model.md), [substation-registry.md](substation-registry.md) (§14, which first reserved this module), [psse-integration-module.md](psse-integration-module.md) (§17, which anticipated the same linkage from its own side), [ufls-module.md](ufls-module.md) §7.4 (Open Questions 1–2, which this document resolves the second half of), [uvls-module.md](uvls-module.md), [emls-module.md](emls-module.md), [ADR-000](../adr/ADR-000-architecture-principles.md) through [ADR-004](../adr/ADR-004-cross-scheme-compliance-mechanism.md), [ADR-006: Connectivity Registry vs. PSS/E Topology Architecture](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md), [ADR-007: Canonical Engineering Reference Object](../adr/ADR-007-canonical-engineering-reference-object.md), [ADR-008: Substation Voltage Yard as the CircuitTerminal Connection Point](../adr/ADR-008-substation-voltage-yard.md), [equipment-registry-connectivity-validation.md](equipment-registry-connectivity-validation.md) (the gap analysis that motivated this revision).
+
+**Phase 3 UAT addendum (ADR-008):** `CircuitTerminal` connects to a `SubstationVoltageYard`, not directly to a `Substation` — a multi-voltage substation (e.g. PKLG with both a 275kV yard and a 132kV yard) cannot be expressed by a single `substation_id` reference alone. See §7.5a and ADR-008 for the full decision. Every other section of this document that says "terminal's substation" now means "terminal's voltage yard's substation," reached by one additional join.
+
+**Phase 3 close-out — final UAT-validated model.** §7.4 and §7.6 state the current, authoritative `bay_number`/circuit-name semantics. Some illustrative examples elsewhere in this document (§7.9, §7.11, §7.13, §19, the Appendix) still show the earlier "Line 1"/"Line 2" convention and a circuit name with the bay number appended (e.g. "PKLG–IGBK Line 1") — these are historical illustrations, left as originally written per this document's practice of correcting the authoritative text directly while noting supersession rather than rewriting every narrative example. Read any such example as: bay number is now a short designator (`1`, `Main`), and the circuit name never includes it. See the "Phase 3 Final Model Summary" section immediately below for the current, consolidated picture, and the Appendix for the itemized list of what changed and why.
+
+---
+
+## Phase 3 Final Model Summary (UAT-Validated)
+
+This section consolidates the model as validated through Phase 3 UAT, for a reader who wants the current picture without tracing every ADR and addendum individually. It does not introduce anything not already decided in §7 and the ADRs referenced below — it is a summary, not a new decision.
+
+### Conceptual hierarchy
+
+```
+Substation                                  (Substation Registry — Master Data)
+    ├── Voltage Yard / Switchyard            (Equipment Registry; ADR-008)
+    │       ├── voltage level
+    │       ├── commissioning date            (optional; Phase 3 UAT follow-up)
+    │       ├── latitude / longitude          (optional, both-or-neither; Phase 3 UAT follow-up)
+    │       └── circuit terminals             (0..N CircuitTerminal rows)
+    └── (identity, geography, ownership, operational status — unchanged, ADR-009)
+
+Circuit                                      (Equipment Registry — canonical reference object; ADR-007)
+    ├── canonical route/name                  (computed: sorted terminal mnemonics, never bay_number)
+    ├── bay / circuit number                  (short designator: "1", "Main" — never a route description)
+    ├── voltage level                         (single value; every terminal's yard must match it — rule 6a)
+    ├── line type
+    └── terminals (2..N)                      (each terminal → exactly one voltage yard/switchyard)
+```
+
+Busbars, bus couplers, breakers-as-first-class-entities, disconnectors, transformers, reactors, capacitors, and a generalized `Equipment` backbone are **future scope**, not part of Phase 3 (§4, §17). `CircuitTerminal` sits directly on its own identity rather than a shared `Equipment` backbone for exactly this reason (§7.1's scope note) — introducing that backbone is deferred until a second equipment type actually needs it.
+
+### Terminal voltage-level guardrail (rule 6a)
+
+Every `CircuitTerminal`'s voltage yard/switchyard must share its parent `Circuit`'s own `voltage_level_id` — a circuit is one physical line at one voltage class; a terminal at a different voltage level would represent a transformer connection, which this phase does not model (§9 rule 6a, added Phase 3 close-out). Enforced at the service layer on both circuit creation and terminal addition, not only in the UI — a mismatched voltage yard submitted directly to the API is rejected with a human-readable error. See ADR-008's addendum for how this interacts with rule 6's own scoping.
+
+### Master-data ownership principle (ADR-009)
+
+Master data entities are created and managed only within their owning module; dependent modules may reference them but must not create or modify them inline without a compelling, separately-documented exception. Concretely: voltage yard/switchyard creation and editing happen exclusively on the Substation Detail page; Circuit pages only ever consume existing voltage yards for terminal selection. This generalizes to every future topology entity (busbars, transformers, etc.) — see ADR-009's addendum for the full principle and reasoning.
+
+### `Substation.voltage_level_id` deprecation (ADR-009)
+
+`Substation.voltage_level_id` is deprecated, not removed: the column remains in the database (nullable, no data destroyed) but is out of the API contract entirely. A substation's voltage level(s) are represented exclusively by its `SubstationVoltageYard` (switchyard) rows — zero, one, or several. Substation creation no longer asks for a voltage level.
+
+### Canonical circuit naming rule (Phase 3 close-out)
+
+The circuit name is computed, never stored, and is the terminal substation mnemonics only — sorted alphabetically (case-insensitive), never the terminal-entry order, and never with `bay_number` appended. This makes the name deterministic regardless of which terminal an engineer happened to enter first, and keeps it visually distinct from the separately-displayed bay/circuit number (§7.4, §7.6). No PSS/E or other engineering naming convention is introduced by this rule — it is UI/domain display naming only, and may be revisited once a real convention is documented.
+
+### `bay_number` semantics (Phase 3 close-out)
+
+`bay_number` is a bay/circuit *designator*, not a display label: `1`, `2`, `Main`, `Transfer` — not `Line 1`, `Line 2`. It remains free text (not restricted to numeric-only), since real bay designators are frequently non-numeric. It is never embedded in the computed circuit name (see above), so a list or detail view showing both the circuit name and the bay number never displays the same number twice.
 
 ---
 
 ## 1. Module Overview
 
-Equipment Registry extends Master Data one level below the Substation Registry: it owns the physical grid equipment — transformers, incoming branches, and protection relays — that exists at or between substations. Substation Registry answers "what substations exist, and what are their identity and status"; Equipment Registry answers "what physical assets exist at those substations, how are they identified, and how do they connect to each other."
+Equipment Registry extends Master Data one level below the Substation Registry: it owns the physical grid equipment — transformers, circuits, and protection relays — that exists at or between substations. Substation Registry answers "what substations exist, and what are their identity and status"; Equipment Registry answers "what physical assets exist at those substations, how are they identified, and how do they connect to each other, as a matter of engineering identity and metadata."
+
+**Equipment Registry owns engineering identity and operational metadata. It does not perform, and must never perform, electrical topology analysis.** Electrical topology — what is actually, electrically connected, right now, in the energized network — is owned exclusively by PSS/E Integration; connectivity analysis derived from that topology (island/pocket/spur/downstream-load determination) is owned exclusively by Network Model. This boundary was tested directly against a proposed alternative (a separate "Substation Connectivity Registry") and reaffirmed twice: first by [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md), which rejected creating any such module and confirmed Equipment Registry as the correct owner of identity/metadata instead; then by [equipment-registry-connectivity-validation.md](equipment-registry-connectivity-validation.md), which stress-tested that conclusion against eight concrete engineering workflows and found it sound, while identifying structural gaps in this module's *internal* domain model (§7) that ADR-006 alone did not surface. [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) then settled the remaining question those two documents left open — which single object every future module should reference — and its answer is built into §7 below.
 
 This module was reserved from the very first architecture document in this series ([substation-registry.md](substation-registry.md) §14: "any additional master asset registries... following the same ownership pattern as the Substation Registry") and referenced as a deferred dependency by every Defence Scheme module built since (`equipment_reference` free text, pending this module — [ufls-module.md](ufls-module.md) §7.4, [uvls-module.md](uvls-module.md), [emls-module.md](emls-module.md)) and by PSS/E Integration (§17 of [psse-integration-module.md](psse-integration-module.md), which anticipated "a mapping entity correlating physical equipment to topology elements... once a future Equipment Registry exists").
 
-**Scope framing.** GridDefence is built for grid **system operators** — engineers who plan and operate transmission grid defence schemes — not for asset owners running an enterprise asset lifecycle. Equipment Registry is **not** intended to replace, duplicate, or partially reimplement an enterprise asset management (EAM) system. Its scope is deliberately narrow: the *operational/functional* equipment identity and wiring that grid defence schemes actually need to reference — what exists, where, how it is identified, and what it trips — not the fuller asset-management record (manufacturer, procurement, maintenance history, ownership lifecycle) an EAM system would own. This framing governs every design decision in this document, most visibly the relay model (§7.5) and the mandatory/optional field split (§7.1, §11).
+**Scope framing.** GridDefence is built for grid **system operators** — engineers who plan and operate transmission grid defence schemes — not for asset owners running an enterprise asset lifecycle. Equipment Registry is **not** intended to replace, duplicate, or partially reimplement an enterprise asset management (EAM) system. Its scope is deliberately narrow: the *operational/functional* equipment identity and wiring that grid defence schemes actually need to reference — what exists, where, how it is identified, and what it trips — not the fuller asset-management record (manufacturer, procurement, maintenance history, ownership lifecycle) an EAM system would own. This framing governs every design decision in this document, most visibly the relay model (§7.8) and the mandatory/optional field split (§7.1, §11).
 
 ---
 
@@ -20,11 +75,12 @@ This module was reserved from the very first architecture document in this serie
 
 To provide a single, authoritative source of truth for physical grid equipment, so that:
 
-- Every transformer, incoming branch, and relay has exactly one owner, referenced everywhere else by a stable `equipment_id` — never duplicated.
-- Bay/circuit identifier changes over time are preserved as history, not silently overwritten, exactly as substation mnemonic history is already preserved.
-- Scheme modules (UFLS/UVLS/EMLS) that currently reference only `substation_id`, with a temporary free-text equipment placeholder, have a concrete, well-defined target to migrate toward.
-- PSS/E Integration has a real Master Data anchor to correlate imported topology elements against, closing the gap it explicitly deferred.
-- A protection relay's physical identity (a real device, wired to specific equipment) is modeled separately from any scheme's use of it — resolving the relay-ownership ambiguity flagged since the Codebase Discovery Report.
+- Every transformer, circuit, and relay has exactly one owner, referenced everywhere else by a stable `equipment_id` (or, for a circuit as a whole, `circuit_id`) — never duplicated.
+- **A circuit (a physical line, e.g. "IGBK–PKLG," bay/circuit no. `1`) is modeled as a first-class entity with its own identity, independent of any single terminal's record** — resolving the structural gap the legacy `IncomingBranchDetail` design could not close (§7.4–§7.6, Appendix).
+- Bay identifier and breaker number changes over time are preserved as history, not silently overwritten, exactly as substation mnemonic history is already preserved.
+- Scheme modules (UFLS/UVLS/EMLS) that currently reference only `substation_id`, with a temporary free-text equipment placeholder, have a concrete, well-defined target to migrate toward — specifically `circuit_id` for circuit-type assignments (§7.11).
+- PSS/E Integration has a real Master Data anchor, at the correct granularity (per circuit terminal, §7.10), to correlate imported topology elements against, closing the gap it explicitly deferred.
+- A protection relay's physical identity (a real device, wired to a specific circuit terminal or transformer) is modeled separately from any scheme's use of it — resolving the relay-ownership ambiguity flagged since the Codebase Discovery Report.
 - The module stays scoped to what grid defence schemes operationally need — never expanding, by default, into enterprise asset management concerns (§4).
 
 ---
@@ -34,10 +90,12 @@ To provide a single, authoritative source of truth for physical grid equipment, 
 Equipment Registry owns:
 
 - ✓ Equipment identity (`Equipment` — the common backbone every equipment type shares, §7.1)
-- ✓ Load transformers, auto-transformers, and incoming branches as equipment types (§7.2–§7.4)
-- ✓ Protection relays as physical equipment (§7.5)
-- ✓ Equipment lifecycle status (§8)
-- ✓ Bay ID / alias history for any equipment type (§7.6)
+- ✓ Load transformers and auto-transformers as equipment types (§7.2–§7.3)
+- ✓ **Circuit identity and circuit-level metadata** — bay number, voltage level reference, line type reference, interconnector status, lifecycle (`Circuit`, §7.4)
+- ✓ **Circuit terminal identity and terminal-specific metadata** — breaker number, commissioning date, the terminal's own substation association (`CircuitTerminal`, §7.5)
+- ✓ Protection relays as physical equipment, and their wiring to circuit terminals or transformers (§7.8)
+- ✓ Equipment and circuit lifecycle status (§8)
+- ✓ Bay ID / alias history for any equipment type, including circuit terminals (§7.9)
 - ✓ Its own audit trail (`equipment_registry_audit_log`, CLAUDE.md A4)
 
 ---
@@ -47,11 +105,11 @@ Equipment Registry owns:
 Equipment Registry does **not** own:
 
 - ✗ Substation identity or metadata — owned by the Substation Registry (CLAUDE.md §8). Every piece of equipment references a `substation_id`, never a copy of substation attributes.
-- ✗ PSS/E topology data (`TopologyVersion`, `TopologyBus`, `TopologyBranch`, `TopologyTransformer`) — owned by PSS/E Integration. Equipment Registry does not parse or store topology; it is a correlation *target*, not a topology source (§7.7).
+- ✗ **Electrical topology data or analysis of any kind.** PSS/E Integration owns the actual, current, validated electrical topology — buses, branches, transformers, and the topology graph itself (`TopologyVersion`, `TopologyBus`, `TopologyBranch`, `TopologyTransformer`). Network Model owns everything derived from that graph — island detection, pocket detection, spur determination, and downstream-load analysis. Equipment Registry does not parse, store, or compute any of this; it is a correlation *target* for PSS/E's topology, never a topology source, and it must never acquire connectivity-analysis capability of its own (ADR-006 §6–§7, §13; reaffirmed by [equipment-registry-connectivity-validation.md](equipment-registry-connectivity-validation.md), Recommendation F).
 - ✗ Load snapshots or any live/derived network state — owned by PSS/E Integration.
 - ✗ UFLS, UVLS, or EMLS assignments, stages, or scheme data of any kind. **This module has no knowledge of "schemes," "stages," or "shedding assignments"** — mirroring the identical decoupling principle already established for Network Model ([network-model-module.md](network-model-module.md) §9 rule 8) and Critical Infrastructure ([critical-infrastructure-module.md](critical-infrastructure-module.md) §9 rule 10).
-- ✗ Scheme-specific shedding configuration — which relay a scheme uses for which stage, or what threshold triggers it, is scheme-owned data (§7.5's relay-ownership resolution).
-- ✗ Network analysis results (connectivity, islands) — owned by Network Model.
+- ✗ Scheme-specific shedding configuration — which relay a scheme uses for which stage, or what threshold triggers it, is scheme-owned data (§7.8's relay-ownership resolution).
+- ✗ Network analysis results (connectivity, islands, pockets, spurs) — owned by Network Model.
 - ✗ Identity, authentication, or authorization — owned by IAM.
 - ✗ **Enterprise asset management.** GridDefence serves grid system operators, not asset owners — this module is not an EAM system and does not become one. Specifically out of scope: work orders, maintenance history and scheduling, procurement, warranty tracking, and asset ownership lifecycle (acquisition, depreciation, disposal). Where a future EAM system exists elsewhere in the organisation, this module is, at most, a read-only reference point it could correlate against — Equipment Registry never grows toward owning that data itself (§7.1, §17).
 
@@ -64,10 +122,12 @@ Equipment Registry does **not** own:
 | `Equipment` | The common identity backbone every piece of equipment shares: a stable `equipment_id`, its owning substation, its type discriminator, its current bay ID, and its lifecycle status (§7.1). |
 | `LoadTransformerDetail` | Type-specific attributes for a load transformer, one row per `Equipment` of that type (§7.2). |
 | `AutoTransformerDetail` | Type-specific attributes for an auto-transformer (§7.3). |
-| `IncomingBranchDetail` | Type-specific attributes for an incoming branch, including the far-end substation (§7.4). |
-| `RelayDetail` | Type-specific attributes for a protection relay as a physical device (§7.5). |
-| `RelayControlledEquipment` | The set of other `Equipment` rows a given relay is physically wired to control. |
-| `EquipmentAlias` | Historical bay ID / identifier changes for any `Equipment` row, with a validity window (§7.6). |
+| `Circuit` | A physical circuit (a line) as a coherent whole, independent of any single terminal — the object engineers select during defence scheme design and the object every other future module references for "this line" (§7.4; ADR-007 §6, §10). |
+| `SubstationVoltageYard` | One voltage level physically present at a substation — a substation with more than one voltage class present (e.g. PKLG 275kV and PKLG 132kV) has more than one row. References Substation Registry and Core Platform reference data only; owns no substation identity of its own (§7.5a; ADR-008). |
+| `CircuitTerminal` | One voltage yard's end of a `Circuit`, one row per `Equipment` row of type `CircuitTerminal` — replaces and generalizes the earlier `IncomingBranchDetail` design (§7.5; Appendix). Connects to a `SubstationVoltageYard`, not directly to a `Substation` (§7.5a; ADR-008). |
+| `RelayDetail` | Type-specific attributes for a protection relay as a physical device (§7.8). |
+| `RelayControlledEquipment` | The set of other `Equipment` rows a given relay is physically wired to control — for circuit-type equipment, this always means a specific `CircuitTerminal`-backed `Equipment` row, never a `Circuit` as a whole (§7.8; ADR-007 §6). |
+| `EquipmentAlias` | Historical bay ID / identifier changes for any `Equipment` row, with a validity window (§7.9). |
 | `equipment_registry_audit_log` | This module's own audit trail (CLAUDE.md A4). |
 
 ---
@@ -76,10 +136,12 @@ Equipment Registry does **not** own:
 
 | Entity | Owned by | Referenced as |
 |---|---|---|
-| Substation | Master Data (Substation Registry) | `substation_id` (UUID) only, on `Equipment` and (for the far end) `IncomingBranchDetail` — no attributes copied |
-| Operational Status | Core Platform (reference data) | `operational_status_id`, reused directly from the same reference table Substation Registry already uses (§8) — not duplicated as an equipment-specific lookup |
+| Substation | Master Data (Substation Registry) | `substation_id` (UUID) only, on `Equipment` (every terminal's own substation) — no attributes copied |
+| Operational Status | Core Platform (reference data) | `operational_status_id`, reused directly from the same reference table Substation Registry already uses (§8) — not duplicated as an equipment- or circuit-specific lookup |
+| Voltage Level | Core Platform (reference data) | `voltage_level_id`, reused directly from the same reference table Substation Registry already uses — referenced by `Circuit.voltage_level_id` (§7.4). A circuit's voltage class is distinct from, and not assumed equal to, either terminal substation's own overall voltage class, since a substation may host multiple voltage levels. |
+| **Line Type** | **Core Platform (reference data)** — a new, small reference table added by this revision, following the exact `voltage_level`/`region`/`grid_owner` pattern already established (CLAUDE.md §11.3) | `line_type_id`, referenced by `Circuit.line_type_id` (§7.4). It is a Core Platform-owned lookup, not an Equipment-Registry-owned table, but the *concept* it describes — a circuit's physical construction (overhead/cable/submarine/hybrid) — belongs entirely to Equipment Registry's domain, exactly as `voltage_level` already does for substations. |
 | User | Core Platform (IAM) | `user_id` (UUID) only, for `created_by_user_id`/`updated_by_user_id` and audit attribution; fallback `external_principal_id` + provider per [ADR-002](../adr/ADR-002-identity-and-access-management.md) |
-| `TopologyVersion`, `TopologyBranch`, `TopologyTransformer` | PSS/E Integration | Not referenced by this module's own tables (§7.7) — PSS/E Integration is expected to hold the reverse reference once it builds its own equipment-topology mapping; Equipment Registry may optionally *consume* PSS/E Integration's read-only interfaces for display purposes only (e.g. current in-service status), never storing a copy |
+| `TopologyVersion`, `TopologyBranch`, `TopologyTransformer` | PSS/E Integration | Not referenced by this module's own tables (§7.10) — PSS/E Integration owns the reverse reference (`EquipmentTopologyMap`), keyed to `CircuitTerminal`-backed `equipment_id` values; Equipment Registry may optionally *consume* PSS/E Integration's read-only interfaces for display purposes only (e.g. current in-service status), never storing a copy |
 
 ---
 
@@ -88,28 +150,30 @@ Equipment Registry does **not** own:
 ```
 Equipment (1) ──── (0..1) LoadTransformerDetail   [exactly one detail row matching equipment_type]
 Equipment (1) ──── (0..1) AutoTransformerDetail
-Equipment (1) ──── (0..1) IncomingBranchDetail
+Equipment (1) ──── (0..1) CircuitTerminal
 Equipment (1) ──── (0..1) RelayDetail
 
-Equipment (relay) ──── (many) RelayControlledEquipment ──── references ──▶ Equipment (controlled)  [both internal to this module]
+Circuit (1) ──── (2..N) CircuitTerminal            [every Circuit has at least two terminals; a tee-off has three or more, same entity shape]
+
+Equipment (relay) ──── (many) RelayControlledEquipment ──── references ──▶ Equipment (controlled — a CircuitTerminal- or transformer-typed row, never a Circuit)  [both internal to this module]
 
 Equipment (1) ──── (many) EquipmentAlias
 
-Equipment           ──── references ───▶ Substation.substation_id            (Master Data, external)
-IncomingBranchDetail ──── references ───▶ Substation.substation_id (to_substation) (Master Data, external)
-Equipment            ──── references ───▶ OperationalStatus (Core Platform, external)
-Equipment / EquipmentAlias ──── references ───▶ User.user_id                 (Core Platform/IAM, external)
+Equipment  ──── references ───▶ Substation.substation_id                       (Master Data, external)
+Circuit    ──── references ───▶ VoltageLevel, LineType                          (Core Platform, external)
+Equipment  ──── references ───▶ OperationalStatus                               (Core Platform, external)
+Equipment / EquipmentAlias ──── references ───▶ User.user_id                    (Core Platform/IAM, external)
 ```
 
-No arrow points from this module toward PSS/E Integration or any scheme module — the correlation to topology data is held by PSS/E Integration itself, referencing `equipment_id` read-only (§7.7), and no scheme module's tables are referenced at all (§4).
+No arrow points from this module toward PSS/E Integration or any scheme module — the correlation to topology data is held by PSS/E Integration itself, referencing `CircuitTerminal`-backed `equipment_id` values read-only (§7.10), and no scheme module's tables are referenced at all (§4).
 
-### 7.1 Equipment Identity and Type Model — Answering "Equipment Identity" and "Equipment Type Model"
+### 7.1 Equipment Identity and Type Model
 
-**`Equipment` is a common backbone entity, not four unrelated top-level tables.** Every piece of equipment — regardless of type — gets one `equipment_id` (UUID, per CLAUDE.md A5), one `substation_id`, one `bay_id`, one lifecycle status, and one audit trail, through the shared `Equipment` row. Type-specific attributes live in a separate detail table (`LoadTransformerDetail`, `AutoTransformerDetail`, `IncomingBranchDetail`, `RelayDetail`), exactly one of which exists per `Equipment` row, matching its `equipment_type` discriminator.
+**`Equipment` is a common backbone entity, not several unrelated top-level tables.** Every piece of equipment — regardless of type — gets one `equipment_id` (UUID, per CLAUDE.md A5), one `substation_id`, one `bay_id`, one lifecycle status, and one audit trail, through the shared `Equipment` row. Type-specific attributes live in a separate detail table (`LoadTransformerDetail`, `AutoTransformerDetail`, `CircuitTerminal`, `RelayDetail`), exactly one of which exists per `Equipment` row, matching its `equipment_type` discriminator.
 
-This is a deliberate improvement over the legacy MVP's design, which modeled `LoadTransformer`, `AutoTransformer`, and `IncomingBranch` as three entirely separate, unrelated tables with no common identity. That design forced the MVP's own `EquipmentTopologyMap` and `EquipmentSnapshotState` (per the Codebase Discovery Report) to use three parallel nullable foreign keys with an XOR constraint ("exactly one of load_transformer/incoming_branch/auto_transformer is set") every time they needed to reference "a piece of equipment, whatever type it is." A single `equipment_id` backbone removes that awkwardness at the source: any future consumer — a scheme module's assignment, PSS/E Integration's topology mapping — needs only one foreign key, not a polymorphic triple. This directly serves the stated goal: **"scheme modules may eventually reference `equipment_id` instead of only `substation_id`"** (§7.8) is a clean, single-column reference under this design, not a three-way XOR.
+`equipment_type` is one of `LoadTransformer`, `AutoTransformer`, `CircuitTerminal`, `Relay` — immutable once an `Equipment` row is created (§9); there is no "convert this transformer into a circuit terminal" operation, only retiring one record and creating another, consistent with Master Data's immutable-identity principle applied at the equipment level. **`CircuitTerminal` replaces the earlier `IncomingBranch` discriminator value** (Appendix) — this is a renaming as well as a structural generalization, since the earlier name signaled a directional ("incoming") relationship that does not correspond to physical reality (a transmission line has no inherent direction).
 
-`equipment_type` is one of `LoadTransformer`, `AutoTransformer`, `IncomingBranch`, `Relay` — immutable once an `Equipment` row is created (§9); there is no "convert this transformer into a branch" operation, only retiring one record and creating another, consistent with Master Data's immutable-identity principle applied at the equipment level.
+This backbone-plus-detail-table shape is a deliberate improvement over the legacy MVP's design, which modeled equipment types as entirely separate, unrelated tables with no common identity, forcing any consumer needing "a piece of equipment, whatever type it is" to use a three-way nullable-foreign-key XOR constraint instead of one clean `equipment_id`. This directly serves §7.11: any scheme module referencing equipment-level assignment data uses a single, unambiguous foreign key.
 
 **Mandatory vs. optional fields — the scope boundary made concrete.** Consistent with §1's scope framing (grid system operators, not asset owners), the `Equipment` backbone's *mandatory* fields are limited to exactly what a grid defence scheme needs to function:
 
@@ -117,99 +181,228 @@ This is a deliberate improvement over the legacy MVP's design, which modeled `Lo
 - Substation association (`substation_id`)
 - Bay/function identifier (`bay_id`)
 - Equipment type (`equipment_type`)
-- Trip/affected-equipment relationship, where applicable (`RelayControlledEquipment` for relays, §7.5)
+- Trip/affected-equipment relationship, where applicable (`RelayControlledEquipment` for relays, §7.8)
 - Operational usability/status (`operational_status_id`)
-- Scheme relevance (`is_scheme_relevant` — a scheme-agnostic flag marking whether this equipment is the kind of thing a grid defence scheme assignment would ever reference, distinguishing operationally-relevant switching/protection equipment from equipment of no shedding relevance; it says nothing about *which* scheme or *how*, preserving the decoupling in §9 rule 9)
+- Scheme relevance (`is_scheme_relevant` — a scheme-agnostic flag marking whether this equipment is the kind of thing a grid defence scheme assignment would ever reference; it says nothing about *which* scheme or *how*, preserving the decoupling in §9 rule 9)
 - Remarks (`remarks`, free text)
 
-**Manufacturer, model, firmware version, serial number, maintenance owner, and any other asset-management-adjacent metadata are optional fields only** (§11) — never required to create, edit, or operationally use an `Equipment` record. They exist purely as convenience metadata for a site engineer who happens to know them; nothing in this module's business rules, validation rules, or service interfaces depends on their presence.
+**Manufacturer, model, firmware version, serial number, maintenance owner, and any other asset-management-adjacent metadata are optional fields only** (§11) — never required to create, edit, or operationally use an `Equipment` record.
 
 ### 7.2 Load Transformer Model
 
-`LoadTransformerDetail` carries: `transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage`, `lv_breaker_number`, `capacity_mva`, `commissioning_date` — directly matching the legacy MVP's `LoadTransformer` fields (Codebase Discovery Report), now attached to the common `Equipment` backbone rather than standing alone. The computed `bay_id` convention (`{substation_mnemonic}_T{transformer_no}`) is preserved as documented policy (§10).
+`LoadTransformerDetail` carries: `transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage`, `lv_breaker_number`, `capacity_mva`, `commissioning_date` — directly matching the legacy MVP's `LoadTransformer` fields, now attached to the common `Equipment` backbone rather than standing alone. The computed `bay_id` convention (`{substation_mnemonic}_T{transformer_no}`) is preserved as documented policy (§10). Unaffected by this revision.
 
 ### 7.3 Auto-Transformer Model
 
-`AutoTransformerDetail` carries the same shape as `LoadTransformerDetail` (`transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage` [required, unlike load transformers], `lv_breaker_number`, `capacity_mva`, `commissioning_date`), reflecting the MVP's own near-identical field set for the two transformer types, kept as genuinely separate `equipment_type` values (not merged into one "transformer" type) because they represent distinct physical roles in the substation (auto-transformers interconnect voltage levels; load transformers step down to load-serving voltage) — a distinction worth preserving in the type model even though their attribute shapes are similar. The computed `bay_id` convention (`{substation_mnemonic}_AT{transformer_no}`) is preserved.
+`AutoTransformerDetail` carries the same shape as `LoadTransformerDetail` (`transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage` [required, unlike load transformers], `lv_breaker_number`, `capacity_mva`, `commissioning_date`), kept as a genuinely separate `equipment_type` value (not merged into one "transformer" type) because auto-transformers and load transformers represent distinct physical roles in a substation. The computed `bay_id` convention (`{substation_mnemonic}_AT{transformer_no}`) is preserved. Unaffected by this revision.
 
-### 7.4 Incoming Branch Model
+### 7.4 Circuit Model
 
-`IncomingBranchDetail` carries: `to_substation_id` (the far-end substation — a second, distinct reference to Substation Registry, alongside the base `Equipment.substation_id` representing the near/"from" end), `ckt_id`, `breaker_number`, `commissioning_date`. The computed `bay_id` convention (`{substation_mnemonic}_{to_substation_mnemonic}_{ckt_id}`) is preserved, and, per the legacy MVP's own precedent, is exactly the kind of identifier most likely to change over time (renumbering, re-terminuation) — making incoming branches the primary, though not exclusive, beneficiary of the generalized alias-history mechanism (§7.6).
+**`Circuit` is the canonical engineering reference object for a physical line, as a whole.** It is the object an engineer selects during defence scheme design ("assign IGBK–PKLG, bay/circuit no. `1`, to UFLS Stage 3"), the object Compliance reasons about, and the object Dashboard reports against (ADR-007 §6, §10). It is not itself one piece of equipment and does not sit directly on an `Equipment` row (§7.1's "exactly one detail row per `Equipment` row" pattern does not apply to `Circuit`) — it is the grouping object above two or more `CircuitTerminal` rows, each of which *is* its own `Equipment` row.
 
-### 7.5 Relay Model — The Relay Ownership Decision
+`Circuit` carries:
 
-**Relays are physical equipment master data, but a relay's use by a specific scheme is not.** This is the resolution to the ambiguity flagged since the Codebase Discovery Report ("if a relay is genuinely scheme-agnostic physical equipment, it should be Master Data referenced by all scheme modules, not duplicated per scheme").
+- **Circuit ID** (`circuit_id`, UUID PK per CLAUDE.md A5) — stable identity, independent of any one terminal's `equipment_id`.
+- **Bay / circuit number** (`bay_number`) — the circuit-level human designator distinguishing this line from another between the same pair of substations: `1`, `2`, `3`, `Main`, `Transfer`. This is a property of the circuit as a whole, not of one terminal (§7.6 explains why). **Semantics (Phase 3 close-out):** this is a bay/circuit *designator*, not a full display label — never a route description like "Line 1." It is free text, deliberately not restricted to numeric-only input, since real bay designators are often non-numeric (`Main`, `Transfer`, a lettered bay).
+- **Circuit name** — not a separately stored field. It is a *computed* display value: the **canonical route name**, derived from the substation mnemonics of the circuit's terminals, sorted alphabetically (case-insensitive) — deterministic regardless of the order terminals were entered in, and **never includes `bay_number`** (e.g. `IGBK–PKLG`, not `PKLG–IGBK Line 1`; Phase 3 close-out — see the Appendix's "Superseded Design Decisions" entry for why this changed). Available through the read interface (§13). Storing it separately would create a second place it could drift out of sync with the terminals it actually names. No documented PSS/E or other engineering naming convention exists yet for terminal ordering; alphabetical-by-mnemonic is used as the default until one is established.
+- **Voltage level** (`voltage_level_id`, FK to Core Platform reference data, §6).
+- **Line type** (`line_type_id`, FK to Core Platform reference data, §6, §7.6's sibling concept — see below).
+- **Interconnector flag** (`is_interconnector`, boolean) — reporting/dashboard convenience only, not load-bearing for any structural rule (§7.12).
+- **Operational status** (`operational_status_id`, FK, reused from the same reference table as `Equipment` and Substation Registry, §8).
+- **Remarks** (free text).
 
-The reasoning: a protection relay is a real physical device — it has a location, physical wiring to specific transformers and branches it can trip, and (in modern digital/numerical relays) frequently implements *multiple* protection functions simultaneously in one physical box. This physical reality — identity, location, and **which equipment it can trip** — is genuinely Master Data, no different in kind from a transformer's physical existence. What is **not** Master Data is a relay's *scheme-specific trip configuration*: which frequency or voltage threshold makes it act, and which scheme's stage it is currently configured to serve. That is scheme-owned business data, because it is a design decision UFLS, UVLS, or EMLS makes independently, and — critically — **the same physical relay may legitimately be referenced by more than one scheme module** (a multifunction relay implementing both a UFLS element and a UVLS element), which is only expressible cleanly if the physical device and its per-scheme configuration are separate things owned by separate modules.
+A `Circuit` has **two or more** `CircuitTerminal` rows: an ordinary point-to-point line has exactly two; a tee-off has three or more, modeled uniformly by the same entity, with no special-cased "third terminal" mechanism (§7.5, §7.13).
 
-**Relay modeling in this module is deliberately scoped to the relay/tripping function and its wired trip targets — nothing more.** `RelayDetail` carries `relay_name`, `target_voltage_kv` (the voltage level of the breakers this relay operates, a physical/wiring characteristic, not a trip threshold), and `is_active`, plus, via `RelayControlledEquipment`, the mandatory set of other `Equipment` rows (transformers, branches) it is physically wired to control — this trip-target relationship is the operational core of the relay model, and is why `RelayControlledEquipment` is listed as mandatory-supporting data in §7.1, not optional. `RelayDetail` carries **no** frequency threshold, voltage threshold, time delay, or any concept of "which scheme uses this" (those remain scheme-owned, as above), and it carries **no manufacturer, model, or firmware version as required data** — a site engineer working the relay/tripping function has everything this module requires without ever entering that information. Manufacturer, model, firmware version, and serial number *may* be recorded, using the same optional metadata fields available to any `Equipment` row (§7.1, §11) — they are convenience data, never load-bearing for this module's own business rules. Once scheme modules migrate to equipment-level references (§7.8), each scheme's own assignment records which `relay_id` it uses for a given stage — that reference, and the threshold/delay it implies, remains entirely the scheme module's own business data, exactly as `equipment_reference` free text is scheme-owned today.
+**Line type.** `Overhead`, `Cable`, `Submarine`, `Hybrid` — a new, small Core Platform-style reference table (§6), following the exact pattern already established for `voltage_level`/`region`/`grid_owner`/`operational_status` (CLAUDE.md §11.3: reference tables over hardcoded enums, so new construction types can be added without a schema migration). It belongs conceptually to Equipment Registry — it describes a specific circuit's physical construction, a fact no other module has any reason to own — even though it is implemented as a Core Platform-owned lookup table, exactly as `voltage_level` already is for substations.
 
-### 7.6 Bay ID / Alias History
+### 7.5 CircuitTerminal Model
 
-**Bay ID history is a generic capability of the `Equipment` backbone, not limited to incoming branches.** The legacy MVP only tracked alias history for `IncomingBranch` via a dedicated `IncomingBranchAlias` model; `LoadTransformer` and `AutoTransformer` bay IDs, while equally derived and equally capable of changing (e.g. a transformer renumbering), had no equivalent history mechanism. GridDefence generalizes this: `EquipmentAlias` applies to any `Equipment` row regardless of type, carrying `alias_bay_id`, `valid_from`, and a nullable `valid_to` (null = the alias that was in effect immediately before the current one) — the same validity-window pattern already established for Substation Registry's `substation_alias` ([substation-registry.md](substation-registry.md) §7.6) and Critical Infrastructure's `CriticalAssetSubstation` ([critical-infrastructure-module.md](critical-infrastructure-module.md) §7.5). This is now the third or fourth Master Data entity to use this exact pattern — a validated, recurring design choice, not a one-off.
+**`CircuitTerminal` is the per-substation terminal of a `Circuit`.** It replaces and generalizes the earlier `IncomingBranchDetail` design (Appendix), and is the object Relay Registry wires to and PSS/E's `EquipmentTopologyMap` matches against (ADR-007 §6, §10; §7.8, §7.10 below).
 
-When `Equipment.bay_id` changes, the previous value is closed out into a new `EquipmentAlias` row (`valid_to` set to the change timestamp) before the new value is written — never silently overwritten (CLAUDE.md §5.2 applied to Master Data relationship/identifier history, as already established elsewhere in this series).
+Structurally, `CircuitTerminal` follows the same pattern as `LoadTransformerDetail`/`AutoTransformerDetail`: it is a per-`Equipment`-row detail table, one row per `Equipment` row of type `CircuitTerminal`, satisfying §7.1's "exactly one detail row per `Equipment` row" rule unchanged. What is new is that **multiple `CircuitTerminal` rows, at different substations, now share a common `circuit_id`** — the structural link the earlier design lacked (Appendix, Gap 3).
 
-### 7.7 Relationship to PSS/E TopologyVersion and the EquipmentTopologyMap Concept
+`CircuitTerminal` carries:
 
-**Equipment Registry does not own the equipment-to-topology mapping.** [psse-integration-module.md](psse-integration-module.md) §17 already anticipated this exact linkage from its own side ("a mapping entity correlating physical equipment... to `TopologyBranch`/`TopologyTransformer` records, mirroring the legacy MVP's `EquipmentTopologyMap` pattern") and reserved it as a Future Extension once Equipment Registry exists. This document does not reverse that ownership assignment — PSS/E Integration is expected to own `EquipmentTopologyMap`, scoped per `TopologyVersion` (since a piece of equipment's correlation to a specific topology element could differ across topology versions, e.g. after renumbering), holding a single, clean foreign key to `equipment_id` (§7.1) instead of the MVP's three-way XOR, resolved during RAW file import by matching bay IDs (and their alias history, §7.6) against Equipment Registry's records.
+- `equipment_id` (PK/FK to `Equipment`) — this terminal's own identity, lifecycle status, and computed `bay_id` (§7.9) come from the shared backbone, unchanged in kind from every other equipment type.
+- `circuit_id` (FK to `Circuit`, mandatory) — the owning circuit.
+- **Voltage yard** (`voltage_yard_id`, FK to `SubstationVoltageYard`, mandatory) — this terminal's substation *and* voltage level, reached together in one reference. Replaces a direct `substation_id` reference (ADR-008; §7.5a). A terminal's substation is `SubstationVoltageYard.substation_id`, one join away, never duplicated onto `CircuitTerminal` itself.
+- **Breaker number** (`breaker_number`) — this terminal's own, independently-numbered physical breaker identifier ("L25," "805," "Z1230"). Terminal-specific by construction, not by convention (§7.6). Editable after creation, audited per change.
+- `commissioning_date` — kept at the terminal level, not the circuit level, because a tee-off's terminals may genuinely be commissioned at different times (e.g. an original two-terminal line, with a third tap added years later) — a circuit-level-only date could not represent that. Optional; editable after creation, audited per change.
+- `remarks` (free text, terminal-specific). Editable after creation.
+- `updated_at`/`updated_by_user_id` — added alongside terminal editability (ADR-008); mirrors `Circuit`'s own accountability columns.
 
-Equipment Registry's role in this relationship is purely as the **referenced side**: it exposes a read-only equipment-lookup service interface (§13) that PSS/E Integration's import process calls to resolve a parsed bay identifier — checking both the current `bay_id` and historical `EquipmentAlias` entries — to a stable `equipment_id`. Equipment Registry never writes to, or holds a foreign key into, PSS/E Integration's tables.
+**Support for 2-terminal, tee-off, and future N-terminal circuits.** An ordinary circuit has exactly two `CircuitTerminal` rows; a tee-off has three or more. Both are the same entity, the same table, the same relationship to `Circuit` — there is no separate "tee-off" type or mechanism to design or implement (§7.13 walks through a concrete example). This is what resolves the structural gap the connectivity validation identified: the earlier `IncomingBranchDetail.to_substation_id` field was singular, which made a genuine three-terminal tee physically impossible to represent without force-fitting it into multiple, uncorrelated two-terminal rows.
 
-### 7.8 How Scheme Modules Should Eventually Reference Equipment, and the Migration Path
+**Relay attachment point.** A relay's `RelayControlledEquipment` link, when it targets circuit-type equipment, always references a `CircuitTerminal`-backed `Equipment` row directly — never a `Circuit` — because a relay is physically wired to one substation's own breaker, not to the line as an abstract whole (§7.8, §9 rule 7; ADR-007 §6).
 
-**Answering "how UFLS/UVLS/EMLS should eventually reference equipment" and "migration path from substation-level to equipment-level assignment":** this confirms and elaborates the migration path already sketched, identically, in [ufls-module.md](ufls-module.md) §7.4 Open Question 2, [uvls-module.md](uvls-module.md), and [emls-module.md](emls-module.md):
+**EquipmentTopologyMap attachment point.** PSS/E Integration's `EquipmentTopologyMap` matches each `CircuitTerminal`'s bay identifier independently against imported topology data — one map entry per terminal (§7.10).
 
-1. A migration adds a nullable `equipment_id` foreign key (referencing this module's `Equipment.equipment_id`) to each scheme module's own direct-assignment table (`ufls_direct_assignment`, `uvls_direct_assignment`, `emls_direct_assignment`), alongside — not replacing — the existing `equipment_reference` free-text column.
-2. A data migration attempts to resolve every existing `equipment_reference` value against Equipment Registry, checking both current `bay_id` values and historical `EquipmentAlias` entries (§7.6) — a free-text value recorded by an engineer months or years ago may match a *historical* alias rather than the equipment's current identifier, which is precisely why alias history matters for this reconciliation to succeed accurately.
-3. Assignments that resolve are populated with the real `equipment_id`; assignments that do not resolve are flagged for manual reconciliation, mirroring the "unmatched" reporting pattern already established in PSS/E Integration's own import process ([psse-integration-module.md](psse-integration-module.md) §5).
-4. `equipment_reference` is retained afterward as a legacy/fallback display value, not removed — historical assignments' originally-recorded intent is never lost, consistent with CLAUDE.md §5.2 applied to this migration itself.
-5. Once populated, a scheme module's assignment may resolve equipment-level attributes (which specific transformer, which relay) via `equipment_id`, in addition to the substation-level `substation_id` reference it already holds — both remain valid references simultaneously; equipment-level granularity refines, rather than replaces, the substation-level relationship.
+### 7.5a Substation Voltage Yard
 
-**Whether this requires a new ADR — yes, but not for Equipment Registry's existence.** This module's existence and domain placement (Master Data, sibling to Substation Registry, following the exact ownership pattern already reserved since [substation-registry.md](substation-registry.md) §14) is not itself a new or controversial decision — it was anticipated from the beginning of this document series and requires no separate ratification. **The migration described in steps 1–5 above does require its own ADR before it is undertaken**, because it simultaneously modifies the core assignment model of three already-built, already-ratified Defence Scheme modules (UFLS, UVLS, EMLS) — exactly the kind of cross-cutting change CLAUDE.md A13 requires an ADR for ("any change that modifies core architecture, domain ownership... or database standards"). This document defines the target shape and the migration mechanism; it does not authorize executing it. See §17.
+**A substation may have more than one voltage level physically present on site — a `SubstationVoltageYard` row exists for each one.** PKLG with a 275kV yard and a separate 132kV yard is two `SubstationVoltageYard` rows, both referencing `substation_id = PKLG`, one at `voltage_level_id = 275kV` and one at `voltage_level_id = 132kV`. A single-voltage substation simply has one row. This was found to be a real, near-term gap during Phase 3 UAT: `CircuitTerminal` referencing `substation_id` directly cannot express which of a multi-voltage substation's yards a circuit actually terminates at — a fact PSS/E topology correlation and, later, scheme assignment both need at exactly this granularity (ADR-008).
+
+`SubstationVoltageYard` carries:
+
+- `voltage_yard_id` (UUID PK per CLAUDE.md A5) — stable identity, independent of the substation's own `substation_id`.
+- `substation_id` (FK to Substation Registry, external, mandatory) — no substation attributes copied (CLAUDE.md §5.1).
+- `voltage_level_id` (FK to Core Platform reference data, external, mandatory).
+- `commissioning_date`, `latitude`, `longitude` (all optional; Phase 3 UAT follow-up) — yard-level metadata, deliberately **not** on `Substation`: a multi-voltage site may have yards commissioned at different dates with slightly different GIS coordinates (e.g. two physically distinct switchyards on one site). `latitude`/`longitude` follow the same validation as `Substation`'s own geolocation fields (§8 rule 4 equivalent: range-checked, and both-or-neither).
+- **Display label** — not a stored field, computed from the referenced substation's mnemonic plus the referenced voltage level's label (e.g. "PKLG — 275kV"), exactly the same computed-not-stored pattern already used for `Circuit`'s own display name (§7.4).
+
+**Ownership.** `SubstationVoltageYard` is owned by Equipment Registry, not Substation Registry (ADR-008) — it asserts a wiring-level fact ("equipment terminates at this substation at this voltage"), the same kind of fact Equipment Registry already owns for `Circuit`/`CircuitTerminal`, not a new fact about substation identity, geography, or operational status (all still exclusively Substation Registry's, unchanged).
+
+**Uniqueness.** At most one `SubstationVoltageYard` row per `(substation_id, voltage_level_id)` pair — a substation does not have two independent yards at the same voltage level in this model.
+
+**Every `CircuitTerminal` references a `SubstationVoltageYard`, never a `Substation` directly** (§7.5). Business rule 6 (§9) is restated at voltage-yard granularity: no voltage yard may hold more than one terminal of the same circuit — deliberately *not* restated at substation granularity. Rule 6a (§9; Phase 3 UAT follow-up) additionally requires every terminal's voltage yard to match its circuit's own `voltage_level_id`; see [ADR-008](../adr/ADR-008-substation-voltage-yard.md)'s addendum for why this means a circuit can no longer terminate twice at the same substation under the current model (no cross-voltage equipment type such as a transformer exists yet).
+
+### 7.6 Bay Number vs. Breaker Number
+
+These are intentionally separate fields, owned at intentionally different levels of the model, because they answer different engineering questions:
+
+| | Bay Number | Breaker Number |
+|---|---|---|
+| **Owned by** | `Circuit.bay_number` | `CircuitTerminal.breaker_number` |
+| **Scope** | The whole circuit — shared, by engineering convention, across every terminal | One terminal only — locally, independently assigned |
+| **Examples** | `1`, `2`, `3`, `Main`, `Transfer` | `L25`, `805`, `Z1230` |
+| **Why** | Both ends of a physical line are, by convention, called by the same bay/circuit designator — PKLG's engineers and IGBK's engineers both call the same physical circuit bay/circuit no. `1`. It distinguishes this circuit from a parallel circuit between the same two substations, not one terminal from another. It is a designator, not a route description — the route itself is the separately-computed canonical circuit name (§7.4), never `bay_number` appended to it. | Each substation numbers its own switchgear under its own local convention, with no coordination requirement with the substation at the other end. The same physical circuit's breaker at PKLG and its breaker at IGBK are legitimately, and typically, numbered completely differently. |
+
+Conflating the two — as the earlier `IncomingBranchDetail` design implicitly did, by holding a single `breaker_number` per circuit row (Appendix) — cannot represent a circuit's two independently-numbered terminal breakers at once. Keeping them as genuinely separate fields, owned at genuinely different levels of the model, is what makes Workflow E in §7.13 (terminal-specific breakers on the same circuit) representable at all.
+
+**Computed technical bay identifier.** Distinct from both of the above, `Equipment.bay_id` (§7.1, §7.9) remains the per-terminal, machine-facing identifier used for uniqueness enforcement and PSS/E bay-identifier matching (§7.10) — computed for a `CircuitTerminal`-typed `Equipment` row as `{substation_mnemonic}_{circuit.bay_number}` (e.g. `PKLG_1` at PKLG's terminal, `IGBK_1` at IGBK's terminal, for the same bay/circuit no. `1` circuit). This is a technical convenience derived from `Circuit.bay_number`, not a third independent number an engineer enters — see §7.9 for what happens to it when `Circuit.bay_number` itself changes.
+
+### 7.7 Canonical Reference Object Summary
+
+Per ADR-007's decision (§10 of that ADR), every future GridDefence module referencing "equipment" from this registry uses one of exactly two objects, chosen by what that module actually needs to express:
+
+| Consuming module | References | Why |
+|---|---|---|
+| Relay Registry (this module's own `RelayControlledEquipment`) | `CircuitTerminal` | A relay is physically wired to one substation's own breaker — never to a circuit as an abstract whole (§7.8). |
+| Defence Scheme Assignment (UFLS / UVLS / EMLS) | `Circuit` | An engineer designs a scheme against "this line," not against one terminal's detail (§7.11). |
+| PSS/E Mapping (`EquipmentTopologyMap`) | `CircuitTerminal` | Bay-identifier matching against real PSS/E structural data is inherently per-terminal (§7.10). |
+| Compliance | `Circuit` | Compliance rules reason about assigned lines, not substation-specific wiring detail. |
+| Dashboard | `Circuit` (primary), drilling into `CircuitTerminal` for detail views only | A circuit is the natural reporting unit; terminal detail (breaker numbers at each end) is a drill-down, never the primary aggregation key. |
+| Future modules (SPS/RAS, Black Start, Islanding, Restoration Planning) | `Circuit`, unless the future module's own concern is physically terminal-specific (in which case, `CircuitTerminal`, by the same reasoning as Relay Registry) | No future module should invent a third reference object without revisiting this table first. |
+
+A `Circuit`'s effective correlation to PSS/E topology — the set of branch/transformer elements it maps to, needed by Network Model to build a cut-set for a scheme's assignment — is the **union of its `CircuitTerminal`s' individual `EquipmentTopologyMap` entries**, resolved by traversal at query time, never separately stored on `Circuit` itself (§7.10, §7.11).
+
+### 7.8 Relay Model — The Relay Ownership Decision
+
+**Relays are physical equipment master data, but a relay's use by a specific scheme is not.** This is the resolution to the ambiguity flagged since the Codebase Discovery Report ("if a relay is genuinely scheme-agnostic physical equipment, it should be Master Data referenced by all scheme modules, not duplicated per scheme"). *(Note: "Relay Registry" in this document, and in ADR-007, refers to this section's own relay model within Equipment Registry — there is no separate Relay Registry module.)*
+
+The reasoning: a protection relay is a real physical device — it has a location, physical wiring to specific transformers and circuit terminals it can trip, and (in modern digital/numerical relays) frequently implements *multiple* protection functions simultaneously in one physical box. This physical reality — identity, location, and **which equipment it can trip** — is genuinely Master Data, no different in kind from a transformer's physical existence. What is **not** Master Data is a relay's *scheme-specific trip configuration*: which frequency or voltage threshold makes it act, and which scheme's stage it is currently configured to serve. That is scheme-owned business data, because the same physical relay may legitimately be referenced by more than one scheme module (a multifunction relay implementing both a UFLS element and a UVLS element), which is only expressible cleanly if the physical device and its per-scheme configuration are separate things owned by separate modules.
+
+**Relay modeling in this module is deliberately scoped to the relay/tripping function and its wired trip targets — nothing more.** `RelayDetail` carries `relay_name`, `target_voltage_kv` (the voltage level of the breakers this relay operates, a physical/wiring characteristic, not a trip threshold), and `is_active`, plus, via `RelayControlledEquipment`, the mandatory set of other `Equipment` rows it is physically wired to control. **For circuit-type equipment, a `RelayControlledEquipment` link always targets a specific `CircuitTerminal`-backed `Equipment` row, never a `Circuit`** (§7.5, §7.7; ADR-007 §5 Workflow A, §6). This is not merely a modeling convenience — it is the only choice consistent with §9 rule 7 (a relay may only control equipment at its own substation): since a relay lives at exactly one substation, and a `Circuit` may have a terminal at that substation, referencing that specific `CircuitTerminal` is the sole way to express, unambiguously, which physical breaker the relay operates, without any risk of a relay appearing to control a terminal at a substation it does not physically reach.
+
+`RelayDetail` carries **no** frequency threshold, voltage threshold, time delay, or any concept of "which scheme uses this" (those remain scheme-owned, as above), and it carries **no manufacturer, model, or firmware version as required data** — a site engineer working the relay/tripping function has everything this module requires without ever entering that information. Manufacturer, model, firmware version, and serial number *may* be recorded, using the same optional metadata fields available to any `Equipment` row (§7.1, §11). Once scheme modules migrate to circuit-level references (§7.11), each scheme's own assignment records which `relay_id` it uses for a given stage — that reference, and the threshold/delay it implies, remains entirely the scheme module's own business data.
+
+### 7.9 Bay ID / Alias History
+
+**Bay ID history is a generic capability of the `Equipment` backbone, not limited to any one equipment type.** `EquipmentAlias` applies to any `Equipment` row regardless of type, carrying `alias_bay_id`, `valid_from`, and a nullable `valid_to` (null = the alias that was in effect immediately before the current one) — the same validity-window pattern already established for Substation Registry's `substation_alias` and Critical Infrastructure's `CriticalAssetSubstation`.
+
+When `Equipment.bay_id` changes, the previous value is closed out into a new `EquipmentAlias` row (`valid_to` set to the change timestamp) before the new value is written — never silently overwritten (CLAUDE.md §5.2).
+
+**Cascading effect of a `Circuit.bay_number` change.** Because a `CircuitTerminal`-typed `Equipment` row's computed `bay_id` is derived from `Circuit.bay_number` (§7.6: `{substation_mnemonic}_{circuit.bay_number}`), a change to `Circuit.bay_number` itself (e.g. renumbering "Line 1" to "Line 3") changes **every** terminal's computed `bay_id` simultaneously. This must be executed as a single, atomic service-layer operation that produces one new `EquipmentAlias` row per affected terminal, in the same transaction, at the same timestamp — never as independent, terminal-by-terminal edits that could leave terminals of the same circuit briefly (or permanently, on error) reporting inconsistent bay identifiers. Bay-related changes — at either the `Circuit` or `CircuitTerminal` level — are audited with particular emphasis (§14), given their direct effect on the PSS/E reconciliation described in §7.10.
+
+### 7.10 Relationship to PSS/E TopologyVersion and EquipmentTopologyMap
+
+**Equipment Registry does not own the equipment-to-topology mapping.** PSS/E Integration owns `EquipmentTopologyMap`, scoped per `TopologyVersion` (since a piece of equipment's correlation to a specific topology element could differ across topology versions, e.g. after renumbering), holding a clean foreign key to `equipment_id` — specifically, **a `CircuitTerminal`-backed `equipment_id`**, matched per terminal, not per circuit (ADR-006 §6–§9; ADR-007 §6, §12 item 5).
+
+**Matching occurs at the terminal level because that is the level at which real PSS/E structural data is itself terminal-specific.** A PSS/E branch has a "from" bus and a "to" bus; each corresponds to one substation's own electrical connection point. Matching Equipment Registry's data at the same granularity — each `CircuitTerminal`'s own bay identifier (current value, then historical `EquipmentAlias` entries, §7.9) matched against the newly imported `TopologyVersion` — produces a clean, unambiguous correspondence. Matching at the `Circuit` level instead would require an artificial, and potentially lossy, aggregation step before any comparison to PSS/E's inherently per-endpoint data could even be attempted.
+
+**Three outcomes per terminal**, per the reconciliation model ADR-006 already specified and this document now restates as binding for Phase 3/4 implementation:
+
+1. **Clean match, consistent endpoint.** The imported branch element's electrical endpoint agrees with the terminal's declared circuit membership. No action needed.
+2. **Unmatched.** No PSS/E element resolves against this terminal's current bay identifier or its alias history. Reported as an unmatched-equipment warning on the triggering `RawFileImportBatch`, surfaced for engineer review, never silently dropped, never blocking the rest of the import.
+3. **Discrepancy.** A candidate is found, but the electrically-implied relationship conflicts with what this terminal's circuit membership declares. **Never triggers an automatic write to Equipment Registry, in either direction.** Requires an authenticated, authorized engineer to explicitly resolve it as either *accept as a genuine network change* (an ordinary, audited edit through Equipment Registry's own service layer) or *reject as a data/import error* (Equipment Registry unchanged; the discrepancy record itself retained permanently as part of that import batch's audit trail).
+
+A `Circuit`'s effective correlation to PSS/E — needed whenever a scheme assignment referencing that `Circuit` must be resolved to a cut-set of PSS/E elements (§7.7, §7.11) — is the **union of its terminals' individual, independently-matched `EquipmentTopologyMap` entries**. This union is computed at query time by Network Model or PSS/E Integration's own service layer; it is never stored redundantly on `Circuit`, to avoid a second place that correlation could drift out of sync with its terminals' own, individually-maintained mappings.
+
+Equipment Registry's role in this relationship is purely as the **referenced side**: it exposes a read-only equipment-lookup service interface (§13) that PSS/E Integration's import process calls to resolve a parsed bay identifier — checking both the current `bay_id` and historical `EquipmentAlias` entries — to a stable, `CircuitTerminal`-typed `equipment_id`. Equipment Registry never writes to, or holds a foreign key into, PSS/E Integration's tables.
+
+### 7.11 Defence Scheme Reference Target and Migration Path
+
+**UFLS, UVLS, and EMLS reference `Circuit` — never `CircuitTerminal` — when assigning a line to a scheme.** An engineer designing a scheme selects "PKLG–IGBK Line 1" as one object; the scheme module's own assignment data stores one `circuit_id` (ADR-007 §6, §10, §12 item 7). This confirms and refines the migration path already sketched, identically, in [ufls-module.md](ufls-module.md) §7.4 Open Question 2, [uvls-module.md](uvls-module.md), and [emls-module.md](emls-module.md):
+
+1. A migration adds a nullable `circuit_id` foreign key (referencing this module's `Circuit.circuit_id`) to each scheme module's own direct-assignment table (`ufls_direct_assignment`, `uvls_direct_assignment`, `emls_direct_assignment`) for circuit-type assignments, alongside — not replacing — the existing `equipment_reference` free-text column. Non-circuit equipment (e.g. a transformer referenced directly by a scheme) continues to use a plain `equipment_id` foreign key, unaffected by this refinement — the `circuit_id` target applies specifically, and only, to circuit-type assignments.
+2. A data migration attempts to resolve every existing `equipment_reference` value against Equipment Registry's `Circuit`/`CircuitTerminal` data, checking both current bay identifiers and historical `EquipmentAlias` entries (§7.9) — a free-text value recorded by an engineer months or years ago may match a *historical* alias rather than the equipment's current identifier.
+3. Assignments that resolve are populated with the real `circuit_id`; assignments that do not resolve are flagged for manual reconciliation, mirroring the "unmatched" reporting pattern already established in PSS/E Integration's own import process and in §7.10.
+4. `equipment_reference` is retained afterward as a legacy/fallback display value, not removed — historical assignments' originally-recorded intent is never lost (CLAUDE.md §5.2).
+5. Once populated, a scheme module's assignment may resolve circuit-level attributes (voltage level, line type, terminal substations) via `circuit_id`, in addition to the substation-level `substation_id` reference it already holds — both remain valid references simultaneously; circuit-level granularity refines, rather than replaces, the substation-level relationship.
+
+**This migration requires its own ADR before it is undertaken**, exactly as the earlier draft of this document already specified (Appendix) — because it simultaneously modifies the core assignment model of three already-built, already-ratified Defence Scheme modules (UFLS, UVLS, EMLS), which is the kind of cross-cutting change CLAUDE.md A13 requires an ADR for. This document defines the target shape (`circuit_id`) and the migration mechanism; it does not authorize executing it.
+
+**Open question, carried forward unresolved from ADR-007 §13 item 1:** whether a scheme assignment to a tee-off `Circuit` (three or more terminals) always implies "open every terminal," or whether a scheme must be able to reference a subset of a tee-off's terminals independently. This document does not answer that question — it is a prerequisite for the migration ADR above, not for this revision.
+
+### 7.12 Interconnectors
+
+Cross-border and cross-utility tie circuits require no new module, no new equipment type, and no deferral. `grid_owner` reference data already includes a `Tie-Line` category (`TIE_LINE`, seeded since Phase 1). An interconnector is structurally an ordinary `Circuit` whose far-end `CircuitTerminal` happens to reference a Substation Registry record owned under `grid_owner = Tie-Line` — the existing Substation Registry and Circuit/CircuitTerminal design already supports this without modification. `Circuit.is_interconnector` (§7.4) is an optional flag for reporting/dashboard convenience only, distinguishing tie-line circuits at a glance — it carries no structural or validation significance beyond that.
+
+### 7.13 Engineering Workflow Walkthroughs
+
+**Scenario A — PKLG–IGBK Line 1 and Line 2, relay wiring through to pocket detection.**
+
+1. Equipment Registry registers `Circuit` "PKLG–IGBK Line 1" (`bay_number = "1"`) with two `CircuitTerminal` rows — one at PKLG (`breaker_number = L25`), one at IGBK (`breaker_number = 805`) — and, separately, `Circuit` "PKLG–IGBK Line 2" (`bay_number = "2"`) with its own two terminals.
+2. An engineer registers Relay A at PKLG, wired via `RelayControlledEquipment` to PKLG's own `CircuitTerminal` for Line 1 — not to the `Circuit` itself, and not to IGBK's terminal, which the same-substation rule (§9 rule 7) forbids regardless.
+3. During UFLS scheme design, the engineer is shown circuits wired to relay assignments — resolved by Equipment Registry's own service layer traversing each wired `CircuitTerminal` up to its `circuit_id` (a single foreign-key lookup, §7.7) — and selects **PKLG–IGBK Line 1** and **PKLG–IGBK Line 2** as two `circuit_id` references in the scheme's own assignment data (§7.11).
+4. When the scheme's isolated-pocket effect is computed, each selected `Circuit` resolves, via the union of its terminals' `EquipmentTopologyMap` entries (§7.7, §7.10), to its own PSS/E branch. Network Model's cut-set for this assignment is the union of both circuits' resolved branches; opening both, PSS/E's topology graph determines that the IGBK/NKST pocket becomes isolated. Equipment Registry supplies only the circuit identity and its PSS/E correlation; Network Model performs the actual pocket determination, exactly as §4 requires.
+
+**Scenario B — ABBA–NUNI / SMRK / NLAI tee-off.**
+
+1. Equipment Registry registers a single `Circuit` (`bay_number` per local convention) with **three** `CircuitTerminal` rows: one at ABBA, one at SMRK, one at NLAI — the same entity shape as a two-terminal line, with a third row.
+2. A user viewing SMRK's own equipment listing sees SMRK's `CircuitTerminal` row directly; because that row carries the same `circuit_id` as ABBA's and NLAI's rows, "is SMRK part of the same registered circuit as ABBA and NLAI" is answered by Equipment Registry alone — a single foreign-key traversal (`Circuit` → its `CircuitTerminal` rows) — with no dependency on Network Model or PSS/E for this specific question.
+3. The broader question — "what is the full electrical corridor beyond what has been jointly registered as one circuit, and what does opening it isolate" — remains Network Model's responsibility, computed from PSS/E's topology graph, unchanged by this module's ability to answer the narrower membership question in step 2.
+4. Each terminal's own `breaker_number` (independently numbered at ABBA, SMRK, and NLAI) and each terminal's own `EquipmentTopologyMap` correlation are handled exactly as in a two-terminal circuit — no special-cased tee-off logic exists anywhere in this module.
 
 ---
 
 ## 8. Lifecycle / State Model
 
-`Equipment` and its type-specific detail rows are **not** governed by the Canonical Version Lifecycle (CLAUDE.md A3) — the same justification already established for Substation Registry ([substation-registry.md](substation-registry.md) §11.5) and every other Master Data entity in this series (CLAUDE.md §11.5: "current-state master data... single authoritative record"). This is physical asset data with a current-truth-plus-audit-log pattern, not approved engineering policy requiring a Draft/Review/Approve workflow.
+`Equipment`, `Circuit`, and their type-specific detail rows are **not** governed by the Canonical Version Lifecycle (CLAUDE.md A3) — the same justification already established for Substation Registry and every other Master Data entity in this series (CLAUDE.md §11.5: "current-state master data... single authoritative record"). **This revision introduces no versioning of any kind.** `Circuit` and `CircuitTerminal` follow the same current-state-plus-audit-log pattern as every other entity in this module — a Draft/Under Review/Approved/Active/Superseded/Archived workflow (CLAUDE.md A3) would be a category error here, exactly as it would for `Equipment` itself; history is preserved through `EquipmentAlias` and the audit log (§7.9, §14), not through versioned records.
 
-- `Equipment.operational_status_id` follows the same lifecycle values already defined by Core Platform's reference data and used by Substation Registry (Planned → Active → Decommissioned/Retired) — reused directly, not redefined (§6). Soft-delete only; an `Equipment` row is never physically deleted (CLAUDE.md §11.6).
-- `EquipmentAlias` entries use the `valid_from`/`valid_to` window described in §7.6 — not a formal state machine.
-- `RelayDetail.is_active` is a simple physical-device flag (is this relay currently commissioned/in service), independent of `operational_status_id` on the parent `Equipment` row in the same way [substation-registry.md](substation-registry.md) keeps physical commissioning status conceptually distinct from scheme participation — a relay can be `Active` as physical equipment while a scheme independently decides whether it currently assigns anything to it.
+- `Equipment.operational_status_id` and `Circuit.operational_status_id` follow the same lifecycle values already defined by Core Platform's reference data and used by Substation Registry (Planned → Active → Decommissioned/Retired) — reused directly, not redefined (§6). Soft-delete only; neither an `Equipment` row nor a `Circuit` row is ever physically deleted (CLAUDE.md §11.6).
+- `EquipmentAlias` entries use the `valid_from`/`valid_to` window described in §7.9 — not a formal state machine.
+- `RelayDetail.is_active` is a simple physical-device flag (is this relay currently commissioned/in service), independent of `operational_status_id` on the parent `Equipment` row — a relay can be `Active` as physical equipment while a scheme independently decides whether it currently assigns anything to it.
 - Every change is captured in the audit log (§14) regardless of the lack of an approval lifecycle.
 
 ---
 
 ## 9. Business Rules
 
-1. Every `Equipment` row belongs to exactly one substation (`substation_id`) — its "home" location; for an incoming branch, this is the near/"from" end.
+1. Every `Equipment` row belongs to exactly one substation (`substation_id`) — its "home" location; for a `CircuitTerminal`, this is that specific terminal's own substation.
 2. `equipment_type` is immutable once an `Equipment` row is created; a genuine type change is modeled as retiring one record and creating another, never an in-place conversion.
-3. Exactly one detail row (`LoadTransformerDetail`/`AutoTransformerDetail`/`IncomingBranchDetail`/`RelayDetail`) exists per `Equipment` row, and its type must match `equipment_type`.
-4. `bay_id` is unique among all *currently valid* `Equipment` records (no two pieces of equipment share an active bay ID simultaneously); a superseded `bay_id` remains unique within its own validity window via `EquipmentAlias` (§7.6).
-5. An `IncomingBranchDetail`'s `substation_id` (via its parent `Equipment`) and `to_substation_id` must reference two distinct substations.
-6. A `RelayControlledEquipment` link's controlled equipment must not itself have `equipment_type = Relay` — a relay controls transformers/branches, not other relays.
-7. A `RelayControlledEquipment` link's controlled equipment must belong to the same substation as the relay itself — a relay does not typically control equipment at a different physical location.
-8. **Bay ID changes are always tracked via `EquipmentAlias`, never overwritten in place** (§7.6, CLAUDE.md §5.2).
-9. **This module has no knowledge of "schemes," "stages," or "shedding assignments."** It answers only "what equipment exists, where, and how is it identified and wired" (§4). A scheme's use of a relay or transformer, and any threshold or delay that implies, is that scheme module's own business data (§7.5).
-10. Equipment Registry never writes to Substation Registry, PSS/E Integration, or any scheme module's tables — every cross-module write boundary in this series applies equally here (CLAUDE.md A1, [ADR-001](../adr/ADR-001-modular-monolith-and-module-communication.md)).
-11. Changing `operational_status_id`, `bay_id` (which produces a new `EquipmentAlias`), or any `RelayControlledEquipment` link requires an authenticated, named IAM user and is audited (§14).
-12. Cross-module consumers (PSS/E Integration, and eventually scheme modules) access this module's data exclusively through its read-only service interface (§13) — never through direct table access.
-13. **Manufacturer, model, firmware version, serial number, maintenance owner, and any other asset-management-adjacent metadata are optional fields and must never be made mandatory** by validation rules, API contracts, or downstream tooling (§7.1) — doing so would silently expand this module's scope toward enterprise asset management, which §4 explicitly excludes.
-14. This module does not model work orders, maintenance history, procurement, or asset ownership lifecycle, and must not be extended to do so without a new ADR revisiting the scope decision in §1/§4.
+3. Exactly one detail row (`LoadTransformerDetail`/`AutoTransformerDetail`/`CircuitTerminal`/`RelayDetail`) exists per `Equipment` row, and its type must match `equipment_type`.
+4. `bay_id` is unique among all *currently valid* `Equipment` records (no two pieces of equipment share an active bay ID simultaneously); a superseded `bay_id` remains unique within its own validity window via `EquipmentAlias` (§7.9).
+5. **A `Circuit` must have at least two `CircuitTerminal` rows to be considered complete and available for defence scheme assignment (§7.4, §7.11).** A `Circuit` with fewer than two terminals may exist transiently during data entry but must not be selectable by a scheme module or reported as an active circuit until this is satisfied.
+6. **All `CircuitTerminal` rows belonging to the same `Circuit` must reference distinct `SubstationVoltageYard`s** — no voltage yard may hold more than one terminal of the same circuit (generalizes the earlier two-terminal-only distinctness rule to N terminals; restated at voltage-yard, not substation, granularity per ADR-008 — §7.5a).
+6a. **Every `CircuitTerminal`'s `SubstationVoltageYard` must have the same `voltage_level_id` as its parent `Circuit`** (Phase 3 UAT follow-up). A `Circuit` represents one physical transmission line at one voltage class; a terminal at a different voltage level would represent a transformer connection, not a line terminal, and transformers are not modeled by this phase (§1/§4). Enforced on both circuit creation and terminal addition, at the service layer (not only the UI). **Interaction with rule 6:** combined with §10's "at most one `SubstationVoltageYard` row per `(substation_id, voltage_level_id)` pair," this rule means a single `Circuit` can no longer legitimately terminate twice at the *same* substation — doing so would require two yards at that substation sharing the circuit's one voltage level, which §10 already forbids. The multi-voltage-substation example in [ADR-008](../adr/ADR-008-substation-voltage-yard.md)'s Decision ("a circuit legitimately may terminate twice at the same multi-voltage substation") described rule 6's own scope correctly at the time, but relied on a circuit spanning two different voltage classes at the same site — a scenario this rule now correctly forecloses, since that is not a real single-voltage transmission line. See ADR-008's addendum note for the full reconciliation.
+7. A `RelayControlledEquipment` link's controlled equipment must not itself have `equipment_type = Relay` — a relay controls transformers/circuit terminals, not other relays.
+8. **A `RelayControlledEquipment` link's controlled equipment must belong to the same substation as the relay itself.** For circuit-type equipment, this means the link always targets a specific `CircuitTerminal`-backed `Equipment` row at the relay's own substation — **never a `Circuit` directly** (§7.5, §7.8; ADR-007 §6, §10).
+9. **Bay ID changes are always tracked via `EquipmentAlias`, never overwritten in place** (§7.9, CLAUDE.md §5.2), including the cascading, atomic update to every affected `CircuitTerminal` when `Circuit.bay_number` itself changes (§7.9).
+10. **This module has no knowledge of "schemes," "stages," or "shedding assignments."** It answers only "what equipment and circuits exist, where, and how are they identified and wired" (§4). A scheme's use of a relay, circuit, or transformer, and any threshold or delay that implies, is that scheme module's own business data (§7.8, §7.11).
+11. Equipment Registry never writes to Substation Registry, PSS/E Integration, or any scheme module's tables — every cross-module write boundary in this series applies equally here (CLAUDE.md A1, [ADR-001](../adr/ADR-001-modular-monolith-and-module-communication.md)).
+12. **Defence scheme assignment (UFLS/UVLS/EMLS) references `circuit_id`, never a specific `CircuitTerminal` or `breaker_number`, directly** (§7.7, §7.11; ADR-007 §6, §10) — for circuit-type assignments. Non-circuit equipment (transformers) continues to be referenced by plain `equipment_id`.
+13. Changing `operational_status_id`, `bay_id`/`bay_number` (which produces one or more new `EquipmentAlias` rows), or any `RelayControlledEquipment` link requires an authenticated, named IAM user and is audited (§14).
+14. Cross-module consumers (PSS/E Integration, and eventually scheme modules) access this module's data exclusively through its read-only service interface (§13) — never through direct table access.
+15. **Manufacturer, model, firmware version, serial number, maintenance owner, and any other asset-management-adjacent metadata are optional fields and must never be made mandatory** by validation rules, API contracts, or downstream tooling (§7.1) — doing so would silently expand this module's scope toward enterprise asset management, which §4 explicitly excludes.
+16. This module does not model work orders, maintenance history, procurement, or asset ownership lifecycle, and must not be extended to do so without a new ADR revisiting the scope decision in §1/§4.
 
 ---
 
 ## 10. Validation Rules
 
-- `bay_id` is computed per the documented convention for each type (`{substation_mnemonic}_T{transformer_no}` for load transformers, `{substation_mnemonic}_AT{transformer_no}` for auto-transformers, `{substation_mnemonic}_{to_substation_mnemonic}_{ckt_id}` for incoming branches, an administratively-assigned identifier for relays) and validated for uniqueness among currently-valid equipment (§9, rule 4).
-- `substation_id` (and, for incoming branches, `to_substation_id`) must reference existing Substation Registry records.
-- `operational_status_id` must reference a valid Core Platform reference row.
+- `bay_id` is computed per the documented convention for each type (`{substation_mnemonic}_T{transformer_no}` for load transformers, `{substation_mnemonic}_AT{transformer_no}` for auto-transformers, `{substation_mnemonic}_{circuit.bay_number}` for circuit terminals, an administratively-assigned identifier for relays) and validated for uniqueness among currently-valid equipment (§9, rule 4).
+- `substation_id` (on every `Equipment` row not of type `CircuitTerminal`, and on every `SubstationVoltageYard`) must reference an existing Substation Registry record. A `CircuitTerminal` references a `SubstationVoltageYard`, not `substation_id` directly (§7.5a; ADR-008).
+- `SubstationVoltageYard.voltage_level_id` must reference a valid Core Platform reference row; at most one `SubstationVoltageYard` row per `(substation_id, voltage_level_id)` pair (§7.5a).
+- `operational_status_id` (on `Equipment` and `Circuit`) must reference a valid Core Platform reference row.
+- `Circuit.voltage_level_id` and `Circuit.line_type_id` must reference valid Core Platform reference rows.
 - For transformers and auto-transformers, `hv_voltage` should be greater than or equal to `lv_voltage` where both are populated (a light physical-sanity check, not a hard architectural constraint given real-world exceptions may exist).
 - `EquipmentAlias.valid_to`, if set, must be greater than or equal to `valid_from`.
-- A `RelayControlledEquipment` link's controlled-equipment constraint (§9, rules 6–7) is validated at creation time.
-- A `Relay`-type `Equipment` row must have at least one `RelayControlledEquipment` link before it can be marked `is_active` — a relay with no wired trip target is not yet operationally meaningful (§7.5).
-- No validation rule may require a value for manufacturer, model, firmware version, serial number, maintenance owner, or other optional metadata fields (§9, rule 13) — these fields accept `NULL`/empty without constraint.
+- **A `Circuit` must have at least two `CircuitTerminal` rows before it may be marked usable for scheme assignment** (§9 rule 5). Because this is a minimum-cardinality-across-child-rows constraint, it cannot be expressed as a simple column-level database constraint; it must be enforced at the service layer on any operation that marks a `Circuit` active/assignable, and should additionally be checked by a periodic data-integrity job — the exact mechanism (service-layer check only, vs. a database trigger) is left as a Phase 3 implementation decision, not specified further here.
+- **`Circuit.bay_number` uniqueness scope is an open question, not resolved by this document** — carried forward unresolved from ADR-007 §13 item 2. Implementation must not assume global uniqueness (a different substation pair may legitimately have its own "Line 1"); the exact scoping rule (per substation-pair, per substation, or unconstrained with disambiguation coming entirely from the terminal set) must be settled before this validation can be implemented as a database constraint.
+- `CircuitTerminal.breaker_number` has **no cross-substation uniqueness requirement** — different substations independently number their own breakers and may legitimately reuse the same code.
+- A `RelayControlledEquipment` link's controlled-equipment constraint (§9, rules 7–8) is validated at creation time.
+- A `Relay`-type `Equipment` row must have at least one `RelayControlledEquipment` link before it can be marked `is_active` — a relay with no wired trip target is not yet operationally meaningful (§7.8).
+- No validation rule may require a value for manufacturer, model, firmware version, serial number, maintenance owner, or other optional metadata fields (§9, rule 15) — these fields accept `NULL`/empty without constraint.
 
 ---
 
@@ -219,16 +412,20 @@ Conceptual only — no migrations are defined here.
 
 | Table (conceptual) | Key columns (conceptual) | Notes |
 |---|---|---|
-| `equipment` | **Mandatory:** `equipment_id` (UUID PK), `substation_id` (FK, external, `ON DELETE RESTRICT`), `equipment_type`, `bay_id` (unique among current), `operational_status_id` (FK, external), `is_scheme_relevant` (boolean), `remarks` (text, nullable value but always-present field), `created_by_user_id`, `updated_by_user_id`, `created_at`, `updated_at`. **Optional (asset-management-adjacent, never required — §7.1, §9 rule 13):** `manufacturer`, `model`, `firmware_version`, `serial_number`, `maintenance_owner` (free text) | The common backbone (§7.1). UUID PK per CLAUDE.md A5. Optional columns accept `NULL` with no validation constraint. |
-| `load_transformer_detail` | `equipment_id` (PK/FK to `equipment`), `transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage`, `lv_breaker_number`, `capacity_mva`, `commissioning_date` | One row iff `equipment.equipment_type = 'LoadTransformer'`. Functional/operational attributes only — no asset-management fields duplicated here (those live once, optionally, on `equipment`, §7.1). |
-| `auto_transformer_detail` | `equipment_id` (PK/FK), `transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage` (required), `lv_breaker_number`, `capacity_mva`, `commissioning_date` | One row iff `equipment_type = 'AutoTransformer'`. |
-| `incoming_branch_detail` | `equipment_id` (PK/FK), `to_substation_id` (FK, external, `ON DELETE RESTRICT`), `ckt_id`, `breaker_number`, `commissioning_date` | One row iff `equipment_type = 'IncomingBranch'`. |
-| `relay_detail` | `equipment_id` (PK/FK), `relay_name`, `target_voltage_kv`, `is_active` | One row iff `equipment_type = 'Relay'`. Function/tripping attributes only — no threshold/delay/scheme fields (§7.5), and no manufacturer/model/firmware fields (those are the shared, optional `equipment` columns, not duplicated per type). |
-| `relay_controlled_equipment` | `id` (BIGINT PK), `relay_equipment_id` (FK to `equipment`), `controlled_equipment_id` (FK to `equipment`) | Both internal FKs into this module's own `equipment` table. Mandatory-supporting data for any active relay (§10). |
-| `equipment_alias` | `id` (BIGINT PK), `equipment_id` (FK), `alias_bay_id`, `valid_from`, `valid_to` (nullable) | Generalized alias history (§7.6). |
-| `equipment_registry_audit_log` | `log_id` (BIGINT PK), `entity_type`, `entity_id`, `field_name`, `old_value`, `new_value`, `changed_at`, `changed_by_user_id`, `change_reason` | Owned per CLAUDE.md A4. |
+| `equipment` | **Mandatory:** `equipment_id` (UUID PK), `substation_id` (FK, external, `ON DELETE RESTRICT`), `equipment_type`, `bay_id` (unique among current), `operational_status_id` (FK, external), `is_scheme_relevant` (boolean), `remarks` (text, nullable value but always-present field), `created_by_user_id`, `updated_by_user_id`, `created_at`, `updated_at`. **Optional (asset-management-adjacent, never required — §7.1, §9 rule 15):** `manufacturer`, `model`, `firmware_version`, `serial_number`, `maintenance_owner` (free text) | The common backbone (§7.1). `equipment_type` now includes `CircuitTerminal` in place of the retired `IncomingBranch` value (Appendix). UUID PK per CLAUDE.md A5. |
+| `load_transformer_detail` | `equipment_id` (PK/FK to `equipment`), `transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage`, `lv_breaker_number`, `capacity_mva`, `commissioning_date` | One row iff `equipment.equipment_type = 'LoadTransformer'`. Unaffected by this revision. |
+| `auto_transformer_detail` | `equipment_id` (PK/FK), `transformer_no`, `hv_voltage`, `hv_breaker_number`, `lv_voltage` (required), `lv_breaker_number`, `capacity_mva`, `commissioning_date` | One row iff `equipment_type = 'AutoTransformer'`. Unaffected by this revision. |
+| `circuit` | `circuit_id` (UUID PK), `bay_number`, `voltage_level_id` (FK, external, `ON DELETE RESTRICT`), `line_type_id` (FK, external, `ON DELETE RESTRICT`), `is_interconnector` (boolean), `operational_status_id` (FK, external), `remarks`, `created_by_user_id`, `updated_by_user_id`, `created_at`, `updated_at` | **New** (§7.4). Circuit-level identity and metadata, independent of any one `equipment` row. |
+| `substation_voltage_yard` | `voltage_yard_id` (UUID PK), `substation_id` (FK, external, `ON DELETE RESTRICT`), `voltage_level_id` (FK, external, `ON DELETE RESTRICT`), `created_at`, `created_by_user_id`, `updated_at`, `updated_by_user_id`. **Optional:** `commissioning_date`, `latitude`, `longitude` (range- and pair-checked, mirroring `substation`'s own — Phase 3 UAT follow-up). Unique on `(substation_id, voltage_level_id)`. | **New** (§7.5a; ADR-008). One row per voltage level physically present at a substation. |
+| `circuit_terminal` | `equipment_id` (PK/FK to `equipment`), `circuit_id` (FK to `circuit`, `ON DELETE RESTRICT`), `voltage_yard_id` (FK to `substation_voltage_yard`, `ON DELETE RESTRICT`), `breaker_number`, `commissioning_date`, `remarks`, `updated_at`, `updated_by_user_id` | **New, replaces `incoming_branch_detail`** (Appendix); `voltage_yard_id` replaces a direct `substation_id` reference (ADR-008). One row iff `equipment_type = 'CircuitTerminal'`. Two or more rows share the same `circuit_id` for a single physical line (§7.5). |
+| `relay_detail` | `equipment_id` (PK/FK), `relay_name`, `target_voltage_kv`, `is_active` | One row iff `equipment_type = 'Relay'`. Unaffected by this revision. |
+| `relay_controlled_equipment` | `id` (BIGINT PK), `relay_equipment_id` (FK to `equipment`), `controlled_equipment_id` (FK to `equipment`) | Both internal FKs into this module's own `equipment` table. `controlled_equipment_id` may now resolve to a `circuit_terminal`-backed row (§7.8). Unaffected structurally by this revision. |
+| `equipment_alias` | `id` (BIGINT PK), `equipment_id` (FK), `alias_bay_id`, `valid_from`, `valid_to` (nullable) | Generalized alias history (§7.9). Unaffected structurally by this revision. |
+| `equipment_registry_audit_log` | `log_id` (BIGINT PK), `entity_type`, `entity_id`, `field_name`, `old_value`, `new_value`, `changed_at`, `changed_by_user_id`, `change_reason` | Owned per CLAUDE.md A4. `entity_type` now also covers `Circuit`. |
 
-**Cross-module constraints:** all foreign keys into `substation` and `user` are `ON DELETE RESTRICT`. Tables are written exclusively through this module's own service layer.
+**Core Platform reference table addition:** `line_type` (`id` SMALLINT PK per CLAUDE.md A5, `code`, `label`) — `Overhead`, `Cable`, `Submarine`, `Hybrid` — owned by Core Platform's reference data, alongside `voltage_level`/`region`/`state`/`grid_owner`/`operational_status`, not by this module (§6).
+
+**Cross-module constraints:** all foreign keys into `substation`, `voltage_level`, `line_type`, and `user` are `ON DELETE RESTRICT`. Tables are written exclusively through this module's own service layer.
 
 ---
 
@@ -237,9 +434,11 @@ Conceptual only — no migrations are defined here.
 APIs are external/UI-facing contracts (CLAUDE.md §13, A9); conceptual resource shape only.
 
 - `equipment` — list/retrieve across all types (filterable by `substation_id`, `equipment_type`, `operational_status`); type-specific detail returned nested per row.
-- `load-transformers`, `auto-transformers`, `incoming-branches`, `relays` — type-specific sub-resources for creation/editing, each ultimately backed by an `equipment` row plus its detail table.
-- `equipment/{id}/aliases` — read-only history of bay ID changes (§7.6).
-- `relays/{id}/controlled-equipment` — manage a relay's physical wiring to other equipment.
+- `load-transformers`, `auto-transformers`, `relays` — type-specific sub-resources for creation/editing, each ultimately backed by an `equipment` row plus its detail table.
+- `circuits` — create/list/retrieve `Circuit` records (filterable by `voltage_level`, `line_type`, `is_interconnector`, `operational_status`); returns the computed circuit name (§7.4) and its terminal count.
+- `circuits/{id}/terminals` — manage a circuit's `CircuitTerminal` rows (add/edit a terminal; each terminal creation is itself backed by a new `equipment` row of type `CircuitTerminal`).
+- `equipment/{id}/aliases` — read-only history of bay ID changes (§7.9).
+- `relays/{id}/controlled-equipment` — manage a relay's physical wiring to other equipment (transformers or specific `CircuitTerminal`-backed equipment, §7.8).
 
 **Contract requirements (CLAUDE.md A9):** pagination/filtering for collection endpoints; structured error responses; authentication/authorization per endpoint (§15); audit-relevant actions flagged (all writes).
 
@@ -252,14 +451,16 @@ APIs are external/UI-facing contracts (CLAUDE.md §13, A9); conceptual resource 
 Per CLAUDE.md A1 (module communication via in-process service-layer interfaces):
 
 **Equipment Registry exposes, for other modules to consume:**
-- A read-only equipment-lookup interface, resolving a bay identifier (current or historical, via `EquipmentAlias`) to a stable `equipment_id` — the primary interface PSS/E Integration's future `EquipmentTopologyMap` will call during import (§7.7).
-- A read-only equipment-by-substation listing interface — for Substation Registry's own detail views (mirroring the legacy MVP's `SubstationDetailSerializer` prefetching pattern) and for future scheme-module equipment-level assignment lookups (§7.8).
-- A read-only relay lookup, resolving a `relay_id` to its physical details and controlled-equipment set — for future scheme-module consumption once equipment-level relay assignment is adopted (§7.8).
+- A read-only equipment-lookup interface, resolving a bay identifier (current or historical, via `EquipmentAlias`) to a stable `equipment_id` — the primary interface PSS/E Integration's `EquipmentTopologyMap` calls during import, at the `CircuitTerminal` granularity (§7.10).
+- A read-only circuit-lookup interface, resolving a `circuit_id` to its full terminal set, computed circuit name, voltage level, and line type — the primary interface Defence Scheme modules will call once circuit-level assignment is adopted (§7.11), and the interface Compliance and Dashboard consume for reporting (§7.7).
+- A read-only equipment-by-substation listing interface — for Substation Registry's own detail views and for the "which circuits terminate at this substation" question (§7.13, Scenario B step 2).
+- A read-only relay lookup, resolving a `relay_id` to its physical details and controlled-equipment set — for future scheme-module consumption once equipment-level relay assignment is adopted (§7.11).
 
 **Equipment Registry consumes, from other modules' service layers — never their repositories directly:**
-- From Substation Registry: substation existence/validity checks for `substation_id`/`to_substation_id`.
+- From Substation Registry: substation existence/validity checks for every `Equipment.substation_id`.
+- From Core Platform: reference-data validity checks for `voltage_level_id`, `line_type_id`, `operational_status_id`.
 - From Core Platform (IAM): authorization checks for writes, user lookups for audit attribution.
-- Optionally, from PSS/E Integration: read-only current in-service status for display purposes only (e.g. showing whether a piece of equipment appears energized in the latest topology) — never stored, never authoritative for this module's own lifecycle status (§8).
+- Optionally, from PSS/E Integration: read-only current in-service status for display purposes only — never stored, never authoritative for this module's own lifecycle status (§8).
 
 Equipment Registry never calls a scheme module's service interface (§4), and no scheme module writes to this module's tables, per CLAUDE.md A1 and [ADR-001](../adr/ADR-001-modular-monolith-and-module-communication.md).
 
@@ -269,8 +470,8 @@ Equipment Registry never calls a scheme module's service interface (§4), and no
 
 Per CLAUDE.md §5.4 and A4, Equipment Registry owns and writes its own audit log, covering every owned entity in §5.
 
-- Every create, update, and status change on `Equipment` or its detail tables is recorded with who, when, what changed, and why.
-- **Bay ID changes are audited with particular emphasis**, given they directly affect the reconciliation described in §7.8 — a poorly-documented bay ID change could make future scheme-module migration or PSS/E Integration matching materially harder.
+- Every create, update, and status change on `Equipment`, `Circuit`, or their detail tables is recorded with who, when, what changed, and why.
+- **Bay-related changes are audited with particular emphasis**, given they directly affect the PSS/E reconciliation described in §7.10 — this now explicitly includes both a `CircuitTerminal`'s own bay identifier changing and a `Circuit.bay_number` change, the latter of which cascades to every affected terminal's computed `bay_id` in a single audited transaction (§7.9).
 - `RelayControlledEquipment` changes (a relay's physical wiring being added or removed) are audited — this is safety-relevant physical configuration, not routine metadata.
 - Audit history is append-only and never modified; audit log access is itself access-controlled (CLAUDE.md A10).
 
@@ -279,9 +480,9 @@ Per CLAUDE.md §5.4 and A4, Equipment Registry owns and writes its own audit log
 ## 15. Security Considerations
 
 - All GridDefence engineering data is sensitive by default (CLAUDE.md A10); TLS required outside local development.
-- Equipment Registry's data is engineering reference data broadly similar in sensitivity to Substation Registry's own — **not** subject to the stricter human read-access tier recommended for Critical Infrastructure ([critical-infrastructure-module.md](critical-infrastructure-module.md) §15), since knowing a substation's transformer inventory is materially less sensitive than knowing which substations serve national-security-critical loads.
-- Write access (creating/editing equipment, changing status, modifying relay wiring) requires an authenticated, named IAM user with an appropriate engineering-editor role — comparable in tier to Substation Registry's own write permissions, not the elevated admin-tier reserved for Critical Infrastructure or Cross-Scheme Compliance's rule configuration.
-- Module-to-module service calls (PSS/E Integration's future lookup calls, future scheme-module equipment resolution) are trusted internal code paths, not gated by per-request human permission checks — the same distinction already drawn explicitly in [critical-infrastructure-module.md](critical-infrastructure-module.md) §15.
+- Equipment Registry's data is engineering reference data broadly similar in sensitivity to Substation Registry's own — **not** subject to the stricter human read-access tier recommended for Critical Infrastructure, since knowing a substation's circuit/transformer inventory is materially less sensitive than knowing which substations serve national-security-critical loads.
+- Write access (creating/editing equipment or circuits, changing status, modifying relay wiring) requires an authenticated, named IAM user with an appropriate engineering-editor role — comparable in tier to Substation Registry's own write permissions.
+- Module-to-module service calls (PSS/E Integration's lookup calls, future scheme-module circuit resolution) are trusted internal code paths, not gated by per-request human permission checks.
 
 ---
 
@@ -289,11 +490,11 @@ Per CLAUDE.md §5.4 and A4, Equipment Registry owns and writes its own audit log
 
 Per CLAUDE.md §18 and A11, in priority order:
 
-1. **Business rule tests** — `bay_id` uniqueness among current equipment; exactly-one-detail-row-matching-type enforcement; `RelayControlledEquipment` constraints (no relay-controls-relay, same-substation requirement); a structural/architectural test confirming no table in this module has a foreign key into any scheme module's schema (§9 rule 9, mirroring the equivalent tests already specified in [network-model-module.md](network-model-module.md) §16 and [critical-infrastructure-module.md](critical-infrastructure-module.md) §16).
-2. **Engineering calculation / validation tests** — bay ID computation correctness per type; alias-history resolution correctness (both current and historical lookups succeeding, §7.7, §7.8).
+1. **Business rule tests** — `bay_id` uniqueness among current equipment; exactly-one-detail-row-matching-type enforcement; a `Circuit` cannot be marked scheme-assignable with fewer than two `CircuitTerminal` rows (§9 rule 5); all `CircuitTerminal` rows of the same `Circuit` reference distinct substations (§9 rule 6); `RelayControlledEquipment` constraints, including that a controlled `CircuitTerminal`-backed row must be at the relay's own substation (§9 rules 7–8); a structural/architectural test confirming no table in this module has a foreign key into any scheme module's schema (§9 rule 10).
+2. **Engineering calculation / validation tests** — bay ID computation correctness per type, including the `{substation_mnemonic}_{circuit.bay_number}` convention for circuit terminals (§7.6); the cascading `EquipmentAlias` update across all of a circuit's terminals when `Circuit.bay_number` changes (§7.9); alias-history resolution correctness (both current and historical lookups succeeding, §7.10, §7.11).
 3. **API contract tests** — request/response schema conformance; authorization enforcement.
 4. **Database migration tests** — required once actual migrations are authored.
-5. **UI behaviour tests** — required once an Equipment Registry frontend exists.
+5. **UI behaviour tests** — required once an Equipment Registry frontend exists, including a tee-off (three-or-more-terminal) `Circuit` rendering correctly (§7.13, Scenario B).
 
 Business rules and validation logic must not be merged without accompanying tests (CLAUDE.md A11).
 
@@ -301,11 +502,12 @@ Business rules and validation logic must not be merged without accompanying test
 
 ## 17. Future Extensions
 
-- **PSS/E `EquipmentTopologyMap`** — owned by PSS/E Integration, referencing this module's `equipment_id` (§7.7); the concrete realization of the Future Extension already reserved in [psse-integration-module.md](psse-integration-module.md) §17.
-- **Scheme-module equipment-level migration** (§7.8) — the concrete data/schema migration for UFLS/UVLS/EMLS; **requires its own ADR** before being undertaken (§7.8), not designed further here.
+- **PSS/E `EquipmentTopologyMap`** — owned by PSS/E Integration, referencing this module's `CircuitTerminal`-backed `equipment_id` values at per-terminal granularity (§7.10); the concrete realization of the Future Extension already reserved in [psse-integration-module.md](psse-integration-module.md) §17, now fully specified as binding for Phase 4.
+- **Scheme-module circuit-level migration** (§7.11) — the concrete data/schema migration for UFLS/UVLS/EMLS; **requires its own ADR** before being undertaken, not designed further here.
 - **Richer equipment types** — circuit breakers, current/voltage transformers (CTs/VTs), or other bay-level assets could be added as additional `equipment_type` values sharing the same `Equipment` backbone, without redesigning this module's core structure.
-- **Integration with an external enterprise asset management (EAM) system**, should the organisation operate one — a read-only correlation (e.g. resolving `equipment_id` against an external asset record by serial number) is the appropriate future shape, not building work-order, maintenance-history, or procurement functionality inside this module (§1, §4, §9 rule 14). Any such integration remains strictly optional and read-only from this module's side.
-- **Relay scheme-usage visibility** — once scheme modules migrate to equipment-level relay references (§7.8), a read-only Audit and Analytics capability could show "which schemes currently use this relay" by querying each scheme module's own data — Equipment Registry itself still never needs to know.
+- **Integration with an external enterprise asset management (EAM) system**, should the organisation operate one — a read-only correlation is the appropriate future shape, not building work-order, maintenance-history, or procurement functionality inside this module (§1, §4, §9 rule 16).
+- **Relay scheme-usage visibility** — once scheme modules migrate to circuit-level relay references (§7.11), a read-only Audit and Analytics capability could show "which schemes currently use this relay" by querying each scheme module's own data.
+- **Partial tee-off scheme assignment** — whether a scheme may assign to a subset of a tee-off `Circuit`'s terminals rather than the whole circuit, carried forward as unresolved from §7.11 and ADR-007 §13 item 1.
 
 ---
 
@@ -313,20 +515,55 @@ Business rules and validation logic must not be merged without accompanying test
 
 | Risk | Impact | Recommendation |
 |---|---|---|
-| The scheme-module equipment-level migration (§7.8) is a cross-cutting change touching three already-built modules simultaneously | Risk of inconsistent or partial migration across UFLS/UVLS/EMLS if undertaken informally | Require the dedicated ADR already flagged (§7.8) before starting; the ADR should define a single, coordinated migration plan covering all three modules together, not three independent efforts |
-| `bay_id` reconciliation against historical `EquipmentAlias` entries (§7.8) may still fail to resolve some legacy `equipment_reference` free-text values (typos, ambiguous historical records) | Some historical assignments could remain unresolved indefinitely | Mirror PSS/E Integration's own "unmatched" reporting pattern (§7.7) — surface unresolved assignments for manual reconciliation rather than blocking the migration on 100% automatic resolution |
-| A relay physically serving multiple schemes (§7.5) could create confusion if two scheme modules independently configure conflicting thresholds against the same physical device without realizing they share it | Operational miscoordination at a shared relay | Recommend this scenario be explicitly surfaced by a future Cross-Scheme Compliance extension or Dashboard view once equipment-level relay references exist (§17) — out of scope for this module itself, which has no visibility into scheme configuration by design |
-| Generalizing alias history to all equipment types (§7.6) is new relative to the legacy MVP's incoming-branch-only precedent | Slightly more schema than the MVP had for transformers, for a benefit (transformer renumbering history) that may prove rarely used in practice | Acceptable, low-cost consistency given the pattern is already established and reused three times elsewhere in this series; monitor actual usage before considering removal |
-| Scope creep toward enterprise asset management over time (e.g. a future contributor adds a "next maintenance date" field because it seems convenient) | Would silently expand this module beyond what grid system operators need, duplicating or competing with a real EAM system | Treat §4's EAM exclusion and §9 rules 13–14 as a hard boundary requiring a new ADR to cross, not a soft guideline; any proposal to add maintenance/procurement/ownership-lifecycle fields should be rejected at review unless that ADR exists |
+| The scheme-module circuit-level migration (§7.11) is a cross-cutting change touching three already-built modules simultaneously | Risk of inconsistent or partial migration across UFLS/UVLS/EMLS if undertaken informally | Require the dedicated ADR already flagged (§7.11) before starting; the ADR should define a single, coordinated migration plan covering all three modules together |
+| `Circuit.bay_number` uniqueness scope is not yet resolved (§10) | Implementation could pick an arbitrary scoping rule that later proves too strict (blocking legitimate re-use of "Line 1" between different substation pairs) or too loose (allowing genuine duplicate confusion) | Resolve explicitly, with real Malaysian/TNB naming examples, before authoring the Phase 3 migration — do not default silently to global uniqueness |
+| The minimum-two-terminal `Circuit` completeness rule (§9 rule 5) is not database-enforceable as a simple constraint | A service-layer-only check could be bypassed by a bug or a future direct-write path, leaving an incomplete circuit marked assignable | Enforce at the service layer on every status transition to "assignable," and add a periodic data-integrity check; consider a database trigger if the ORM/migration tooling makes one low-cost once Phase 3 implementation begins |
+| Bay-identifier reconciliation against historical `EquipmentAlias` entries (§7.11) may still fail to resolve some legacy `equipment_reference` free-text values | Some historical assignments could remain unresolved indefinitely | Mirror PSS/E Integration's own "unmatched" reporting pattern (§7.10) — surface unresolved assignments for manual reconciliation rather than blocking the migration on 100% automatic resolution |
+| A relay physically serving multiple schemes (§7.8) could create confusion if two scheme modules independently configure conflicting thresholds against the same physical device without realizing they share it | Operational miscoordination at a shared relay | Recommend this scenario be explicitly surfaced by a future Cross-Scheme Compliance extension or Dashboard view once circuit-level relay references exist (§17) |
+| A tee-off `Circuit`'s scheme-assignment semantics (whole-circuit vs. partial-terminal) remain unresolved (§7.11, §17) | A Phase 3 implementer could silently pick an assumption that later proves wrong for a real three-way tee | Flag explicitly in the migration ADR (§7.11) as a question that must be answered before circuit-level scheme assignment ships, not discovered after |
+| Scope creep toward enterprise asset management over time | Would silently expand this module beyond what grid system operators need, duplicating or competing with a real EAM system | Treat §4's EAM exclusion and §9 rules 15–16 as a hard boundary requiring a new ADR to cross |
+
+---
+
+## 19. Glossary
+
+| Term | Definition |
+|---|---|
+| **Circuit** | A physical transmission line as a coherent whole, connecting two or more substations. The canonical engineering reference object for defence scheme assignment, compliance, and dashboard reporting (§7.4, §7.7; ADR-007 §6, §10). Not itself a PSS/E concept. |
+| **CircuitTerminal** | One voltage yard's end of a `Circuit`. One row per `Equipment` row of type `CircuitTerminal`. The canonical reference object for relay wiring and PSS/E topology correlation (§7.5, §7.7; ADR-007 §6, §10). References a `SubstationVoltageYard`, not a `Substation` directly (§7.5a; ADR-008). |
+| **SubstationVoltageYard** (a.k.a. **Switchyard**) | One voltage level physically present at a substation — a multi-voltage substation has more than one row. Owned by Equipment Registry, referencing Substation Registry and Core Platform reference data only (§7.5a; ADR-008). "Switchyard" is the user-facing term as of Phase 3 close-out; the model/table/API names are unchanged (ADR-008 addendum). |
+| **Bay Number** | The circuit-level human *designator* distinguishing one line from another between the same pair of substations — e.g. `1`, `2`, `Main`, `Transfer` (not a route description like "Line 1" — Phase 3 close-out). Owned by `Circuit.bay_number`, shared across all of a circuit's terminals (§7.6). |
+| **Breaker Number** | A terminal-specific, locally-assigned physical breaker identifier — e.g. "L25," "805," "Z1230." Owned by `CircuitTerminal.breaker_number`, independently numbered at each terminal (§7.6). |
+| **Bay ID** | The computed, machine-facing technical identifier on the `Equipment` backbone (`{substation_mnemonic}_{circuit.bay_number}` for a circuit terminal), used for uniqueness enforcement and PSS/E bay-identifier matching — distinct from, and derived from, `Circuit.bay_number` (§7.1, §7.6, §7.9). |
+| **EquipmentTopologyMap** | Owned by PSS/E Integration, not this module. Correlates each `CircuitTerminal`'s bay identifier to the PSS/E topology element(s) it corresponds to in a given `TopologyVersion`, producing a clean-match, unmatched, or discrepancy outcome per terminal (§7.10). |
+| **Tee-off** | A `Circuit` with three or more `CircuitTerminal` rows, representing a multi-terminal line — modeled by the same entity shape as an ordinary two-terminal circuit, with no special mechanism (§7.5, §7.13). |
+| **Interconnector** | A `Circuit` whose far-end terminal is at a `Tie-Line`-owned Substation Registry record, representing a cross-border or cross-utility tie. Flagged via `Circuit.is_interconnector` for reporting convenience only (§7.12). |
+| **Discrepancy** | An `EquipmentTopologyMap` matching outcome where a candidate PSS/E element is found but its implied electrical relationship conflicts with a `CircuitTerminal`'s declared circuit membership. Requires mandatory, audited engineer review; never resolved automatically (§7.10). |
+
+---
+
+## Appendix: Superseded Design Decisions
+
+This appendix records where this revision's content differs from an earlier draft of this document or from [equipment-registry-connectivity-validation.md](equipment-registry-connectivity-validation.md), per this task's instruction to note such inconsistencies here rather than silently editing historical documents.
+
+1. **`IncomingBranchDetail` is superseded by `Circuit` + `CircuitTerminal`.** The earlier design modeled a circuit as a single row (one `breaker_number`, one `to_substation_id`), owned asymmetrically by whichever substation happened to hold the row. This could not represent terminal-specific breaker numbers or multi-terminal (tee-off) circuits. Superseded per [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) §12 items 1–3 and [equipment-registry-connectivity-validation.md](equipment-registry-connectivity-validation.md)'s Recommended Refinements 1–2.
+2. **The `equipment_type` value `IncomingBranch` is renamed to `CircuitTerminal`.** A generalization, not a cosmetic rename — it reflects a direction-neutral entity that did not exist in the earlier shape. Per the connectivity validation's Final Architecture Recommendation D.
+3. **Bay number field placement is corrected relative to the connectivity validation document's initial proposal.** That document's Workflow 3 treated the bay/circuit identifier as terminal-scoped, identically to breaker number. [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) §3 corrected this: `bay_number` ("Line 1"/"Line 2") is a **circuit-level** fact, shared across terminals by engineering convention; only `breaker_number` (and the derived, computed `bay_id`) are genuinely terminal-level. This document implements the corrected placement (§7.6). The connectivity validation document itself is left unedited, per this task's constraints — this entry is the authoritative correction.
+4. **The equipment-level scheme-assignment migration target is refined from generic `equipment_id` to `circuit_id`.** The earlier draft of this document's §7.8 (now §7.11) described UFLS/UVLS/EMLS migrating to a generic `equipment_id` reference. [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) §12 item 7 refines this: circuit-type assignments target `circuit_id` specifically; non-circuit equipment (transformers) continues to use plain `equipment_id`, unaffected.
+5. **`CircuitTerminalDetail` (the connectivity validation's placeholder name) is finalized as `CircuitTerminal`**, dropping the "Detail" suffix, reflecting its elevation to a genuine, independently-referenced domain object rather than a satellite detail table — per [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) §7, §8.
+6. **`CircuitTerminal` connects to a `SubstationVoltageYard`, not directly to a `Substation`.** Found during Phase 3 UAT: a direct `substation_id` reference cannot express which voltage yard of a multi-voltage substation a circuit terminates at. `SubstationVoltageYard` (§7.5a) is a new Equipment-Registry-owned entity; business rule 6 (§9) is restated at voltage-yard granularity, not substation granularity. Per [ADR-008](../adr/ADR-008-substation-voltage-yard.md).
+7. **`bay_number` is a short designator (`1`, `Main`), not a full display label (`Line 1`).** UAT found users unsure whether to enter "1" or "Line 1" for `bay_number`, since earlier examples throughout this document (§7.4, §7.6, and the illustrative walkthroughs in §7.9/§7.11/§7.13) used the "Line 1" convention. `bay_number` remains free text — no numeric-only validation is introduced, since real bay designators are frequently non-numeric (`Main`, `Transfer`). Phase 3 close-out; §7.4, §7.6 carry the corrected semantics and examples.
+8. **The computed circuit name no longer includes `bay_number`, and terminal mnemonics are sorted, not joined in entry order.** Two defects found in the same UAT pass: (1) a circuit name like "PKLG–IGBK Line 1" displayed next to a separate `bay_number` field ("Line 1") looked duplicated; (2) mnemonics joined in terminal-insertion order meant the same physical circuit could display as "PKLG–IGBK" or "IGBK–PKLG" depending on which terminal was entered first. Both are corrected in §7.4: the canonical name is the sorted (case-insensitive), terminal-mnemonics-only route, computed identically regardless of entry order, with `bay_number` shown only as its own, separately-labeled field. No PSS/E or other documented engineering naming convention existed for terminal ordering, so alphabetical-by-mnemonic was adopted as the default.
+9. **"Switchyard" is the user-facing term for what this document and the codebase still call `SubstationVoltageYard` internally.** Reviewed at Phase 3 close-out: as future entities (busbars, bus couplers, breakers, disconnectors, transformers, reactors, capacitors) are added, "voltage yard" becomes an increasingly awkward term for what is, physically, a switchyard. The model/table/column/API names (`SubstationVoltageYard`, `substation_voltage_yard`, `voltage_yard_id`, `/api/v1/voltage-yards`) are deliberately **not** renamed — the churn (a table rename, its FKs, every reference across two modules and three ADRs) was judged not worth it for a naming-only change. UI labels, buttons, and user-facing error messages now say "Switchyard"; this document uses "Voltage Yard / Switchyard" going forward to bridge old and new terminology. See ADR-008's addendum for the full reasoning.
+
+No change recorded here reopens ADR-006's module-ownership decision, or any part of this document not listed above.
 
 ---
 
 ## Recommended Next Architecture Document
 
-**IAM module.**
+**The equipment-level scheme assignment migration ADR** (§7.11) is now the most concrete, most clearly-scoped next step: this document defines exactly what that ADR must decide (a coordinated, single migration plan adding `circuit_id` to `ufls_direct_assignment`/`uvls_direct_assignment`/`emls_direct_assignment`, alongside the existing `equipment_reference` reconciliation mechanism), and it is a hard prerequisite for UFLS/UVLS/EMLS to consume Phase 3's design end-to-end.
 
-Every module in this entire series — Substation Registry, PSS/E Integration, Network Model, UFLS, UVLS, EMLS, Critical Infrastructure, Cross-Scheme Compliance, and now Equipment Registry — references `user_id` for accountability and calls into IAM's service layer for authorization, yet IAM itself is the one foundational module that has never received the full Canonical Module Architecture Document Template treatment every other module has. [ADR-002](../adr/ADR-002-identity-and-access-management.md) ratified IAM's *ownership* of Users, Roles, Permissions, and external identity mappings, but not the full detail — Role/Permission database design, lifecycle, service interface contract, security model for managing authorization itself — that a proper module document specifies. Completing this closes the one remaining gap in an otherwise fully-architected foundational layer, and is a prerequisite of substance (not just form) for the equipment-level migration ADR flagged in §7.8, which will itself need to reference specific IAM roles/permissions precisely.
+**IAM module** remains a very strong, arguably comparably urgent alternative, unchanged from the prior recommendation: every module in this series references `user_id` for accountability and calls into IAM's service layer for authorization, yet IAM itself has never received the full Canonical Module Architecture Document Template treatment every other module has.
 
-**Implementation planning document** is a very strong, arguably comparably urgent alternative: across eleven architecture documents and five ADRs, GridDefence now has a substantially complete design for its foundational layer, its network/topology layer, all three Defence Scheme modules, and its cross-cutting compliance mechanism. At this scale, continuing to add architecture documents without pausing to sequence actual build work risks analysis running further ahead of implementation than is useful. Once IAM's module document closes the last foundational gap, an implementation planning document — sequencing phases, dependencies, and the several ADRs this series has flagged as still outstanding (`Superseded → Active` reactivation, the equipment-level migration, Rule 2's manual-invocation severity policy) — becomes the natural next step.
-
-**UVLS/EMLS refinement** and **Dashboard module** remain valuable but lower urgency: neither is blocked by, nor blocks, IAM's completion, and both were already reasoned about as secondary recommendations in [cross-scheme-compliance-module.md](cross-scheme-compliance-module.md) and [emls-module.md](emls-module.md) respectively.
+**`EquipmentTopologyMap`'s own detailed design**, as a focused addition to [psse-integration-module.md](psse-integration-module.md), is the third clear candidate — this document has specified its required behaviour in full (§7.10), but psse-integration-module.md itself still only names it as a Future Extension; formalizing it there, at the same level of section-by-section detail this document now has, is the natural companion piece before Phase 4 implementation begins.

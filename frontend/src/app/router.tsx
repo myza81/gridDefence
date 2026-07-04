@@ -2,6 +2,9 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { AppShell } from "../components/layout/AppShell";
 import { StatusPage } from "../components/layout/StatusPage";
+import { CircuitCreatePage } from "../modules/equipment_registry/pages/CircuitCreatePage";
+import { CircuitDetailPage } from "../modules/equipment_registry/pages/CircuitDetailPage";
+import { CircuitListPage } from "../modules/equipment_registry/pages/CircuitListPage";
 import { LoginPage } from "../modules/iam/pages/LoginPage";
 import { PermissionsPage } from "../modules/iam/pages/PermissionsPage";
 import { RolesPage } from "../modules/iam/pages/RolesPage";
@@ -15,8 +18,8 @@ import { SubstationListPage } from "../modules/substation_registry/pages/Substat
  * Root route table. Each business module registers its own routes here once
  * it exists (docs/architecture/implementation-plan.md §3). IAM (Phase 1)
  * adds /login plus its protected management pages; Substation Registry
- * (Phase 2) adds /substations. The landing/status route from Phase 0 stays
- * public.
+ * (Phase 2) adds /substations; Equipment Registry (Phase 3) adds /circuits.
+ * The landing/status route from Phase 0 stays public.
  */
 const router = createBrowserRouter([
   {
@@ -91,6 +94,36 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <SubstationDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/circuits",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <CircuitListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/circuits/new",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <CircuitCreatePage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/circuits/:circuitId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <CircuitDetailPage />
         </ProtectedRoute>
       </AppShell>
     ),

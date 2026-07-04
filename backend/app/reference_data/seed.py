@@ -37,7 +37,14 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.reference_data.models import GridOwner, OperationalStatus, Region, State, VoltageLevel
+from app.reference_data.models import (
+    GridOwner,
+    LineType,
+    OperationalStatus,
+    Region,
+    State,
+    VoltageLevel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +96,15 @@ OPERATIONAL_STATUSES: list[dict[str, object]] = [
     {"code": "MOTHBALLED", "label": "Mothballed", "is_terminal": False},
     {"code": "DECOMMISSIONED", "label": "Decommissioned", "is_terminal": True},
     {"code": "RETIRED", "label": "Retired", "is_terminal": True},
+]
+
+# Added by Phase 3 (Equipment Registry) — the four construction types named
+# explicitly in docs/architecture/equipment-registry-module.md §7.4, §7.6.
+LINE_TYPES: list[dict[str, str]] = [
+    {"code": "OVERHEAD", "label": "Overhead Line"},
+    {"code": "CABLE", "label": "Cable"},
+    {"code": "SUBMARINE", "label": "Submarine"},
+    {"code": "HYBRID", "label": "Hybrid"},
 ]
 
 
@@ -147,6 +163,17 @@ def _seed_operational_statuses(db: Session) -> int:
     return created
 
 
+def _seed_line_types(db: Session) -> int:
+    existing = {lt.code for lt in db.query(LineType).all()}
+    created = 0
+    for row in LINE_TYPES:
+        if row["code"] in existing:
+            continue
+        db.add(LineType(**row))
+        created += 1
+    return created
+
+
 def run_seed(db: Session) -> dict[str, int]:
     """Idempotently seed every Core Platform reference table. Safe to call
     on every startup/deploy — rows already present (matched by their unique
@@ -158,6 +185,7 @@ def run_seed(db: Session) -> dict[str, int]:
         "state": _seed_states(db),
         "grid_owner": _seed_grid_owners(db),
         "operational_status": _seed_operational_statuses(db),
+        "line_type": _seed_line_types(db),
     }
     db.commit()
     logger.info("Reference data seed complete: %s", counts)

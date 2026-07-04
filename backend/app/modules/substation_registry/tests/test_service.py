@@ -45,7 +45,6 @@ def _create(
     return service.create_substation(
         mnemonic=mnemonic,
         official_name=official_name,
-        voltage_level_id=ref.voltage_level_id,
         region_id=ref.region_id,
         state_id=ref.state_id,
         grid_owner_id=ref.grid_owner_id,
@@ -276,7 +275,7 @@ class TestOtherUniquenessRules:
 
 # --- Reference data validation --------------------------------------------------------
 class TestReferenceDataValidation:
-    def test_unknown_voltage_level_id_raises(
+    def test_unknown_region_id_raises(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
@@ -284,8 +283,7 @@ class TestReferenceDataValidation:
             service.create_substation(
                 mnemonic="SUB1",
                 official_name="Substation One",
-                voltage_level_id=99999,
-                region_id=reference_ids.region_id,
+                region_id=99999,
                 state_id=reference_ids.state_id,
                 grid_owner_id=reference_ids.grid_owner_id,
                 operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
@@ -296,6 +294,16 @@ class TestReferenceDataValidation:
                 remarks=None,
                 actor_user_id=actor_user_id,
             )
+
+    def test_create_no_longer_accepts_voltage_level_id(self) -> None:
+        """Deprecated (ADR-009) — voltage level is represented exclusively
+        through SubstationVoltageYard now; Substation Create must not even
+        be able to express it."""
+        import inspect
+
+        assert "voltage_level_id" not in inspect.signature(
+            SubstationService.create_substation
+        ).parameters
 
 
 # --- Status transition legality (closed allow-list per ADR-005) -----------------------

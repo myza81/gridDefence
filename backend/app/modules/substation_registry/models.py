@@ -61,10 +61,18 @@ class Substation(Base):
     mnemonic: Mapped[str] = mapped_column(String(10), nullable=False, unique=True)
     official_name: Mapped[str] = mapped_column(String(150), nullable=False, unique=True)
 
-    voltage_level_id: Mapped[int] = mapped_column(
+    # Deprecated (ADR-009): a substation's voltage level(s) are now
+    # represented exclusively by SubstationVoltageYard (ADR-008, owned by
+    # Equipment Registry). This column is nullable legacy data only — no
+    # longer read, written, or validated by any live code path in this
+    # module (see service.py). Retained rather than dropped so existing
+    # rows' historical values and substation_audit_log entries referencing
+    # this field remain meaningful without a harder, less reversible
+    # column-drop migration.
+    voltage_level_id: Mapped[int | None] = mapped_column(
         SmallInteger,
         ForeignKey("voltage_level.voltage_level_id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     region_id: Mapped[int] = mapped_column(
         SmallInteger, ForeignKey("region.region_id", ondelete="RESTRICT"), nullable=False

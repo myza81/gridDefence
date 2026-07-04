@@ -24,6 +24,7 @@ from app.modules.iam.models import User
 from app.reference_data.repository import ReferenceDataRepository
 from app.reference_data.schemas import (
     GridOwnerSummary,
+    LineTypeSummary,
     OperationalStatusSummary,
     RegionSummary,
     StateSummary,
@@ -66,3 +67,10 @@ def list_operational_statuses(
     db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
 ) -> list[OperationalStatusSummary]:
     return ReferenceDataRepository(db).list_operational_statuses()
+
+
+@router.get("/line-types", response_model=list[LineTypeSummary])
+def list_line_types(
+    db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> list[LineTypeSummary]:
+    return ReferenceDataRepository(db).list_line_types()

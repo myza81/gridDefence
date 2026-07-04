@@ -4,6 +4,18 @@ Status: Draft v1
 Owner: Solution Architecture
 Scope: Master Data Management (MDM) module for GridDefence
 
+> **Deprecation note (ADR-009):** this document's references to "voltage
+> level" as a single static attribute of `Substation` (§2, §6, §7, §10) are
+> superseded by [ADR-008](../adr/ADR-008-substation-voltage-yard.md)'s
+> `SubstationVoltageYard`, owned by Equipment Registry, and
+> [ADR-009](../adr/ADR-009-substation-voltage-level-deprecation.md)'s
+> deprecation of `Substation.voltage_level_id`. A substation's voltage
+> level(s) are now represented exclusively by its voltage yards (zero, one,
+> or many); `Substation.voltage_level_id` remains in the database as
+> nullable legacy data only and is no longer part of the API contract. The
+> historical text below is left as-is per this project's immutable-history
+> practice — read it as Phase 2's original design, not the current model.
+
 ---
 
 ## 1. Module Overview

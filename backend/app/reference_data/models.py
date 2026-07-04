@@ -68,3 +68,19 @@ class OperationalStatus(Base):
     code: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
     label: Mapped[str] = mapped_column(String(50), nullable=False)
     is_terminal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class LineType(Base):
+    """A circuit's physical construction type (overhead/cable/submarine/
+    hybrid). Added by Phase 3 (Equipment Registry) per
+    docs/architecture/equipment-registry-module.md §6, §7.4: owned by Core
+    Platform, following the exact `voltage_level`/`region`/`grid_owner`
+    pattern (CLAUDE.md §11.3), even though the concept it describes belongs
+    to Equipment Registry's own domain.
+    """
+
+    __tablename__ = "line_type"
+
+    line_type_id: Mapped[int] = mapped_column(_ReferenceKey, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(String(50), nullable=False)

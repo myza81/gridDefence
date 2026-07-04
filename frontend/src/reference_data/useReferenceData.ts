@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { referenceDataApi } from "./api";
 import type {
   GridOwnerSummary,
+  LineTypeSummary,
   OperationalStatusSummary,
   RegionSummary,
   StateSummary,
@@ -39,19 +40,25 @@ export function useReferenceData() {
     queryKey: ["reference-data", "operational-statuses"],
     queryFn: referenceDataApi.listOperationalStatuses,
   });
+  const lineTypes = useQuery({
+    queryKey: ["reference-data", "line-types"],
+    queryFn: referenceDataApi.listLineTypes,
+  });
 
   const isLoading =
     voltageLevels.isLoading ||
     regions.isLoading ||
     states.isLoading ||
     gridOwners.isLoading ||
-    operationalStatuses.isLoading;
+    operationalStatuses.isLoading ||
+    lineTypes.isLoading;
 
   const voltageLevelItems: VoltageLevelSummary[] = voltageLevels.data ?? [];
   const regionItems: RegionSummary[] = regions.data ?? [];
   const stateItems: StateSummary[] = states.data ?? [];
   const gridOwnerItems: GridOwnerSummary[] = gridOwners.data ?? [];
   const operationalStatusItems: OperationalStatusSummary[] = operationalStatuses.data ?? [];
+  const lineTypeItems: LineTypeSummary[] = lineTypes.data ?? [];
 
   return {
     isLoading,
@@ -60,10 +67,12 @@ export function useReferenceData() {
     states: stateItems,
     gridOwners: gridOwnerItems,
     operationalStatuses: operationalStatusItems,
+    lineTypes: lineTypeItems,
     voltageLevelsById: byId(voltageLevelItems, "voltage_level_id"),
     regionsById: byId(regionItems, "region_id"),
     statesById: byId(stateItems, "state_id"),
     gridOwnersById: byId(gridOwnerItems, "grid_owner_id"),
     operationalStatusesById: byId(operationalStatusItems, "operational_status_id"),
+    lineTypesById: byId(lineTypeItems, "line_type_id"),
   };
 }

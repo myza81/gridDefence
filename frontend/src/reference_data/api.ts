@@ -1,6 +1,7 @@
 import { apiClient } from "../api/client";
 import type {
   GridOwnerSummary,
+  LineTypeSummary,
   OperationalStatusSummary,
   RegionSummary,
   StateSummary,
@@ -16,4 +17,5 @@ export const referenceDataApi = {
   listGridOwners: () => apiClient.get<GridOwnerSummary[]>("/api/v1/reference-data/grid-owners"),
   listOperationalStatuses: () =>
     apiClient.get<OperationalStatusSummary[]>("/api/v1/reference-data/operational-statuses"),
+  listLineTypes: () => apiClient.get<LineTypeSummary[]>("/api/v1/reference-data/line-types"),
 };

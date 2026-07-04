@@ -13,7 +13,6 @@ export function SubstationCreatePage() {
 
   const [mnemonic, setMnemonic] = useState("");
   const [officialName, setOfficialName] = useState("");
-  const [voltageLevelId, setVoltageLevelId] = useState("");
   const [regionId, setRegionId] = useState("");
   const [stateId, setStateId] = useState("");
   const [gridOwnerId, setGridOwnerId] = useState("");
@@ -25,7 +24,6 @@ export function SubstationCreatePage() {
       substationRegistryApi.createSubstation({
         mnemonic,
         official_name: officialName,
-        voltage_level_id: Number(voltageLevelId),
         region_id: Number(regionId),
         state_id: Number(stateId),
         grid_owner_id: Number(gridOwnerId),
@@ -75,23 +73,6 @@ export function SubstationCreatePage() {
             required
             maxLength={150}
           />
-        </div>
-        <div>
-          <label htmlFor="voltage-level">Voltage level</label>
-          <br />
-          <select
-            id="voltage-level"
-            value={voltageLevelId}
-            onChange={(e) => setVoltageLevelId(e.target.value)}
-            required
-          >
-            <option value="">Select...</option>
-            {referenceData.voltageLevels.map((level) => (
-              <option key={level.voltage_level_id} value={level.voltage_level_id}>
-                {level.label}
-              </option>
-            ))}
-          </select>
         </div>
         <div>
           <label htmlFor="region">Region</label>

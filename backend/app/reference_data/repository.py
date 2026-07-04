@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.reference_data.models import (
     GridOwner,
+    LineType,
     OperationalStatus,
     Region,
     State,
@@ -54,6 +55,10 @@ class ReferenceDataRepository:
         stmt = select(OperationalStatus).order_by(OperationalStatus.label)
         return list(self.db.execute(stmt).scalars().all())
 
+    def list_line_types(self) -> list[LineType]:
+        stmt = select(LineType).order_by(LineType.label)
+        return list(self.db.execute(stmt).scalars().all())
+
     def get_voltage_level(self, voltage_level_id: int) -> VoltageLevel | None:
         if not _in_smallint_range(voltage_level_id):
             return None
@@ -78,3 +83,8 @@ class ReferenceDataRepository:
         if not _in_smallint_range(operational_status_id):
             return None
         return self.db.get(OperationalStatus, operational_status_id)
+
+    def get_line_type(self, line_type_id: int) -> LineType | None:
+        if not _in_smallint_range(line_type_id):
+            return None
+        return self.db.get(LineType, line_type_id)

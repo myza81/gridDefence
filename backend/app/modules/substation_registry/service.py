@@ -102,13 +102,10 @@ class SubstationService:
     def _require_reference_data(
         self,
         *,
-        voltage_level_id: int,
         region_id: int,
         state_id: int,
         grid_owner_id: int,
     ) -> None:
-        if self.reference_data.get_voltage_level(voltage_level_id) is None:
-            raise ReferenceDataNotFoundError("voltage_level_id", voltage_level_id)
         if self.reference_data.get_region(region_id) is None:
             raise ReferenceDataNotFoundError("region_id", region_id)
         if self.reference_data.get_state(state_id) is None:
@@ -161,7 +158,6 @@ class SubstationService:
         *,
         mnemonic: str,
         official_name: str,
-        voltage_level_id: int,
         region_id: int,
         state_id: int,
         grid_owner_id: int,
@@ -179,7 +175,6 @@ class SubstationService:
             self._check_psse_bus_number_available(psse_bus_number)
         self._check_geolocation_pair(latitude, longitude)
         self._require_reference_data(
-            voltage_level_id=voltage_level_id,
             region_id=region_id,
             state_id=state_id,
             grid_owner_id=grid_owner_id,
@@ -193,7 +188,6 @@ class SubstationService:
                 substation_id=uuid.uuid4(),
                 mnemonic=mnemonic,
                 official_name=official_name,
-                voltage_level_id=voltage_level_id,
                 region_id=region_id,
                 state_id=state_id,
                 grid_owner_id=grid_owner_id,
@@ -219,16 +213,18 @@ class SubstationService:
         self,
         substation_id: uuid.UUID,
         *,
-        # mnemonic/official_name/voltage_level_id/region_id/state_id/
-        # grid_owner_id are never-null business fields: `None` unambiguously
-        # means "not supplied, leave unchanged." psse_bus_number/latitude/
-        # longitude/commissioned_date/remarks are genuinely nullable
-        # (clearing them is a valid request), so they default to the `...`
-        # (Ellipsis) sentinel instead — "not supplied" and "explicitly set
-        # to null" must stay distinguishable for those fields.
+        # mnemonic/official_name/region_id/state_id/grid_owner_id are
+        # never-null business fields: `None` unambiguously means "not
+        # supplied, leave unchanged." psse_bus_number/latitude/longitude/
+        # commissioned_date/remarks are genuinely nullable (clearing them is
+        # a valid request), so they default to the `...` (Ellipsis) sentinel
+        # instead — "not supplied" and "explicitly set to null" must stay
+        # distinguishable for those fields. voltage_level_id is deprecated
+        # (ADR-009) and no longer part of this method's update surface —
+        # SubstationVoltageYard (ADR-008) is the only way to change a
+        # substation's voltage level(s) now.
         mnemonic: str | None = None,
         official_name: str | None = None,
-        voltage_level_id: int | None = None,
         region_id: int | None = None,
         state_id: int | None = None,
         grid_owner_id: int | None = None,
@@ -268,19 +264,6 @@ class SubstationService:
                 actor_user_id=actor_user_id,
             )
             substation.official_name = official_name
-            changed = True
-
-        if voltage_level_id is not None and voltage_level_id != substation.voltage_level_id:
-            if self.reference_data.get_voltage_level(voltage_level_id) is None:
-                raise ReferenceDataNotFoundError("voltage_level_id", voltage_level_id)
-            self._audit_field_change(
-                substation_id=substation_id,
-                field_name="voltage_level_id",
-                old_value=substation.voltage_level_id,
-                new_value=voltage_level_id,
-                actor_user_id=actor_user_id,
-            )
-            substation.voltage_level_id = voltage_level_id
             changed = True
 
         if region_id is not None and region_id != substation.region_id:
@@ -456,7 +439,6 @@ class SubstationService:
             substation_id=substation.substation_id,
             mnemonic=substation.mnemonic,
             official_name=substation.official_name,
-            voltage_level_id=substation.voltage_level_id,
             region_id=substation.region_id,
             state_id=substation.state_id,
             grid_owner_id=substation.grid_owner_id,
@@ -479,7 +461,6 @@ class SubstationService:
         page_size: int,
         region_id: int | None = None,
         state_id: int | None = None,
-        voltage_level_id: int | None = None,
         grid_owner_id: int | None = None,
         operational_status_id: int | None = None,
         search: str | None = None,
@@ -489,7 +470,6 @@ class SubstationService:
             limit=page_size,
             region_id=region_id,
             state_id=state_id,
-            voltage_level_id=voltage_level_id,
             grid_owner_id=grid_owner_id,
             operational_status_id=operational_status_id,
             search=search,

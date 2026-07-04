@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../iam/AuthContext";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
+import { equipmentRegistryApi } from "../../equipment_registry/api";
 import { substationRegistryApi } from "../api";
 import type { SubstationSummary } from "../types";
 
@@ -38,12 +39,31 @@ export function SubstationListPage() {
       }),
   });
 
+  // Voltage level is no longer a Substation attribute (ADR-009) — it is
+  // represented exclusively by SubstationVoltageYard, owned by Equipment
+  // Registry. Composed client-side, not via a backend join: Substation
+  // Registry (Master Data) must never depend on Equipment Registry
+  // (Network Data), per CLAUDE.md A2/F2.
+  const voltageYardsQuery = useQuery({
+    queryKey: ["voltage-yards"],
+    queryFn: () => equipmentRegistryApi.listVoltageYards(),
+  });
+  const voltageYardLabelsBySubstationId = new Map<string, string[]>();
+  for (const yard of voltageYardsQuery.data ?? []) {
+    const existing = voltageYardLabelsBySubstationId.get(yard.substation_id) ?? [];
+    existing.push(yard.voltage_level_label);
+    voltageYardLabelsBySubstationId.set(yard.substation_id, existing);
+  }
+
   const columns = [
     columnHelper.accessor("mnemonic", { header: "Mnemonic" }),
     columnHelper.accessor("official_name", { header: "Name" }),
-    columnHelper.accessor("voltage_level_id", {
-      header: "Voltage",
-      cell: (info) => referenceData.voltageLevelsById.get(info.getValue())?.label ?? info.getValue(),
+    columnHelper.display({
+      id: "voltage_yards",
+      header: "Switchyards",
+      cell: (info) =>
+        (voltageYardLabelsBySubstationId.get(info.row.original.substation_id) ?? []).join(", ") ||
+        "—",
     }),
     columnHelper.accessor("region_id", {
       header: "Region",
