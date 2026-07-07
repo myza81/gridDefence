@@ -13,6 +13,18 @@ import { PermissionsPage } from "../modules/iam/pages/PermissionsPage";
 import { RolesPage } from "../modules/iam/pages/RolesPage";
 import { UsersPage } from "../modules/iam/pages/UsersPage";
 import { ProtectedRoute } from "../modules/iam/ProtectedRoute";
+import { BayViewPage } from "../modules/network_model/pages/BayViewPage";
+import { ConnectivityViewPage } from "../modules/network_model/pages/ConnectivityViewPage";
+import { NetworkOverviewPage } from "../modules/network_model/pages/NetworkOverviewPage";
+import { NetworkTraversalPage } from "../modules/network_model/pages/NetworkTraversalPage";
+import { SubstationExplorerDetailPage } from "../modules/network_model/pages/SubstationExplorerDetailPage";
+import { SubstationExplorerListPage } from "../modules/network_model/pages/SubstationExplorerListPage";
+import { PsseBatchDetailPage } from "../modules/psse_integration/pages/PsseBatchDetailPage";
+import { PsseCurrentStatusPage } from "../modules/psse_integration/pages/PsseCurrentStatusPage";
+import { PsseEquipmentTopologyMapPage } from "../modules/psse_integration/pages/PsseEquipmentTopologyMapPage";
+import { PsseImportHistoryPage } from "../modules/psse_integration/pages/PsseImportHistoryPage";
+import { PsseImportUploadPage } from "../modules/psse_integration/pages/PsseImportUploadPage";
+import { PsseOperationalContextInspectorPage } from "../modules/psse_integration/pages/PsseOperationalContextInspectorPage";
 import { SubstationCreatePage } from "../modules/substation_registry/pages/SubstationCreatePage";
 import { SubstationDetailPage } from "../modules/substation_registry/pages/SubstationDetailPage";
 import { SubstationListPage } from "../modules/substation_registry/pages/SubstationListPage";
@@ -22,7 +34,10 @@ import { SubstationListPage } from "../modules/substation_registry/pages/Substat
  * it exists (docs/architecture/implementation-plan.md §3). IAM (Phase 1)
  * adds /login plus its protected management pages; Substation Registry
  * (Phase 2) adds /substations; Equipment Registry (Phase 3) adds /circuits;
- * Transformer Registry (Phase 3.5) adds /transformers. The landing/status
+ * Transformer Registry (Phase 3.5) adds /transformers; PSS/E Integration
+ * (Phase 4) adds /psse-integration/*; the static Network Model (Phase 5B)
+ * adds /network-model/* — an engineering navigation interface, not a
+ * topology visualization (network-model-module.md §19). The landing/status
  * route from Phase 0 stays public.
  */
 const router = createBrowserRouter([
@@ -158,6 +173,126 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <TransformerDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/psse-integration/import",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <PsseImportUploadPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/psse-integration/import/inspect",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <PsseOperationalContextInspectorPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/psse-integration/history",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <PsseImportHistoryPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/psse-integration/batches/:batchId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <PsseBatchDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/psse-integration/current-status",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <PsseCurrentStatusPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/psse-integration/topology-versions/:topologyVersionId/equipment-map",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <PsseEquipmentTopologyMapPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <NetworkOverviewPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model/substations",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <SubstationExplorerListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model/substations/:substationId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <SubstationExplorerDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model/substations/:substationId/bays",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <BayViewPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model/substations/:substationId/connectivity",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <ConnectivityViewPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model/traversal",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <NetworkTraversalPage />
         </ProtectedRoute>
       </AppShell>
     ),

@@ -20,6 +20,13 @@ from __future__ import annotations
 import os
 from collections.abc import Generator
 
+# Must be set before `app.core.config.get_settings()` is ever called (the
+# `from app.main import app` import below triggers that indirectly) — RQ
+# jobs (PSS/E Integration, Phase 4) then run synchronously, in-process,
+# against a `fakeredis` connection (app.core.queue.get_redis_connection),
+# so the test suite needs no real Redis server or worker process.
+os.environ.setdefault("RQ_ASYNC", "false")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

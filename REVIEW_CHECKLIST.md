@@ -655,6 +655,94 @@ phase — never overwritten.
   reference-protection rejection, and the activation guard in a real browser before this phase is
   frozen/tagged.
 
+### Phase 4 — PSS/E Integration
+
+- **`backend/app/modules/psse_integration/models.py`** — `raw_file_import_batch` ↔
+  `topology_version` ↔ `load_snapshot` is a genuine 3-table foreign-key cycle, closed via
+  `use_alter=True` on the batch's two forward-pointing columns
+  (`fk_raw_file_import_batch_topology_version`/`fk_raw_file_import_batch_load_snapshot`). Review
+  for: this was caught only by directly attempting `Base.metadata.create_all()` and observing a
+  real `CircularDependencyError` — any future FK added between these three tables (or a fourth
+  table joining the cycle) must be re-verified the same way (`create_all` against a throwaway
+  SQLite engine), not assumed safe from the model definitions alone. Also review: no P/Q,
+  voltage-magnitude/angle, or in-service field exists anywhere on `TopologyBus`/`TopologyBranch`/
+  `TopologyTransformer` — a future PR adding one of these "for convenience" (e.g. to avoid a join)
+  would violate ADR-003's structural separation and must be rejected.
+- **`backend/app/modules/psse_integration/signature.py`** — `compute_topology_signature` is the
+  sole authority for "is this the same topology." Review for: any future field added to
+  `TopologyBus`/`TopologyBranch`/`TopologyTransformer` that is genuinely structural (not
+  operational state) must also be added to the corresponding `_canonical_*_line` function, or two
+  structurally different topologies will silently collide on the same signature and incorrectly
+  reuse a `TopologyVersion`. Conversely, no operational-state field should ever be added to these
+  canonicalization functions — doing so would make momentary state (which naturally varies between
+  otherwise-identical imports) incorrectly force a new `TopologyVersion` every time.
+- **`backend/app/modules/psse_integration/matching.py`** — the matching algorithm
+  (clean_match/unmatched/discrepancy) is this phase's own new design; the reconciled architecture
+  docs deliberately left the exact algorithm unspecified. Review for: any future change to the
+  candidate-selection or exact-match logic must preserve the "never guess" invariant — ambiguous
+  cases (multiple candidates, no exact `ckt_id` match) must always resolve to `discrepancy`, never
+  be silently picked by heuristic (e.g. "pick the first candidate," "pick the closest impedance").
+  This is the one place in the module where a plausible-looking "improvement" could quietly violate
+  ADR-006/ADR-007's mandatory-human-review requirement.
+- **`backend/app/modules/psse_integration/service.py`** — `resolve_discrepancy` deliberately never
+  writes to Equipment Registry (no cross-module repository/service call, no direct table write) —
+  an "accepted" discrepancy only records the engineer's classification on this module's own
+  `EquipmentTopologyMap` row. Review for: any future PR that adds a write-through to
+  `CircuitTerminal`/`Circuit` from this method (e.g. "auto-correct the voltage yard on accept")
+  must be rejected without a new ADR — Equipment Registry's real, current API has no method to edit
+  `CircuitTerminal.voltage_yard_id` after creation, and this module must never invent a bypass
+  around that immutability. Also review: `_commit_full_topology`'s topology-reuse branch builds
+  `branch_lookup`/`transformer_lookup` keyed by PSS/E bus **number** (via a `bus_number_by_id`
+  reverse-map from the already-persisted topology), matching the new-topology branch's own key
+  space exactly — a prior draft of this method keyed the reuse branch by internal database ids
+  instead, which would have silently produced zero `LoadSnapshotElementState` rows on every
+  topology-reuse commit; any future refactor of this method must keep both branches' lookup keys in
+  the same space.
+- **`backend/app/core/queue.py`** — `get_redis_connection()` returns a `fakeredis.FakeRedis()`
+  instance whenever `settings.rq_async` is `False`, never a real `redis.Redis` connection. Review
+  for: this branch must never be reachable when `rq_async=True` (production) — a future change that
+  loosens this condition (e.g. based on `environment` instead of `rq_async`) risks silently running
+  production against an in-memory fake queue with no persistence and no real worker process
+  consuming it.
+- **`backend/app/modules/psse_integration/jobs.py`** — the only file in this module that opens its
+  own `SessionLocal()` rather than receiving a request-scoped session via `Depends(get_db)`, since
+  RQ jobs run in a worker process outside any FastAPI request. Review for: any future job function
+  added here must open and close its own session the same way (never share a session across jobs,
+  never accept a session as a parameter) and must not call `db.commit()` from inside
+  `PsseIntegrationService` itself — the commit boundary belongs to the job wrapper, exactly as it
+  belongs to the router for synchronous endpoints.
+- **`backend/alembic/versions/0012_psse_integration.py`** — `psse_import_audit_log.entity_id` is
+  `String(80)`, not the more conventional-looking `String(64)` — this was corrected from an initial
+  `String(64)` after a real PostgreSQL run (not SQLite) raised `StringDataRightTruncation` on
+  `EquipmentTopologyMap`'s composite `"{topology_version_id}:{circuit_terminal_id}"` audit key (73
+  characters). Review for: this migration was edited in place before being committed to version
+  control (never previously merged), consistent with this project's rule on when in-place migration
+  edits are permitted — do not "helpfully" shrink this column back to 64 based on it looking
+  oversized; the composite key genuinely needs the extra width. More generally: any future audit
+  entry that composes multiple UUIDs into one `entity_id` string must be checked against this same
+  column width before being written, and any *new* composite-key pattern introduced elsewhere in
+  this codebase should be verified against real PostgreSQL, not assumed safe from SQLite alone —
+  this is the second phase in a row (see Phase 3.5/Phase 2's own PostgreSQL-only defects above) where
+  SQLite's flexible typing hid a real constraint violation.
+- **`backend/app/modules/psse_integration/raw_parser.py`** — designed and verified directly against
+  the two real sample files in `docs/samples/psse/`, per this phase's explicit mandate, not against
+  generic PSS/E documentation. Review for: any future change to LOAD DATA field-count handling
+  (`_STANDARD_LOAD_FIELD_COUNT`/`_ABBREVIATED_LOAD_FIELD_COUNT`/`_MINIMUM_LOAD_FIELD_COUNT`) must be
+  re-verified against both real sample files (`test_raw_parser.py`'s own integration tests read
+  them directly via a relative path, never a copy) — a plausible-looking fix based on the PSS/E
+  spec alone risks silently breaking parsing of the exact abbreviated/"no reading" shapes this
+  parser was built to tolerate. Section-boundary tracking is purely terminator-line counting, never
+  a fixed section-name list — do not "harden" this into a closed allow-list, which would break
+  parsing of any future PSS/E revision's differently-ordered or additional sections instead of
+  degrading gracefully to a warning.
+- **No manual browser UAT was performed** for this phase, for the same environment reason as every
+  prior phase (no browser automation tool available). Review for: exercise the full
+  upload → preview → commit → activate flow, and the EquipmentTopologyMap discrepancy-resolution
+  workflow, in a real browser against a real backend (with a real Redis/worker, not `fakeredis`)
+  before this phase is frozen/tagged — this is also the first phase to exercise a genuine
+  asynchronous job-polling UI, which automated RTL tests can only verify against mocked, instantly-
+  resolving job responses, not real network latency or a real worker process's timing.
+
 ### Future Phases
 
 Every subsequent phase must add its own subsection here, following the

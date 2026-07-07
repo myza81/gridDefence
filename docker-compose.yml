@@ -17,6 +17,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional (Phase 6: Execution Engine, docs/architecture/psse-integration
+  # -module.md §8.9c) — only needed when EXECUTION_MODE=queue. The `queue`
+  # Compose profile keeps it out of a plain `docker compose up`, matching
+  # EXECUTION_MODE's own "direct" default: a developer should not need
+  # Redis running just to bring the stack up. Start it explicitly with
+  # `docker compose --profile queue up` when queue mode is wanted.
+  redis:
+    image: redis:7-alpine
+    profiles: ["queue"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ./backend
@@ -25,12 +42,37 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://engineering_app:changeme@postgres:5432/engineering_platform}
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: ${BACKEND_PORT:-8000}
+      EXECUTION_MODE: ${EXECUTION_MODE:-direct}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
     depends_on:
       postgres:
+        condition: service_healthy
+
+  # RQ worker — runs PSS/E Commit jobs enqueued by the backend
+  # (app/core/execution.py's QueueExecutionEngine) when EXECUTION_MODE=queue.
+  # Optional, same `queue` profile as `redis` above — a worker with nothing
+  # enqueuing to it (the default, EXECUTION_MODE=direct) is dead weight, not
+  # a safety net. Shares the backend image; only the container command
+  # differs.
+  worker:
+    build:
+      context: ./backend
+    profiles: ["queue"]
+    command: ["python", "-m", "app.worker"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://engineering_app:changeme@postgres:5432/engineering_platform}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   frontend:

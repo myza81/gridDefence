@@ -8,6 +8,7 @@ holds engineering data, only deployment/runtime configuration.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -63,6 +64,30 @@ class Settings(BaseSettings):
     bootstrap_admin_username: str = "admin"
     bootstrap_admin_password: str = "change-me-immediately"
     bootstrap_admin_email: str | None = None
+
+    # PSS/E Integration (Phase 4) — Redis + RQ, introduced here per
+    # implementation-plan.md §4 (first module with genuinely heavy async
+    # computation: RAW file parsing/validation and EquipmentTopologyMap
+    # matching, per psse-integration-module.md §18's own risk note).
+    # `rq_async=False` is the test-environment escape hatch: the test suite
+    # sets this so `app.core.queue.enqueue(...)` runs the job function
+    # synchronously, in-process, against a `fakeredis` connection — no real
+    # Redis server or background worker needed for correctness tests
+    # (CLAUDE.md §18 tests business logic, not infrastructure plumbing).
+    redis_url: str = "redis://localhost:6379/0"
+    rq_async: bool = True
+
+    # Execution Engine (Phase 6 architecture refinement — app.core.execution)
+    # — configurable background execution. "direct" runs submitted work
+    # in-process, in the calling thread: no Redis, no RQ, no worker process
+    # required. This is the default, matching this project's own primary
+    # deployment target (a small engineering team, typically fewer than 10
+    # concurrent users, developing on company-managed Windows machines
+    # where installing Redis may not always be possible). "queue" enqueues
+    # via Redis+RQ exactly as before this refactor, for deployments that
+    # want genuine background execution across a separate worker process.
+    # See docs/architecture/psse-integration-module.md §8.9c.
+    execution_mode: Literal["direct", "queue"] = "direct"
 
     @property
     def is_development(self) -> bool:

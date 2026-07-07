@@ -94,6 +94,37 @@ async function request<TResponse>(path: string, init?: RequestInit): Promise<TRe
   return (await response.json()) as TResponse;
 }
 
+/**
+ * Multipart upload (PSS/E Integration's RAW file upload endpoints) —
+ * deliberately bypasses `request()`'s `Content-Type: application/json`
+ * default so the browser sets its own `multipart/form-data; boundary=...`
+ * header instead.
+ */
+async function requestForm<TResponse>(path: string, formData: FormData): Promise<TResponse> {
+  const token = authTokenProvider?.() ?? null;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: formData,
+  });
+
+  if (!response.ok) {
+    let detail: unknown;
+    try {
+      detail = await response.json();
+    } catch {
+      detail = undefined;
+    }
+    throw new ApiError(
+      extractErrorMessage(detail) ?? `Request to ${path} failed with status ${response.status}`,
+      response.status,
+      detail,
+    );
+  }
+
+  return (await response.json()) as TResponse;
+}
+
 export const apiClient = {
   baseUrl: API_BASE_URL,
   get: <TResponse>(path: string) => request<TResponse>(path, { method: "GET" }),
@@ -102,6 +133,7 @@ export const apiClient = {
   patch: <TResponse>(path: string, body?: unknown) =>
     request<TResponse>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   delete: <TResponse>(path: string) => request<TResponse>(path, { method: "DELETE" }),
+  postForm: <TResponse>(path: string, formData: FormData) => requestForm<TResponse>(path, formData),
 };
 
 export interface HealthResponse {

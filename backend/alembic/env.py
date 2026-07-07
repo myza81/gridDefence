@@ -18,6 +18,7 @@ from app.db.base import Base
 # --- Import every module's models here as modules are added -----------------
 from app.modules.equipment_registry import models as equipment_registry_models  # noqa: F401
 from app.modules.iam import models as iam_models  # noqa: F401
+from app.modules.psse_integration import models as psse_integration_models  # noqa: F401
 from app.modules.substation_registry import models as substation_registry_models  # noqa: F401
 from app.reference_data import models as reference_data_models  # noqa: F401
 

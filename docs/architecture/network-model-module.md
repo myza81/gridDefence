@@ -2,7 +2,17 @@
 
 Governing standard: [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) v1.1. This document follows the Canonical Module Architecture Document Template (CLAUDE.md **A8**).
 
-Related documents: [system-overview.md](system-overview.md), [domain-model.md](domain-model.md), [substation-registry.md](substation-registry.md), [psse-integration-module.md](psse-integration-module.md), [ufls-module.md](ufls-module.md), [ADR-000](../adr/ADR-000-architecture-principles.md), [ADR-001](../adr/ADR-001-modular-monolith-and-module-communication.md), [ADR-002](../adr/ADR-002-identity-and-access-management.md), [ADR-003](../adr/ADR-003-psse-topology-and-load-snapshot-separation.md).
+Related documents: [system-overview.md](system-overview.md), [domain-model.md](domain-model.md), [substation-registry.md](substation-registry.md), [equipment-registry-module.md](equipment-registry-module.md) (Phase 3, complete — owns `Circuit`/`CircuitTerminal` identity, the object a future scheme assignment references), [psse-integration-module.md](psse-integration-module.md), [ufls-module.md](ufls-module.md), [ADR-000](../adr/ADR-000-architecture-principles.md), [ADR-001](../adr/ADR-001-modular-monolith-and-module-communication.md), [ADR-002](../adr/ADR-002-identity-and-access-management.md), [ADR-003](../adr/ADR-003-psse-topology-and-load-snapshot-separation.md), [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md), [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) (specifies that a `Circuit`-level scheme assignment resolves to a cut-set via the union of its `CircuitTerminal`s' PSS/E correlations — see §9 rule 11, §13).
+
+**Reconciliation note (post-Phase-3):** this document predates Equipment Registry's Phase 3 implementation and ADR-006/ADR-007, and some of it still described Equipment Registry as future/unbuilt. Equipment Registry is now complete (`Circuit`/`CircuitTerminal`/`Transformer`/`TransformerTerminal`/`SubstationVoltageYard`). This revision corrects those references and adds the ADR-007-mandated note on how a `Circuit`-level assignment resolves to this module's own `CutSetDefinition` input (§9 rule 11, §13) — it does not redesign `CutSetDefinition`, `IslandAnalysisResult`, or any analysis algorithm, all of which remain exactly as originally specified.
+
+**Reconciliation note (Phase 5 — naming/scope tension, flagged for review, not silently resolved):** Phase 5 implemented a backend module also named `network_model` (`backend/app/modules/network_model/`), but it is **not** the module described by §1–§18 below. This section records what was actually built, why it was built under this name despite the apparent overlap, and how the two designs are intended to relate going forward. Nothing in §1–§18 has been changed, redesigned, or implemented against by Phase 5 — `CutSetDefinition`, `IslandAnalysisResult`, `ManualOverride`, and the PSS/E-topology-analysis capability they describe remain exactly as originally specified, and remain entirely unbuilt.
+
+- **What Phase 5 actually built:** a static, PSS/E-independent electrical connectivity model, derived directly and exclusively from Substation Registry and Equipment Registry (`Substation`, `SubstationVoltageYard`, `Circuit`/`CircuitTerminal`, `Transformer`/`TransformerTerminal`). It owns no tables of its own — it is a pure read-only query/composition service layer (`NetworkModelRepository`/`NetworkModelService`) — and answers four engineering questions: substation connectivity (which lines connect to a substation, and to which neighbouring substations), equipment relationships (a substation's transformer bays and line bays, grouped by function), electrical neighbours (the deduplicated neighbouring-substation set), and a generic, parameterised graph traversal (breadth-first reachability from a starting substation, with an `excluded_circuit_ids` parameter modelling "these lines are open" and an optional `max_depth`). It explicitly does **not** perform island/pocket detection, does not compute cut-sets, and does not read PSS/E Integration's `TopologyVersion`/`LoadSnapshot` data at all — see [`docs/architecture/psse-integration-module.md`](psse-integration-module.md) for how that data remains fully separate.
+- **Why this is not a contradiction of the Engineering Reference Library:** [`docs/engineering/04-domain-model.md`](../engineering/04-domain-model.md) and [`docs/engineering/02-engineering-concepts.md`](../engineering/02-engineering-concepts.md) never use the phrase "Network Model" — they describe a **Line Connectivity Registry** as part of Engineering Knowledge Layer 1, explicitly independent of PSS/E, built from Substation Registry and Equipment Registry. Phase 5's static model is the first software-side realization of that concept. The name `network_model` was chosen because it is the literal slot [`implementation-plan.md`](implementation-plan.md) reserves for Phase 5, not because it was intended to mean the same thing as this document's pre-existing "Network Model."
+- **Why the naming collision was not resolved by renaming or rewriting either side:** Phase 5's own governing instructions required documenting, not silently implementing, any architectural adjustment that touches previously-reviewed design. Renaming this document's module (or Phase 5's) is exactly that kind of adjustment — a decision for the Project Owner / ChatGPT-as-architect to make (CLAUDE.md §23, A14), not one to be resolved unilaterally inside an implementation pass.
+- **Proposed (not implemented) resolution, for review:** treat the static model built in Phase 5 as the *foundation* layer, and this document's `CutSetDefinition`/`IslandAnalysisResult`/`ManualOverride` design as a **future extension layered on top of it**, once PSS/E Integration's `EquipmentTopologyMap` correlation (§9 rule 11 below) lets a `Circuit`-level cut-set element be related back to the static model's own `Circuit` references. Concretely, this would mean: (a) renaming this document's capability to something unambiguous — e.g. "Topology Analysis" or "Island Detection" — freeing "Network Model" to mean the static, registry-derived connectivity graph consistently across the codebase and this documentation set; or (b) treating the static model as an internal building block that a renamed analysis module composes with PSS/E-native data. Either way, **`getConnectivityGraph`'s base-connectivity view (§13) becomes a strong candidate to be re-derived from the static model's traversal primitive instead of being built as a second, independent connectivity representation** — but this too is a proposal for review, not a change made here. No code, schema, or interface in §1–§18 has been altered to anticipate this.
+- **Documentation of what Phase 5 did build** — its domain, engineering relationships, traversal philosophy, and future extension points — lives in a new §19 below, appended rather than interleaved with §1–§18 so the original, still-fully-valid PSS/E-analysis design remains legible on its own.
 
 ---
 
@@ -52,7 +62,7 @@ Network Model does **not** own:
 - ✗ Substation master data — owned by the Substation Registry; Network Model references substations only by `substation_id`.
 - ✗ Scheme assignments (stages, transformer bays, pocket assignments as *scheme* data) — owned by UFLS/UVLS/EMLS. Network Model computes and stores *analysis results*; a scheme module's decision to use a given result for a specific stage is that scheme module's own owned data, never Network Model's.
 - ✗ Approved UFLS/UVLS/EMLS data — Network Model's results are always recommendations until a scheme module explicitly captures them (§9).
-- ✗ Equipment identity — reserved for a future Equipment Registry; Network Model's graph edges remain PSS/E-native `TopologyBranch`/`TopologyTransformer` references until that module exists.
+- ✗ Equipment identity — owned by **Equipment Registry** (Master Data, Phase 3, complete: `Circuit`/`CircuitTerminal`/`Transformer`/`TransformerTerminal`). Network Model's own graph edges remain PSS/E-native `TopologyBranch`/`TopologyTransformer` references, unchanged by Equipment Registry's existence — a `Circuit`-level scheme assignment is translated into those native references *before* it reaches Network Model, via PSS/E Integration's `EquipmentTopologyMap` (see §9 rule 11, §13; [psse-integration-module.md](psse-integration-module.md) §8a). Network Model itself never references `Circuit`/`CircuitTerminal` directly and must never acquire a connectivity-analysis capability inside Equipment Registry (ADR-006 §7, unchanged).
 - ✗ Identity, authentication, or authorization — owned by IAM; Network Model references actors only by `user_id`.
 - ✗ Dashboard/reporting presentation — Dashboard reads Network Model's data read-only; it is never written to by Dashboard, and never computes connectivity/island logic itself (CLAUDE.md A12 — this is an authoritative engineering calculation, so it belongs here, not in the frontend).
 
@@ -82,7 +92,7 @@ Network Model does **not** own:
 | `TopologyVersion`, `TopologyBus`, `TopologyBranch`, `TopologyTransformer` | PSS/E Integration | Read-only, via `topology_version_id` and its structural child records — never copied or duplicated |
 | `LoadSnapshot`, `LoadSnapshotBusState`, `LoadSnapshotElementState`, `NetworkLoad`, `NetworkGenerator` | PSS/E Integration | Read-only, via `load_snapshot_id` — supplies in-service state (for graph filtering) and MW figures (for result aggregation) |
 | Substation | Master Data (Substation Registry) | `substation_id` (UUID) only, on `IslandAnalysisResultSubstation` and `ManualOverrideSubstation` |
-| (future) Equipment | Master Data (future Equipment Registry) | Not yet referenced — deferred, same as PSS/E Integration's own deferral (see [psse-integration-module.md](psse-integration-module.md) §17) |
+| `Circuit`/`CircuitTerminal` | Master Data (Equipment Registry, Phase 3) | **Not referenced directly by any Network Model table.** A scheme assignment's `Circuit` reference is resolved to native `topology_branch_id`/`topology_transformer_id` elements *before* it reaches this module's `analyzeIsland`/`CutSetDefinition` interface, via PSS/E Integration's `EquipmentTopologyMap` (§9 rule 11, §13) — see [psse-integration-module.md](psse-integration-module.md) §8a. |
 | User | Core Platform (IAM) | `user_id` (UUID) on `ManualOverride.created_by_user_id`; fallback per [ADR-002](../adr/ADR-002-identity-and-access-management.md) |
 
 ---
@@ -159,6 +169,7 @@ This recomputation, however it is triggered, **only ever produces new `IslandAna
 8. **Network Model's own tables contain no foreign key to any scheme module's owned entities.** Coupling flows only one direction — a scheme module may reference an `IslandAnalysisResult` or `ManualOverride` id, but Network Model never references a `UflsStage`, `UflsAssignment`, or equivalent. This keeps the analysis engine reusable by any future topology-aware module (SPS/RAS, Black Start, Islanding Strategy, Restoration Planning — CLAUDE.md §3/§27) without modification.
 9. **Approved scheme versions must not silently change when network analysis is recomputed.** A scheme module may treat Network Model's results as a recommendation only while its own version is Draft or Under Review; at Approval, the scheme module must explicitly capture the substation set and MW into its own owned data, exactly mirroring the pattern already established between PSS/E Integration and UFLS ([psse-integration-module.md](psse-integration-module.md) §9, rule 9; [ADR-003](../adr/ADR-003-psse-topology-and-load-snapshot-separation.md)). A scheme module **may** store a traceability pointer (`source_island_analysis_result_id` or `source_manual_override_id`) as descriptive metadata — never as a live dependency.
 10. Heavy graph construction and island-detection computation are designed to run as async background jobs (Redis/RQ per CLAUDE.md's stack); synchronous request paths only enqueue work or serve already-cached, already-computed results.
+11. **A scheme assignment made at `Circuit` granularity resolves to a `CutSetDefinition`'s member elements via the union of that `Circuit`'s `CircuitTerminal`s' individual PSS/E correlations** (ADR-007 §6, §10, §12 item 8) — never by Network Model referencing `Circuit`/`CircuitTerminal` directly (rule 8 above is not weakened by this). Concretely: the calling scheme module (or an intermediating service) first calls PSS/E Integration's `Circuit`-resolution interface ([psse-integration-module.md](psse-integration-module.md) §13, §8a) to obtain the set of native `topology_branch_id`/`topology_transformer_id` elements that `Circuit` currently maps to, *then* supplies that resolved element set to Network Model's own `analyzeIsland`/`CutSetDefinition` interface (§13) exactly as it already accepts any other element list — no new parameter shape or analysis logic is required on Network Model's side for this. **Open implication, not resolved here (ADR-007 Open Question 1):** a tee-off `Circuit` has three or more `CircuitTerminal`s; today's model has no defined way for a scheme assignment to reference a *subset* of a tee-off's terminals (e.g. "open only the ABBA leg, not SMRK or NLAI") — only whole-`Circuit` resolution (all terminals' elements, unioned) is currently possible. If per-terminal-subset assignment becomes a real requirement, it needs its own architecture decision before Network Model's cut-set-resolution contract can support it; this document does not invent that mechanism.
 
 ---
 
@@ -224,6 +235,8 @@ Per CLAUDE.md A1 (module communication via in-process service-layer interfaces):
 
 **How UFLS/UVLS/EMLS consume pocket results, without coupling Network Model to them:** a scheme module calls `analyzeIsland(...)` (and `getEffectiveIsland(...)` if an override exists) to obtain a recommended substation set and MW for a candidate pocket, while its own version is Draft/Under Review. The scheme module stores this as its own owned assignment data (e.g. a `UflsPocketAssignment`), optionally recording the `analysis_result_id`/`override_id` as a traceability pointer. At Approval, the scheme module captures the substation set and MW into its own immutable data — Network Model is never queried again for that specific assignment's approved figures, and Network Model has no knowledge that a `UflsStage` exists at all. This is the concrete mechanism that satisfies requirement 6 (avoid coupling Network Model to scheme modules) while still satisfying requirement 10 (Network Model provides the service interface scheme modules need).
 
+**How a `Circuit`-level assignment becomes a `cut_set` (ADR-007, §9 rule 11):** `analyzeIsland`'s `cut_set` parameter remains, unchanged, a list of native `topology_branch_id`/`topology_transformer_id` elements — Network Model's own interface is not modified by Equipment Registry's existence. The translation from "the scheme designer selected `Circuit` PKLG–IGBK Line 1" to that native element list happens **upstream of this interface**, in PSS/E Integration's own `Circuit`-resolution interface ([psse-integration-module.md](psse-integration-module.md) §13, §8a), which resolves a `Circuit` to the union of its `CircuitTerminal`s' matched `EquipmentTopologyMap` entries. Whichever module orchestrates a scheme's Draft/Under-Review recommendation flow (today, this would be the scheme module itself; a shared orchestration helper may emerge once more than one scheme module needs this, per CLAUDE.md §21) is responsible for that upstream resolution call before invoking `analyzeIsland` — Network Model does not perform it and does not need to know a `Circuit` exists.
+
 ---
 
 ## 14. Audit Requirements
@@ -251,7 +264,7 @@ Per CLAUDE.md §5.4 and A4, and per CLAUDE.md §16's explicit distinction betwee
 
 Per CLAUDE.md §18 and A11, in priority order:
 
-1. **Business rule tests** — determinism (same triple + algorithm version always yields the same result); immutability of `IslandAnalysisResult`; correct single-Active-override enforcement and supersession; a structural/architectural test confirming no Network Model table has a foreign key into any scheme module's schema (§9, rule 8).
+1. **Business rule tests** — determinism (same triple + algorithm version always yields the same result); immutability of `IslandAnalysisResult`; correct single-Active-override enforcement and supersession; a structural/architectural test confirming no Network Model table has a foreign key into any scheme module's schema (§9, rule 8) — unweakened by rule 11's `Circuit`-resolution note, since that resolution happens entirely upstream, in PSS/E Integration, before Network Model's own interface is ever called (§13). `EquipmentTopologyMap` matching/classification correctness is PSS/E Integration's own testing responsibility (psse-integration-module.md §16), not retested here.
 2. **Engineering calculation / validation tests** — graph construction correctness (in-service filtering from `LoadSnapshotBusState`/`LoadSnapshotElementState`, cut-set exclusion applied regardless of a cut element's actual in-service status); island/reachability algorithm correctness against known topology fixtures; MW aggregation correctness.
 3. **API contract tests** — request/response schema conformance; authorization enforcement per endpoint (§12, §15); correct cache-hit vs. new-computation behavior for repeated identical requests.
 4. **Database migration tests** — required once actual migrations are authored (out of scope for this document).
@@ -267,7 +280,8 @@ Business rules and engineering calculations must not be merged without accompany
 - **Reuse by future topology-aware modules** — SPS/RAS, Black Start, Islanding Strategy, and Restoration Planning (CLAUDE.md §3/§27) are all natural future consumers of the same `analyzeIsland`/`getConnectivityGraph` interfaces, without any change to Network Model itself, by design (§9, rule 8).
 - **Contingency (N-1) analysis** — a natural extension of the existing cut-set mechanism (systematically analyzing single-element outages), reusing the same underlying graph-construction and result-storage design.
 - **Formal domain-event mechanism for recomputation triggering** — the current direct-service-call-enqueues-a-job pattern (§8.4) is intentionally simple; if it proves limiting as more modules need to react to `LoadSnapshot` activation, a proper event/message mechanism could be introduced — this is new infrastructure, not assumed today (CLAUDE.md §21, avoid premature optimisation).
-- **Equipment Registry linkage** — once a future Equipment Registry exists, `CutSetDefinition` elements could reference formal equipment records in addition to PSS/E-native topology elements, mirroring the same deferral already noted in PSS/E Integration's own Future Extensions.
+- **Per-terminal-subset `Circuit` assignment** — today, a `Circuit`-level assignment always resolves to the union of *all* its `CircuitTerminal`s (§9 rule 11); supporting a scheme assignment against a *subset* of a tee-off `Circuit`'s terminals is an open question (ADR-007 Open Question 1) with no defined mechanism yet — ADR-level work, not a Network Model implementation detail.
+- **Direct `CutSetDefinition` reference to `Circuit`/`CircuitTerminal`** (superseded framing) — an earlier version of this document speculated that `CutSetDefinition` elements might eventually reference "formal equipment records... in addition to PSS/E-native topology elements." ADR-006/ADR-007 have since settled this: `CutSetDefinition` remains PSS/E-native only; `Circuit`-level resolution happens upstream, via PSS/E Integration's `EquipmentTopologyMap` (§9 rule 11, §13). This bullet is retained only to record that the earlier framing is superseded, not as a live option.
 
 ---
 
@@ -281,6 +295,90 @@ Business rules and engineering calculations must not be merged without accompany
 | Ad hoc cross-module reads of Network Model's data beyond the reporting-only exception | Erodes module boundary enforcement (ADR-001), complicates future service extraction | Route any read that informs a business decision through Network Model's service interface (§13); reserve raw joins strictly for reporting/dashboards |
 | `ManualOverride` used to route around a computed result an engineer simply disagrees with, without adequate scrutiny | Weakens the credibility of automated analysis as a check on manual judgment | Recommend the same elevated permission tier as scheme drafting (§15), and ensure the mandatory reason field is enforced, not optional |
 | Recomputation-on-activation (§8.4) scope creep — a well-intentioned engineer widening the "non-terminal assignments" trigger scope over time | Reintroduces the unbounded-recompute risk this design was built to avoid | Keep the recomputation trigger's scope as a reviewed, explicit business rule (§9, rule 10; §10), not an implementation detail left to drift |
+| A `Circuit`-level assignment's cut-set resolution (§9 rule 11) depends on PSS/E Integration's `EquipmentTopologyMap`, which does not exist yet | Until it is built, a scheme module cannot cleanly go from "assign to Circuit PKLG–IGBK Line 1" to a computed pocket without an engineer manually cross-referencing PSS/E element ids by hand | Sequence `EquipmentTopologyMap` explicitly as part of Phase 4 (see [implementation-plan.md](implementation-plan.md)), not left as an open-ended future extension — mirrors ADR-006 §12's identical risk/mitigation |
+| Tee-off `Circuit` per-terminal-subset assignment (§17) remains an open architectural question | A scheme module cannot today express "open only one leg of a three-way tee," which may understate what the model can represent for a real tee-off network configuration | Treat as an explicit open item requiring its own decision before being needed (ADR-007 Open Question 1) — do not silently assume whole-`Circuit`-only resolution is permanently sufficient |
+
+---
+
+## 19. Phase 5 Addendum — The Static Network Model (As Built)
+
+This section documents the module actually implemented in Phase 5, per the reconciliation note above. It is additive: it does not modify §1–§18.
+
+### 19.1 Purpose and Scope
+
+The static Network Model answers "how is the transmission network electrically connected" using only data that already exists in Substation Registry and Equipment Registry — no PSS/E import, no engineering calculation, no scheme awareness. It is the software-side Line Connectivity Registry described by the Engineering Reference Library ([`docs/engineering/02-engineering-concepts.md`](../engineering/02-engineering-concepts.md), [`docs/engineering/04-domain-model.md`](../engineering/04-domain-model.md)).
+
+### 19.2 Owned Entities
+
+None. This module owns no database tables and required no migration. Every query it runs reads Substation Registry's `Substation` and Equipment Registry's `SubstationVoltageYard`/`Circuit`/`CircuitTerminal`/`Transformer`/`TransformerTerminal` models directly, read-only — the same cross-module read-only-model-import pattern PSS/E Integration's own repository already established for the same kind of composition (CLAUDE.md A1's reporting/query-optimisation exception).
+
+### 19.3 Engineering Relationships (Domain Model)
+
+```
+Substation (Substation Registry, external, read-only)
+Circuit / CircuitTerminal (Equipment Registry, external, read-only)
+Transformer / TransformerTerminal (Equipment Registry, external, read-only)
+        │
+        ▼
+SubstationConnectivity — one substation's connected lines and neighbouring substations,
+                         derived by grouping that substation's active CircuitTerminals by circuit_id
+        │
+        ├── ConnectingLine (one per Circuit; is_tee_off = more than two terminals)
+        │        └── TerminalOnCircuit (one per CircuitTerminal on that Circuit)
+        │
+        └── NeighbourSubstation (one per other-substation terminal, per connecting line)
+
+ElectricalNeighbour — SubstationConnectivity.neighbours, deduplicated to one row
+                      per distinct neighbouring substation
+
+SubstationEquipment — one substation's TransformerBay and LineBay lists, grouped by
+                      engineering function
+
+NetworkOverview — registry-wide counts (substations, circuits, tee-off circuits, transformers)
+
+TraversalResult — breadth-first reachability from a starting substation, over an
+                  adjacency map built from every active Circuit's terminal set
+```
+
+Every shape above is a DTO (`app/modules/network_model/schemas.py`), never a persistence row — consistent with CLAUDE.md A6 and the Engineering Reference Library's own framing of these as engineering relationships, not database tables.
+
+**Tee-off / multi-terminal handling:** a `Circuit` with more than two active `CircuitTerminal` rows is a tee-off. It is modelled as one multi-way connection — all of its terminal substations are mutually adjacent to each other through it — never as a chain of pairwise edges, and never assumed to have exactly two terminals anywhere in this module's code or tests.
+
+**Transformers never span substations** (ADR-008's UAT correction: both a `Transformer`'s `TransformerTerminal` rows resolve to the same `substation_id`). Only `Circuit`/`CircuitTerminal` model inter-substation connectivity; this module's traversal graph is built exclusively from circuit terminals.
+
+### 19.4 Traversal Philosophy
+
+`traverse(start_substation_id, excluded_circuit_ids, max_depth)` is a **generic, parameterised reachability primitive**, not an island-detection or load-pocket feature. It answers only "which substations are reachable from here, given these specific lines are treated as open" — deliberately the same shape of question a future load-pocket, boundary, or visualization capability would need answered, without this phase building any of those capabilities itself (explicitly out of scope). It performs no automatic topology analysis: it never decides on its own which lines to exclude, never classifies a result as an "island" or "pocket," and never persists a result — every call is a fresh, stateless query against current registry data.
+
+### 19.5 Incomplete-Registry Tolerance
+
+The transmission network is expected to be registered incrementally. This module never assumes registry completeness:
+
+- A named-but-nonexistent substation is a 404 (`SubstationNotFoundError`) for the one request that named it — never for its *absence* from someone else's result.
+- A registered substation with no circuits or transformers yet entered returns empty connectivity/equipment lists — a valid state, not an error.
+- Any reference this module cannot currently resolve (e.g. a terminal whose substation lookup fails) is treated as unknown and omitted from output, never raised as an error. Database-level referential integrity (NOT NULL + FK RESTRICT) means this should not occur for real data, but the service does not depend on that assumption to avoid crashing.
+- `GET /network-model/overview` against an empty (or freshly-seeded) registry returns all-zero counts, not an error.
+
+### 19.6 Service Interfaces (API)
+
+All read-only, gated only by authentication (mirrors Equipment Registry's and Substation Registry's own precedent for engineering reference data — CLAUDE.md A10's "sensitive by default" is satisfied by requiring authentication; no finer-grained permission currently gates any of these reads). `network_model.read` is registered in IAM's permission catalog (`bootstrap.py`) for possible future finer-grained use, granted to all three baseline roles, exactly as Equipment Registry's own `*.read` permission is.
+
+- `GET /network-model/overview` → `NetworkOverview`
+- `GET /network-model/substations/{substation_id}/connectivity` → `SubstationConnectivity`
+- `GET /network-model/substations/{substation_id}/equipment` → `SubstationEquipment`
+- `GET /network-model/substations/{substation_id}/neighbours` → `list[ElectricalNeighbour]`
+- `POST /network-model/traverse` → `TraversalResult` (POST because it accepts a request body: `start_substation_id`, `excluded_circuit_ids`, `max_depth`)
+
+### 19.7 Future Extension Points
+
+- **Foundation for the reconciliation proposal in the note above** — a future, explicitly-decided extension could correlate this module's `Circuit` references to PSS/E-native topology elements (via PSS/E Integration's `EquipmentTopologyMap`) so that §1–§18's analysis capability can be built on top of this static graph rather than as an independent connectivity representation.
+- **Load pocket / boundary identification** — would consume `traverse` as a primitive (supplying a candidate `excluded_circuit_ids` boundary and inspecting the resulting reachable set), not by extending this module's own scope.
+- **Network visualization** — a future frontend or Dashboard capability can render `SubstationConnectivity`/`NetworkOverview` output directly; this module never renders anything itself (CLAUDE.md A12).
+- **Graceful growth** — no change is required as the registry grows; every query already operates over "whatever is currently registered," per §19.5.
+
+### 19.8 Testing
+
+Comprehensive backend tests exist at `app/modules/network_model/tests/` (service-layer: connectivity, tee-off/multi-terminal, neighbours, equipment, overview, traversal including exclusion and `max_depth`, `ENTERED_IN_ERROR` exclusion, incomplete-registry behaviour; bootstrap) and `backend/tests/test_network_model_api.py` (authentication, open-read authorization, full read flow, 404 handling). See the Phase 5 implementation report for the full test summary.
 
 ---
 

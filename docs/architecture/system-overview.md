@@ -14,20 +14,24 @@ Per CLAUDE.md §4, the platform is built on one governing rule: **Engineering Tr
 
 ## 2. Major Bounded Contexts
 
-GridDefence is composed of independent bounded contexts ("modules"), each owning its own data and business rules (CLAUDE.md §6, §12). The initial and planned contexts are:
+GridDefence is composed of independent bounded contexts ("modules"), each owning its own data and business rules (CLAUDE.md §6, §12). Phases 0–4 are complete; the remaining contexts are planned, in the dependency order [implementation-plan.md](implementation-plan.md) specifies:
 
-| Bounded Context | Domain Grouping | Owns |
-|---|---|---|
-| **Substation Registry** | Master Data | Substation identity, mnemonic, metadata, geography, operational status |
-| **UFLS** | Defence Scheme | Frequency stages, load blocks, assignments, thresholds |
-| **UVLS** | Defence Scheme | Voltage stages, load blocks, assignments, thresholds |
-| **EMLS** | Defence Scheme | Manual shedding priorities, assignments |
-| *(future)* Network Topology | Network Model | Substation-to-substation connectivity |
-| *(future)* SPS / RAS | Defence Scheme | Special protection / remedial action scheme logic |
-| *(future)* Black Start, Islanding, Restoration Planning | Defence Scheme | Their respective engineering plans |
-| *(future)* Analytics / Reporting | Audit and Analytics | Cross-module reporting, dashboards |
+| Bounded Context | Domain Grouping | Owns | Status |
+|---|---|---|---|
+| Substation Registry | Engineering Registry | Substation identity, mnemonic, metadata, geography, operational status | Complete (Phase 2) |
+| Equipment Registry | Engineering Registry | `Circuit`/`CircuitTerminal`, `SubstationVoltageYard` (Switchyard), `Transformer`/`TransformerTerminal` | Complete (Phase 3) |
+| PSS/E Integration | Network Representation | Imported topology (`TopologyVersion`/`TopologyBus`/`TopologyBranch`/`TopologyTransformer`), `LoadSnapshot`, `EquipmentTopologyMap`, import history | Complete (Phase 4) |
+| Network Model | Network Representation | Connectivity graph analysis, island/pocket detection, `CutSetDefinition`, `IslandAnalysisResult`, `ManualOverride` — never topology data itself, which PSS/E Integration owns | Planned (Phase 5) |
+| UFLS | Defence Scheme | Frequency stages, load blocks, assignments, thresholds | Planned (Phase 6) |
+| UVLS | Defence Scheme | Voltage stages, load blocks, assignments, thresholds | Planned (Phase 7) |
+| EMLS | Defence Scheme | Manual shedding priorities, assignments | Planned (Phase 8) |
+| Critical Infrastructure | Engineering Registry | Critical-asset classification, referenced by `substation_id` | Planned (Phase 9) |
+| Cross-Scheme Compliance | Audit and Analytics | `ComplianceRuleConfig`, `ComplianceCheckRun`, `ComplianceViolation` | Planned (Phase 10) |
+| Dashboard | Audit and Analytics | Nothing — composes read-only interfaces from every other module | Planned (Phase 11); no dedicated architecture document yet |
+| *(future)* SPS / RAS | Defence Scheme | Special protection / remedial action scheme logic | Unscheduled |
+| *(future)* Black Start, Islanding, Restoration Planning | Defence Scheme | Their respective engineering plans | Unscheduled |
 
-Full detail on domain groupings and entity ownership lives in [domain-model.md](domain-model.md). Detail on any individual module lives in that module's own architecture document (e.g. [substation-registry.md](substation-registry.md)).
+Full detail on domain groupings and entity ownership lives in [domain-model.md](domain-model.md). Detail on any individual module lives in that module's own architecture document (e.g. [substation-registry.md](substation-registry.md), [equipment-registry-module.md](equipment-registry-module.md), [psse-integration-module.md](psse-integration-module.md)).
 
 Every bounded context owns exactly one slice of engineering truth (CLAUDE.md §5.1, §8). No bounded context duplicates another's data — it references it.
 
@@ -38,7 +42,7 @@ Every bounded context owns exactly one slice of engineering truth (CLAUDE.md §5
 - **Framework:** FastAPI
 - **ORM:** SQLAlchemy
 - **Migrations:** Alembic
-- **Background processing:** Redis + RQ (initial choice; standards for job retry/idempotency are deferred per CLAUDE.md A15 until first real usage)
+- **Background processing:** Redis + RQ, in real use since Phase 4 (PSS/E Integration) for RAW import parsing/validation; formal standards for job retry/idempotency remain deferred per CLAUDE.md A15, since real usage to date has not yet needed them
 
 **Layering (CLAUDE.md §14, A6):**
 
@@ -119,6 +123,6 @@ The system is designed so that future modules — SPS, RAS, Black Start, Islandi
 
 - Each new module is a new bounded context, documented using the Canonical Module Architecture Document Template (CLAUDE.md A8), and added to the index in [README.md](README.md).
 - Each new module references existing Master Data (e.g. Substation Registry) rather than duplicating it, following the same ownership pattern already established by UFLS/UVLS/EMLS against the Substation Registry (CLAUDE.md §8).
-- Each new module owns its own audit trail (CLAUDE.md A4) and, if versioned, follows the Canonical Version Lifecycle (CLAUDE.md A3).
+- Each new module owns its own audit trail (CLAUDE.md A4) and, if versioned, is classified per [ADR-010](../adr/ADR-010-engineering-decision-support-philosophy.md) before choosing a lifecycle: **Approved Engineering Policy** (data that itself governs equipment once active — e.g. a scheme version) follows the full Canonical Version Lifecycle (CLAUDE.md A3); **Engineering Source/Computed Data** (imported or computed data a scheme module only ever consults as a recommendation — e.g. PSS/E Integration's `TopologyVersion`, Network Model's `IslandAnalysisResult`) uses a lighter lifecycle instead, gated by validation, audit, and one explicit Activation. Defaulting every new versioned entity to A3 "to be safe" is exactly the outcome ADR-010 exists to prevent.
 - Infrastructure is expected to evolve from Docker Compose toward Kubernetes (CLAUDE.md §9) without requiring a change to module boundaries, since those boundaries are already enforced at the service layer rather than at the deployment layer.
 - Any change that alters a core principle — domain ownership, dependency direction, versioning, security, or database standards — requires an ADR (CLAUDE.md A13) before it is adopted.

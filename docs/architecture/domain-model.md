@@ -30,18 +30,18 @@ For dependency purposes, CLAUDE.md A2 gives the concrete, authoritative rule: a 
 
 Applying that rule concretely across all layers: Reference Data (lookup tables) is foundational to Master Data, since master entities hold foreign keys into reference tables (CLAUDE.md §11.3). Master Data is in turn foundational to Network Data and Scheme Data. Operational Data builds on Scheme Data. Audit Data and Reporting & Analytics sit on top of all of them, consuming their history without ever being depended upon in return.
 
-This document groups those layers into six working **domains** for documentation and module-organisation purposes:
+This document groups those layers into six working **domains** for documentation and module-organisation purposes. Each domain's name here is a documentation-level label for its CLAUDE.md §7 layer, not a rename of that layer or of any module within it — this document has always used this pattern (e.g. "Core Platform" for "Reference Data + IAM"); the two labels below marked with a note simply extend the same convention to the two domains whose original 1:1 labels had become ambiguous once more than one module came to occupy them:
 
 | Domain (this document) | Corresponds to (CLAUDE.md §7 layer) |
 |---|---|
 | Core Platform | Reference Data + Identity and Access Management |
-| Master Data | Master Data |
-| Network Model | Network Data |
+| **Engineering Registry** *(labeled "Master Data" prior to Phase 3/4; renamed here for clarity now that it holds two modules, not one — see §3)* | Master Data |
+| **Network Representation** *(labeled "Network Model" prior to Phase 4; renamed here to avoid confusion with the Network Model *module*, which is only one of the two modules in this domain — see §4)* | Network Data |
 | Defence Scheme | Scheme Data + Operational Data |
 | Audit and Analytics | Audit Data + Reporting & Analytics |
 | Presentation | *(not part of the engineering data hierarchy — the consuming UI layer)* |
 
-Dependency flows strictly left-to-right / top-to-bottom through this grouping: **Core Platform → Master Data → Network Model → Defence Scheme → Audit and Analytics**, with **Presentation** consuming all of them through backend APIs. No domain depends on a domain to its right.
+Dependency flows strictly left-to-right / top-to-bottom through this grouping: **Core Platform → Engineering Registry → Network Representation → Defence Scheme → Audit and Analytics**, with **Presentation** consuming all of them through backend APIs. No domain depends on a domain to its right.
 
 ---
 
@@ -68,36 +68,53 @@ Dependency flows strictly left-to-right / top-to-bottom through this grouping: *
 
 ---
 
-## 3. Master Data Domain
+## 3. Engineering Registry Domain
 
-**Purpose:** Master Data Management (MDM) for physical/engineering assets. Single source of truth for asset identity.
+**Purpose:** Owns engineering identity and engineering master data — the single source of truth for "what physically exists and what do we call it," independent of any one scheme's or import's use of it. Two modules complete this domain (Phases 2 and 3); a third is planned (Phase 9).
 
 **Owns (today):**
-- **Substation Registry** — substation identity, mnemonic, official name, metadata, geography, operational status. See [substation-registry.md](substation-registry.md) for full detail.
+- **Substation Registry** (Phase 2, complete) — substation identity, mnemonic, official name, metadata, geography, operational status. See [substation-registry.md](substation-registry.md) for full detail.
+- **Equipment Registry** (Phase 3, complete) — physical/electrical equipment identity: `Circuit`/`CircuitTerminal` (a physical transmission line and its per-substation terminals — the canonical engineering reference object per [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md)), `SubstationVoltageYard`/Switchyard (per [ADR-008](../adr/ADR-008-substation-voltage-yard.md)), and `Transformer`/`TransformerTerminal`. No generic `Equipment` common backbone exists — this was an explicit, considered outcome of [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md)/[ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md), not an omission. See [equipment-registry-module.md](equipment-registry-module.md) for full detail, including its own "Superseded Design Decisions" appendix recording why the generic-backbone approach was not carried into the as-built module.
 
-**Owns (future, if introduced):** any additional master asset registries (e.g. an equipment/bay-level registry), each as its own module within this domain, following the same ownership pattern as the Substation Registry.
+**Owns (planned):**
+- **Critical Infrastructure** (Phase 9, not yet built) — critical-asset classification (category, criticality level, restriction type), referenced by `substation_id`, per [ADR-004](../adr/ADR-004-cross-scheme-compliance-mechanism.md)'s explicit placement of this module in the Master Data domain (this document's Engineering Registry). See [critical-infrastructure-module.md](critical-infrastructure-module.md).
 
-**References:** Core Platform reference data (voltage level, region, state, grid owner, operational status) via foreign key.
+**References:** Core Platform reference data (voltage level, region, state, grid owner, operational status, line type) via foreign key.
 
-**Referenced by:** Network Model, Defence Scheme, Audit and Analytics, Presentation.
+**Referenced by:** Network Representation (Substation Registry, for PSS/E bus-to-substation matching; Equipment Registry, correlated against by PSS/E Integration's `EquipmentTopologyMap`, never referenced directly by Network Model — see §4), Defence Scheme, Audit and Analytics, Presentation.
 
-**Does not own:** scheme assignment logic or parameters (owned by Defence Scheme), network connectivity (owned by Network Model).
+**Does not own:** scheme assignment logic or parameters (owned by Defence Scheme), electrical topology or connectivity analysis (owned by Network Representation).
 
 ---
 
-## 4. Network Model Domain *(future — scope reserved)*
+## 4. Network Representation Domain
 
-**Purpose:** Models physical/electrical connectivity between substations (transmission line topology), independent of any scheme's use of that topology.
+**Purpose:** Models the transmission network's electrical topology and load/generation state, and computes connectivity/reachability analysis over it — independent of any scheme's use of either. This domain is deliberately split into two modules with two distinct kinds of ownership, per [ADR-003](../adr/ADR-003-psse-topology-and-load-snapshot-separation.md) and [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md): one owns the *data*, the other owns the *analysis*. Neither owns the other's concern, and a future third topology-aware module (SPS/RAS, Black Start, etc.) would consume both without either module changing.
 
-**Owns (future):** network topology / connectivity records — e.g. a transmission line entity referencing a substation at each end.
+**Owns (today) — PSS/E Integration (Phase 4, complete):**
+- Imported electrical topology, immutable and versioned: `TopologyVersion`, `TopologyBus`, `TopologyBranch`, `TopologyTransformer`.
+- Load/generation state, immutable and versioned, always a child of exactly one `TopologyVersion`: `LoadSnapshot` and its child state/load/generator records.
+- Equipment correlation: `EquipmentTopologyMap`, correlating Equipment Registry's `CircuitTerminal` identities against imported topology elements (never the reverse — this module never writes to Equipment Registry).
+- Import history and audit: `RawFileImportBatch`, `psse_import_audit_log`.
 
-**References:** Master Data (the substations at each end of a connection) via foreign key. Never duplicates substation attributes.
+See [psse-integration-module.md](psse-integration-module.md) for full detail.
 
-**Referenced by:** Defence Scheme (e.g. islanding boundary definitions, restoration planning sequencing), Audit and Analytics.
+**Owns (planned) — Network Model (Phase 5, not yet built):**
+- Connectivity graph construction and reachability analysis, derived exclusively from PSS/E Integration's data.
+- Island/pocket detection: `CutSetDefinition`, `IslandAnalysisResult`, `IslandAnalysisResultSubstation`.
+- The manual engineering override model for a computed result: `ManualOverride`, `ManualOverrideSubstation`.
 
-**Does not own:** substation identity, scheme logic.
+**Network Model does not own topology data of any kind.** It consumes `TopologyVersion`/`LoadSnapshot` from PSS/E Integration, read-only, and holds no foreign key that would let it be mistaken for a second source of structural truth. See [network-model-module.md](network-model-module.md) for full detail, including its own architectural test (no table in this module has a foreign key into any scheme module's schema) that keeps it reusable by every future topology-aware module without modification.
 
-**Status:** Not yet implemented. Reserved so that when a Network Topology module is built, it has a clear place in the hierarchy and a clear dependency direction (depends on Master Data, is depended upon by Defence Scheme) without requiring rework of existing modules.
+**Lifecycle note:** neither module's versioned entities follow the Canonical Version Lifecycle (CLAUDE.md A3). Both are **Engineering Source/Computed Data** under [ADR-010](../adr/ADR-010-engineering-decision-support-philosophy.md)'s classification rule — imported or computed data that a scheme module may consult but does not itself become approved policy until explicitly captured elsewhere. PSS/E Integration uses `Imported → Current → Superseded`; Network Model uses `Computing → Computed`. Neither is an oversight or a simplified stand-in for A3 — ADR-010 names this as the correct, deliberate lifecycle for this kind of data.
+
+**References:** Engineering Registry (Substation Registry, for bus-to-substation matching; Equipment Registry's `Circuit`/`CircuitTerminal`, correlated by PSS/E Integration's `EquipmentTopologyMap` — Network Model itself never references `Circuit`/`CircuitTerminal` directly, per [ADR-007](../adr/ADR-007-canonical-engineering-reference-object.md) §6/§9).
+
+**Referenced by:** Defence Scheme (a scheme module resolves a `Circuit`-level assignment to a cut-set via PSS/E Integration's own `Circuit`-resolution interface, *before* calling Network Model's `analyzeIsland` — Network Model is never queried with a `Circuit` id directly), Audit and Analytics.
+
+**Does not own:** substation identity, equipment identity, scheme logic.
+
+**Status:** PSS/E Integration — implemented (Phase 4, complete, independently architecture-validated and stabilized). Network Model — planned (Phase 5).
 
 ---
 
@@ -115,9 +132,9 @@ Dependency flows strictly left-to-right / top-to-bottom through this grouping: *
 Each scheme module is an independent bounded context (CLAUDE.md §8, §12): UFLS, UVLS, and EMLS do not share tables, do not share business rules, and do not read or write each other's data directly. A future cross-scheme concern (e.g. a substation's combined defence posture across UFLS + UVLS + EMLS) is a **read** concern belonging to Audit and Analytics, not a reason to merge these modules.
 
 **References:**
-- Master Data (substations) — every scheme assignment references a substation by `substation_id`; it never copies substation name, voltage, region, or owner (CLAUDE.md §5.1, §8, §11.4).
-- Network Model, where a scheme's logic depends on topology (e.g. islanding boundaries).
-- Core Platform, for shared reference data and (once formalised) identity.
+- Engineering Registry (substations, and — once the equipment-level scheme-assignment migration in [equipment-registry-module.md](equipment-registry-module.md) §7.11 is executed under its own ADR — `Circuit`) — every scheme assignment references by id; it never copies substation name, voltage, region, owner, or circuit bay/breaker detail (CLAUDE.md §5.1, §8, §11.4).
+- Network Representation — PSS/E Integration's recommended-MW interface and Network Model's `analyzeIsland`, where a scheme's logic depends on live network data (§4). Both are consulted only as recommendations while a version is Draft/Under Review; nothing here is a live dependency of Approved/Active data (§9 rule 9 of each of those modules' own documents).
+- Core Platform, for shared reference data and identity.
 
 **Referenced by:** Audit and Analytics, Presentation.
 
@@ -129,7 +146,7 @@ Each scheme module is an independent bounded context (CLAUDE.md §8, §12): UFLS
 Draft → Under Review → Approved → Active → Superseded → Archived
 ```
 
-Only one Active version may exist per scheme type at a time. Approved and Active records are immutable; corrections always create a new version.
+Only one Active version may exist per scheme type at a time. Approved and Active records are immutable; corrections always create a new version. This is not a stylistic choice shared by every versioned entity in GridDefence — per [ADR-010](../adr/ADR-010-engineering-decision-support-philosophy.md)'s classification rule, this full lifecycle applies specifically because Defence Scheme data is **Approved Engineering Policy**: an Active version itself governs real load-shedding behaviour, unlike Network Representation's Engineering Source/Computed Data (§4), which uses a deliberately lighter lifecycle. ADR-010 confirms this domain's existing lifecycle choice; it does not change it.
 
 ---
 
@@ -137,9 +154,10 @@ Only one Active version may exist per scheme type at a time. Approved and Active
 
 **Purpose:** Engineering traceability and derived insight across the platform.
 
-**Owns:** nothing centrally. Per CLAUDE.md A4, **audit data is owned by the module that owns the business data it describes** — e.g. the Substation Registry owns `substation_audit_log`; UFLS owns `ufls_audit_log`; UVLS owns `uvls_audit_log`; EMLS owns `emls_audit_log`. This domain grouping is a conceptual umbrella over those per-module audit logs plus any future reporting/analytics capability, not a single owning module.
-
-A future central audit dashboard or analytics/reporting module may **aggregate and display** audit records and engineering data from every module, using read-only cross-module access as permitted by CLAUDE.md A1 (read-only joins for reporting, dashboards, and query optimisation). Such a dashboard never becomes the owner of the records it displays, and never writes back to another module's tables.
+**Owns:** nothing belonging to another domain — but two modules within this domain own real, first-class entities of their own:
+- Per CLAUDE.md A4, **every module's own audit data is owned by that module**, not centralized here — e.g. the Substation Registry owns `substation_audit_log`; Equipment Registry owns `equipment_registry_audit_log`; PSS/E Integration owns `psse_import_audit_log`; UFLS/UVLS/EMLS will each own their own audit log once built. This domain grouping is a conceptual umbrella over those per-module audit logs, not a single owning module.
+- **Cross-Scheme Compliance** (Phase 10, not yet built) — per [ADR-004](../adr/ADR-004-cross-scheme-compliance-mechanism.md), this module belongs here specifically because it *observes* engineering data across UFLS/UVLS/EMLS and Critical Infrastructure without owning any of it: it holds foreign keys only into each scheme module's **version** table (traceability, never a source of scheme truth), and owns its own `ComplianceRuleConfig`/`ComplianceCheckRun`/`ComplianceViolation` outright. See [cross-scheme-compliance-module.md](cross-scheme-compliance-module.md).
+- **Dashboard** (Phase 11, not yet built, no dedicated architecture document yet — see [implementation-plan.md](implementation-plan.md)'s Architecture Gaps) — owns no schema of its own at all; composes read-only service interfaces from every other module (`getConnectivityGraph`, `getComplianceSummary`, each scheme module's current-Active-version query, and so on) purely for presentation. Never becomes the owner of, and never writes back to, any record it displays.
 
 **References:** all other domains, read-only.
 
@@ -168,7 +186,7 @@ A future central audit dashboard or analytics/reporting module may **aggregate a
 3. **Reference, never replicate.** Any module needing another module's data holds a foreign key to that entity's stable identifier (UUID for business entities, per CLAUDE.md A5) — never a copy of its attributes (CLAUDE.md §5.1, §11.4).
 4. **Reference/lookup data is the one shared-read exception.** Core Platform reference tables carry no business rules of their own; any module may hold a foreign key to them and read them directly. This is distinct from reading another module's *business* entities, which must go through that module's service layer for anything beyond simple read-only reporting joins (CLAUDE.md A1).
 5. **Audit is per-owner, not centralized.** Each module audits its own records; there is no shared "Audit" module that owns audit rows on another module's behalf (CLAUDE.md A4).
-6. **Dependency direction is one-way.** A module may depend on a more foundational domain (Core Platform → Master Data → Network Model → Defence Scheme → Audit and Analytics); it must never be depended upon by a more foundational domain (CLAUDE.md A2).
+6. **Dependency direction is one-way.** A module may depend on a more foundational domain (Core Platform → Engineering Registry → Network Representation → Defence Scheme → Audit and Analytics); it must never be depended upon by a more foundational domain (CLAUDE.md A2).
 
 ---
 
@@ -176,11 +194,16 @@ A future central audit dashboard or analytics/reporting module may **aggregate a
 
 | Domain | Owns | References (does not own) |
 |---|---|---|
-| Core Platform | Reference/lookup data (voltage level, region, state, grid owner, operational status); Identity and Access Management (Users, Roles, Permissions, external identity mappings, authorization model) | — |
-| Master Data | Substation identity, mnemonic, metadata, geography, operational status | Core Platform reference data |
-| Network Model *(future)* | Network topology / connectivity records | Master Data (substations at each connection endpoint) |
-| Defence Scheme (UFLS / UVLS / EMLS / future SPS, RAS, Black Start, Islanding, Restoration Planning) | Frequency/voltage stages, load blocks, assignments, thresholds, scheme versions | Master Data (substations); Network Model (where relevant); Core Platform |
-| Audit and Analytics | Nothing centrally — audit logs are owned per-module | All domains (read-only) |
+| Core Platform | Reference/lookup data (voltage level, region, state, grid owner, operational status, line type); Identity and Access Management (Users, Roles, Permissions, external identity mappings, authorization model) | — |
+| Engineering Registry — Substation Registry *(complete)* | Substation identity, mnemonic, metadata, geography, operational status | Core Platform reference data |
+| Engineering Registry — Equipment Registry *(complete)* | `Circuit`, `CircuitTerminal`, `SubstationVoltageYard` (Switchyard), `Transformer`, `TransformerTerminal` | Core Platform reference data; Substation Registry (`substation_id`) |
+| Engineering Registry — Critical Infrastructure *(planned, Phase 9)* | Critical-asset classification (category, criticality level, restriction type) | Substation Registry (`substation_id`) |
+| Network Representation — PSS/E Integration *(complete)* | `TopologyVersion`/`TopologyBus`/`TopologyBranch`/`TopologyTransformer`, `LoadSnapshot` and children, `EquipmentTopologyMap`, `RawFileImportBatch` | Substation Registry (bus matching); Equipment Registry's `CircuitTerminal` (correlation, read-only, never written to) |
+| Network Representation — Network Model *(planned, Phase 5)* | `CutSetDefinition`, `IslandAnalysisResult`, `ManualOverride` — **never topology data itself** | PSS/E Integration's `TopologyVersion`/`LoadSnapshot`, read-only; Substation Registry (override validation) |
+| Defence Scheme (UFLS / UVLS / EMLS / future SPS, RAS, Black Start, Islanding, Restoration Planning) | Frequency/voltage stages, load blocks, assignments, thresholds, scheme versions | Engineering Registry (substations, future `Circuit`); Network Representation (recommendations only, never a live dependency); Core Platform |
+| Audit and Analytics — Cross-Scheme Compliance *(planned, Phase 10)* | `ComplianceRuleConfig`, `ComplianceCheckRun`, `ComplianceViolation` | Defence Scheme (version-level traceability only); Engineering Registry (Critical Infrastructure) |
+| Audit and Analytics — Dashboard *(planned, Phase 11)* | Nothing — composes read-only interfaces only | All domains, read-only |
+| Audit and Analytics — per-module audit logs | Each module owns its own (`substation_audit_log`, `equipment_registry_audit_log`, `psse_import_audit_log`, etc.) | — |
 | Presentation | UI/view state only | All domains, via backend APIs only |
 
 This table is the quick reference for "who owns this, and who is just borrowing it." When in doubt, the owning module's own architecture document (built from the Canonical Module Architecture Document Template, CLAUDE.md A8) is authoritative for that module's entities.

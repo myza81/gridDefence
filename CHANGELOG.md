@@ -11,6 +11,163 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Phase 4 — PSS/E Integration
+
+**Scope:** RAW file import infrastructure —
+[`docs/architecture/psse-integration-module.md`](docs/architecture/psse-integration-module.md),
+[ADR-003](docs/adr/ADR-003-psse-topology-and-load-snapshot-separation.md) (topology/load
+separation), [ADR-006](docs/adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md)
+and [ADR-007](docs/adr/ADR-007-canonical-engineering-reference-object.md)
+(`EquipmentTopologyMap`). Implements only PSS/E import/preview/commit/activate and
+`EquipmentTopologyMap` correlation — Network Model, UFLS, UVLS, and scheme assignment logic remain
+explicitly out of scope, per the task's own instruction.
+
+**Mandatory pre-implementation step.** Before any parser or model code was written, the two real
+sample RAW files at `docs/samples/psse/` (`110226n.raw` — full topology + load, rev 34; and
+`PSSE_LOAD_20260608_1730.raw` — load-only, abbreviated field shape) were inspected directly
+(section ordering, exact field layouts, terminator conventions, comment syntax) and findings
+presented before implementation began, per the task's explicit mandate to design against real
+files rather than generic PSS/E documentation. Two concrete, non-obvious findings drove the
+parser's design: (1) LOAD DATA appears in **two different shapes** in real files — a 17-field
+standard shape and a 7-field abbreviated shape sharing fields 0-6 — and a third, genuinely valid
+"no reading" 2-field shape (`I,'ID' / No Reading / ...`) that is not malformed data, just a meter
+with nothing to report that cycle; (2) the load-only sample has **zero header lines, zero bus
+records, and inconsistent/out-of-sequence section terminator labels**, so section tracking is done
+purely by counting terminator lines in the order they appear, never by matching a fixed, closed
+list of expected section names — an unrecognized section is tolerated (warned, not fatal).
+
+**Backend**
+
+- New module `app/modules/psse_integration/`: `models.py` (`RawFileImportBatch`,
+  `TopologyVersion`, `TopologyBus`, `TopologyBranch`, `TopologyTransformer`, `LoadSnapshot`,
+  `LoadSnapshotBusState`, `LoadSnapshotElementState`, `NetworkLoad`, `NetworkGenerator`,
+  `EquipmentTopologyMap`, `PsseImportAuditLog`), `raw_parser.py`, `signature.py`, `matching.py`,
+  `repository.py`, `service.py`, `schemas.py`, `exceptions.py`, `dependencies.py`, `router.py`,
+  `bootstrap.py`, `jobs.py`.
+- **Topology/load separation is structural (ADR-003), not a naming convention:**
+  `TopologyBus`/`TopologyBranch`/`TopologyTransformer` carry no P/Q, voltage, or in-service field
+  anywhere — that data lives exclusively on `LoadSnapshotBusState`/`LoadSnapshotElementState`/
+  `NetworkLoad`/`NetworkGenerator`. This guarantees, by construction, that momentary operational
+  state can never leak into the deterministic topology signature.
+- **Deterministic topology signature** (`signature.py`): a SHA-256 hash over canonicalized
+  (sorted, fixed-6-decimal-formatted) bus/branch/transformer records, with branch/transformer
+  endpoints sorted so PSS/E's arbitrary from/to ordering never affects the hash. Re-importing a
+  structurally identical file reuses the existing `TopologyVersion` rather than creating a
+  duplicate.
+- **Preview → Commit → Activate workflow**, all through the service layer: Preview
+  (`PsseIntegrationService.preview`) is genuinely zero-persistence — no database row is ever
+  created. Commit persists a `RawFileImportBatch`, `TopologyVersion`/`LoadSnapshot` (or reuses an
+  existing `TopologyVersion` by signature), but never marks anything Current. Activate is a
+  separate, explicit, privileged action (`psse_integration.activate`) that atomically promotes a
+  batch's `TopologyVersion`/`LoadSnapshot` to `Current`, automatically superseding whatever was
+  previously Current — the lighter `Imported → Current → Superseded` lifecycle (ADR-003),
+  deliberately distinct from CLAUDE.md A3's canonical engineering version lifecycle.
+- **Flexible import types**, detected purely from parsed content (bus-record count present or
+  absent), never from filename or user assertion: `FULL_TOPOLOGY_WITH_LOAD` creates/reuses a
+  `TopologyVersion` and always extracts a `LoadSnapshot` from the same file; `LOAD_ONLY` requires
+  an existing Current `TopologyVersion` to target (raises `NoCurrentTopologyVersionError`
+  otherwise) and creates only a `LoadSnapshot`, matching loads by PSS/E bus number.
+- **`EquipmentTopologyMap`** targets `CircuitTerminal` directly (never `Circuit`, never a generic
+  `Equipment` id — this codebase's real Phase 3 build has no generic Equipment backbone, so
+  ADR-007's terminology was adapted to the actual schema). Matching (`matching.py`, a pure,
+  ORM-free function) is computed automatically whenever a *new* `TopologyVersion` is created:
+  for each `CircuitTerminal`, candidates are PSS/E elements connecting that terminal's substation
+  to any *other* terminal's substation within the same `Circuit` (generalizes to tee-offs with no
+  special-casing); disambiguated by exact `ckt_id`-vs-`bay_number` match. Zero candidates →
+  `unmatched`; exactly one exact match → `clean_match`; anything ambiguous or mismatched →
+  `discrepancy`, never guessed. `ENTERED_IN_ERROR` circuits/terminals are excluded from matching
+  candidates entirely. Resolving a discrepancy (`resolve_discrepancy`) only records the engineer's
+  classification on this module's own table — it never writes to Equipment Registry, since the
+  real `CircuitTerminal.voltage_yard_id` has no edit path after creation to write to.
+- **Redis + RQ** introduced for the first time in this project (`app/core/queue.py`,
+  `app/worker.py`) for async RAW parsing/validation. `settings.rq_async` (new config field,
+  default `True`) set to `False` in the test environment (`backend/conftest.py`) runs jobs
+  synchronously, in-process, against a `fakeredis` connection — no real Redis server needed for
+  correctness tests. `jobs.py` contains the only code in this module that opens its own database
+  session (`SessionLocal`), since RQ jobs run in a worker process outside any FastAPI request
+  context.
+- New endpoints under `/api/v1/psse-integration`: `POST /imports/preview`, `POST /imports/commit`
+  (both return a job id; parsing runs async), `GET /imports/jobs/{id}` (poll), `GET/GET
+  /imports/batches[/{id}]`, `POST /imports/batches/{id}/activate`, `GET/GET
+  /topology-versions[/{id}]`, `POST /topology-versions/{id}/recompute-matching`, `GET/GET
+  /load-snapshots[/{id}]`, `GET /current-status`, `GET
+  /topology-versions/{id}/equipment-map`, `POST /equipment-map/{id}/resolve`, `GET
+  /circuits/{id}/correlation`. New permissions: `psse_integration.read` (open to any authenticated
+  user, matching this project's existing read-permission precedent), `psse_integration.import`
+  (Administrator + Engineer), `psse_integration.activate` (Administrator only — activation is
+  "explicit, privileged, atomic, and audited").
+- Migration `0012_psse_integration` — hand-written, manually reviewed, fully reversible (verified
+  `upgrade → downgrade → upgrade` against real PostgreSQL). One genuine design issue found and
+  fixed before the migration was written: `raw_file_import_batch` ↔ `topology_version` ↔
+  `load_snapshot` forms a real 3-table foreign-key cycle (a batch points forward at the
+  TopologyVersion/LoadSnapshot it produced; those point back at the batch that created them) —
+  resolved with `use_alter=True` on the batch's two forward-pointing columns, closing the cycle via
+  a separate `ALTER TABLE` once all three tables exist, both in the SQLAlchemy models and the
+  migration.
+- `python-multipart` added as a new dependency (required by FastAPI for the RAW file upload
+  endpoints — the first file-upload endpoints in this project).
+
+**Frontend**
+
+- New module `frontend/src/modules/psse_integration/` (`types.ts`, `api.ts`,
+  `useJobPolling.ts`) plus 5 pages under `pages/`: `PsseImportUploadPage` (file select, preview,
+  commit — polls the async job until terminal), `PsseImportHistoryPage` (paginated batch list),
+  `PsseBatchDetailPage` (batch detail + Activate control, permission-gated), `PsseCurrentStatusPage`
+  (current TopologyVersion/LoadSnapshot summary), `PsseEquipmentTopologyMapPage` (clean-match/
+  unmatched/discrepancy review, with an Accept/Reject resolution form for discrepancies).
+- `apiClient` gained a `postForm` method (multipart upload, no `Content-Type` override so the
+  browser sets its own boundary) — the first file-upload support in the shared API client.
+- Wired into `router.tsx` (`/psse-integration/import`, `/history`, `/batches/:batchId`,
+  `/current-status`, `/topology-versions/:id/equipment-map`) and `AppShell.tsx`'s nav.
+
+**Tests**
+
+- Backend: 55 new tests across `test_raw_parser.py` (16, including direct integration tests
+  against the real sample files — bus/branch/transformer counts, both 2- and 3-winding
+  transformers, voltage solution extraction, "no reading" load handling, unknown-section
+  tolerance), `test_signature.py` (7 — determinism, record-order and endpoint-order independence),
+  `test_matching.py` (8 — clean-match/unmatched/discrepancy, case-insensitive ckt_id matching,
+  tee-off generalization, cross-circuit isolation), `test_service.py` (16 — preview zero-
+  persistence, topology reuse vs. new, load-only against Current, activation atomicity and
+  supersession, ENTERED_IN_ERROR exclusion, discrepancy resolution and re-resolution rejection,
+  circuit correlation), `test_jobs.py` (4), `test_bootstrap.py` (6), plus
+  `tests/test_psse_integration_api.py` (8 — auth/RBAC, full preview→commit→activate HTTP flow via
+  RQ running synchronously against `fakeredis`). 351 backend tests total, passing against both
+  SQLite and real PostgreSQL.
+- Frontend: 15 new tests across the 5 new pages plus 1 new `apiClient.postForm` test. 118 frontend
+  tests total, passing; lint/typecheck/build all clean.
+- **One genuine PostgreSQL-only defect found and fixed**, exactly the kind SQLite-only testing
+  cannot catch: `psse_import_audit_log.entity_id` was `String(64)`, but
+  `EquipmentTopologyMap`'s own audit entries key on a composite
+  `"{topology_version_id}:{circuit_terminal_id}"` string (two UUIDs + separator = 73 characters) —
+  SQLite silently accepts an over-length `VARCHAR`; PostgreSQL correctly raised
+  `StringDataRightTruncation`. Fixed by widening the column to `String(80)` in both the model and
+  the (still-unmerged) migration, then re-verified against real PostgreSQL.
+
+**Known limitations**
+
+- No manual browser UAT was performed for this phase — no browser automation tool was available in
+  the implementation environment. Verification relied on the automated backend (SQLite + real
+  PostgreSQL) and frontend (React Testing Library + lint/typecheck/build) suites, plus direct
+  `alembic upgrade/downgrade/upgrade` verification against the real dev PostgreSQL database.
+  Redis/RQ's real, non-`fakeredis` production path (`app.worker`, a genuine background worker
+  process against a real Redis server) was not separately smoke-tested — only its `docker-compose.yml`
+  wiring and the `rq_async=True` code path (exercised by every non-test run) were reviewed for
+  correctness.
+- The substation-to-bus matching heuristic (`_match_substation_for_bus`, matching a bus name's
+  leading 4 characters against `Substation.mnemonic`, case-insensitively) is deliberately simple
+  and documented as such — not a claim of perfect fidelity against every possible real PSS/E
+  naming convention.
+- The parser supports PSS/E RAW revision 34 only, as scoped — section boundaries are tracked by
+  terminator-line counting rather than a fixed section list specifically so a future revision's
+  differently-ordered or additional sections degrade to warnings rather than breaking existing
+  parsing, but no second revision was implemented or tested against.
+- A future Network Model module is the intended consumer of `get_circuit_correlation`
+  (union-of-terminals resolution) — that module itself is out of this phase's scope, so this
+  endpoint currently has no real caller beyond its own test coverage and the review UI.
+
+---
+
 ## Phase 3.5 — Transformer Registry
 
 **Scope:** `Transformer`/`TransformerTerminal` identity, inserted between Equipment Registry
