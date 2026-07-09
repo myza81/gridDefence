@@ -381,6 +381,12 @@ class NetworkLoad(Base):
     load_id: Mapped[str] = mapped_column(String(2), nullable=False)
     p_mw: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
     q_mvar: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
+    # PSS/E's own OWNER field (Phase 7A, EDR-007 §7.3) — a raw operational
+    # attribute carried through faithfully from the RAW file. Never
+    # interpreted or classified here; nullable because the abbreviated
+    # load-only RAW shape (raw_parser.py module docstring point 3) has no
+    # OWNER field at all.
+    owner: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("load_snapshot_id", "topology_bus_id", "load_id", name="uq_network_load"),

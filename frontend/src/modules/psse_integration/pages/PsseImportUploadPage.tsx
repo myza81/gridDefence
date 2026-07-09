@@ -199,11 +199,28 @@ export function PsseImportUploadPage() {
           <dl>
             <dt>Snapshot Type</dt>
             <dd>{formatSnapshotType(previewResult.import_type)}</dd>
-            <dt>PSS/E RAW Version</dt>
-            <dd>{previewResult.raw_version ?? "Not available"}</dd>
             <dt>Network Topology Status</dt>
             <dd>{formatTopologyStatus(previewResult)}</dd>
           </dl>
+
+          <h4>RAW File Information</h4>
+          <dl>
+            <dt>PSS®E Version</dt>
+            <dd>{previewResult.raw_version ?? "Not available"}</dd>
+            <dt>Base MVA</dt>
+            <dd>{previewResult.base_mva ?? "Not available"}</dd>
+            <dt>Frequency</dt>
+            <dd>
+              {previewResult.frequency_hz != null
+                ? `${previewResult.frequency_hz} Hz`
+                : "Not available"}
+            </dd>
+            <dt>Study Case</dt>
+            <dd>{previewResult.case_description ?? "Not available"}</dd>
+            <dt>RAW Created</dt>
+            <dd>{previewResult.raw_created ?? "Not available"}</dd>
+          </dl>
+
           <h4>Network Size</h4>
           <dl>
             <dt>Buses</dt>
@@ -242,6 +259,38 @@ export function PsseImportUploadPage() {
               </dt>
               <dd>{previewResult.coverage_percent}%</dd>
             </dl>
+          )}
+
+          {previewResult.sync_validation && (
+            <>
+              <h3>Load Synchronisation</h3>
+              <dl>
+                <dt>Total Load Records</dt>
+                <dd>{previewResult.sync_validation.total_load_records}</dd>
+                <dt>Distinct Load Buses</dt>
+                <dd>{previewResult.sync_validation.total_distinct_load_buses}</dd>
+                <dt>Matched Against Current Topology</dt>
+                <dd>{previewResult.sync_validation.matched_load_buses}</dd>
+                <dt>Missing From Current Topology</dt>
+                <dd>{previewResult.sync_validation.missing_topology_buses}</dd>
+                <dt>Bus Identity Mismatches</dt>
+                <dd>{previewResult.sync_validation.identity_mismatch_buses}</dd>
+              </dl>
+              {previewResult.sync_validation.identity_mismatches.length > 0 && (
+                <>
+                  <h4>Bus Identity Mismatches</h4>
+                  <ul>
+                    {previewResult.sync_validation.identity_mismatches.map((mismatch) => (
+                      <li key={mismatch.bus_number}>
+                        Bus {mismatch.bus_number}: current topology reports "
+                        {mismatch.active_bus_name}" at {mismatch.active_base_kv} kV; this file
+                        reports "{mismatch.incoming_bus_name}" at {mismatch.incoming_base_kv} kV.
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </>
           )}
 
           <h3>Engineering Findings</h3>

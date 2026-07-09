@@ -19,7 +19,12 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.equipment_registry.models import Circuit, CircuitTerminal, Transformer
+from app.modules.equipment_registry.models import (
+    Circuit,
+    CircuitTerminal,
+    SubstationVoltageYard,
+    Transformer,
+)
 from app.modules.psse_integration.models import (
     EquipmentTopologyMap,
     LoadSnapshot,
@@ -35,7 +40,7 @@ from app.modules.psse_integration.models import (
     TopologyVersion,
 )
 from app.modules.substation_registry.models import Substation
-from app.reference_data.models import OperationalStatus
+from app.reference_data.models import OperationalStatus, VoltageLevel
 
 
 def _entered_in_error_status_id_subquery():
@@ -165,6 +170,21 @@ class PsseIntegrationRepository:
         stmt = select(LoadSnapshot).where(LoadSnapshot.status == "Current")
         return self.db.execute(stmt).scalar_one_or_none()
 
+    def get_current_load_snapshot_for_topology(
+        self, topology_version_id: uuid.UUID
+    ) -> LoadSnapshot | None:
+        """Phase 7C — the Correlated Operational Model's own default
+        "which LoadSnapshot's operational state (in-service/energization)
+        should a Bus/Branch/Transformer view read" resolution, scoped to
+        one `TopologyVersion` (a Current LoadSnapshot always belongs to
+        the Current TopologyVersion, ADR-003, but a caller may ask about a
+        historical TopologyVersion, which by definition has none)."""
+        stmt = select(LoadSnapshot).where(
+            LoadSnapshot.topology_version_id == topology_version_id,
+            LoadSnapshot.status == "Current",
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
     def get_load_snapshot_as_of(self, as_of: datetime) -> LoadSnapshot | None:
         """Resolves "what was Current as of timestamp T" via each record's
         own `promoted_at`/`superseded_at` window (psse-integration-module.md
@@ -201,6 +221,27 @@ class PsseIntegrationRepository:
         self.db.add(state)
         return state
 
+    def list_load_snapshot_bus_states(
+        self, load_snapshot_id: uuid.UUID
+    ) -> list[LoadSnapshotBusState]:
+        """Phase 7C — bulk read for the Correlated Operational Model's
+        Bus view (one query for every Bus's `in_service` state in this
+        snapshot, never one query per Bus)."""
+        stmt = select(LoadSnapshotBusState).where(
+            LoadSnapshotBusState.load_snapshot_id == load_snapshot_id
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_load_snapshot_element_states(
+        self, load_snapshot_id: uuid.UUID
+    ) -> list[LoadSnapshotElementState]:
+        """Phase 7C — bulk read for the Correlated Operational Model's
+        Branch/Transformer views (one query, never one per element)."""
+        stmt = select(LoadSnapshotElementState).where(
+            LoadSnapshotElementState.load_snapshot_id == load_snapshot_id
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
     def add_network_load(self, load: NetworkLoad) -> NetworkLoad:
         self.db.add(load)
         return load
@@ -222,7 +263,62 @@ class PsseIntegrationRepository:
         stmt = select(Substation).where(func.lower(Substation.mnemonic) == mnemonic.lower())
         return self.db.execute(stmt).scalar_one_or_none()
 
+    def list_substations_by_ids(self, substation_ids: list[uuid.UUID]) -> list[Substation]:
+        """Phase 7C — bulk read for the Correlated Operational Model
+        (mnemonic display for every already-matched Bus in one query, not
+        one query per Bus). Empty input returns an empty list without a
+        round trip."""
+        if not substation_ids:
+            return []
+        stmt = select(Substation).where(Substation.substation_id.in_(substation_ids))
+        return list(self.db.execute(stmt).scalars().all())
+
     # --- Equipment Registry (read-only, cross-module) ----------------------------
+    def list_voltage_yards_by_substation_ids(
+        self, substation_ids: list[uuid.UUID]
+    ) -> list[SubstationVoltageYard]:
+        """Phase 7C — "correlated Switchyard" resolution for the
+        Correlated Operational Model's Bus view: bulk-fetches every
+        `SubstationVoltageYard` for the given Substations in one query,
+        excluding `ENTERED_IN_ERROR` (mirrors `list_active_circuit_terminals`'
+        own exclusion). The caller matches a Bus's own `base_kv` against
+        `VoltageLevel.nominal_kv` (via `list_voltage_levels`) to pick the
+        specific yard."""
+        if not substation_ids:
+            return []
+        stmt = select(SubstationVoltageYard).where(
+            SubstationVoltageYard.substation_id.in_(substation_ids),
+            SubstationVoltageYard.operational_status_id != _entered_in_error_status_id_subquery(),
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_voltage_levels(self) -> list[VoltageLevel]:
+        """Phase 7C — the whole (small) reference table, fetched once per
+        request rather than looked up per Bus."""
+        return list(self.db.execute(select(VoltageLevel)).scalars().all())
+
+    def list_circuit_terminals_by_ids(
+        self, circuit_terminal_ids: list[uuid.UUID]
+    ) -> list[CircuitTerminal]:
+        """Phase 7C — bulk read for the Correlated Operational Model's
+        Branch/Transformer views (one query for every referenced
+        `CircuitTerminal`, not one per `EquipmentTopologyMap` entry — see
+        `_map_entry_summary`'s own per-entry lookup, which this
+        deliberately does not repeat here)."""
+        if not circuit_terminal_ids:
+            return []
+        stmt = select(CircuitTerminal).where(
+            CircuitTerminal.circuit_terminal_id.in_(circuit_terminal_ids)
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_circuits_by_ids(self, circuit_ids: list[uuid.UUID]) -> list[Circuit]:
+        """Phase 7C — bulk read, paired with `list_circuit_terminals_by_ids`."""
+        if not circuit_ids:
+            return []
+        stmt = select(Circuit).where(Circuit.circuit_id.in_(circuit_ids))
+        return list(self.db.execute(stmt).scalars().all())
+
     def list_active_circuit_terminals(self) -> list[CircuitTerminal]:
         """Every `CircuitTerminal` eligible as an `EquipmentTopologyMap`
         matching candidate — excludes `ENTERED_IN_ERROR` terminals and
@@ -290,6 +386,18 @@ class PsseIntegrationRepository:
         stmt = stmt.order_by(EquipmentTopologyMap.created_at.desc()).offset(offset).limit(limit)
         items = list(self.db.execute(stmt).scalars().all())
         return items, total
+
+    def list_all_map_entries(self, topology_version_id: uuid.UUID) -> list[EquipmentTopologyMap]:
+        """Phase 7C — every `EquipmentTopologyMap` entry for one
+        `TopologyVersion`, unpaginated (mirrors `list_topology_buses`'s own
+        "list all for this topology version" shape) — the Correlated
+        Operational Model's Branch/Transformer views need the whole set at
+        once, to group by `topology_branch_id`/`topology_transformer_id`
+        in a single pass rather than one query per element."""
+        stmt = select(EquipmentTopologyMap).where(
+            EquipmentTopologyMap.topology_version_id == topology_version_id
+        )
+        return list(self.db.execute(stmt).scalars().all())
 
     def list_map_entries_for_circuit(
         self, topology_version_id: uuid.UUID, circuit_id: uuid.UUID

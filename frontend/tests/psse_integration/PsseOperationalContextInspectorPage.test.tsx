@@ -23,6 +23,10 @@ const FULL_PREVIEW_RESULT: PreviewResult = {
   warnings: [],
   source_file_reference: "case1.raw",
   base_mva: 100.0,
+  frequency_hz: 50.0,
+  case_description: "CPF_03 JAN 2025",
+  raw_created: "WED, FEB 11 2026 14:43",
+  sync_validation: null,
   buses: [
     {
       bus_number: 100,
@@ -34,6 +38,12 @@ const FULL_PREVIEW_RESULT: PreviewResult = {
       owner: 1,
       voltage_mag: 1.02,
       voltage_angle: 0.0,
+      bus_classification: "SWITCHYARD_BUS",
+      in_service: true,
+      substation_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      substation_mnemonic: "PKLG",
+      voltage_yard_id: null,
+      correlation_status: "CORRELATED",
     },
     {
       bus_number: 200,
@@ -45,6 +55,12 @@ const FULL_PREVIEW_RESULT: PreviewResult = {
       owner: 1,
       voltage_mag: 1.01,
       voltage_angle: -1.0,
+      bus_classification: "SWITCHYARD_BUS",
+      in_service: true,
+      substation_id: null,
+      substation_mnemonic: null,
+      voltage_yard_id: null,
+      correlation_status: "UNMATCHED_OPERATIONAL",
     },
   ],
   branches: [
@@ -125,5 +141,41 @@ describe("PsseOperationalContextInspectorPage", () => {
 
     await user.click(screen.getByRole("tab", { name: "Transformer Data" }));
     expect(screen.getByText("No records available.")).toBeInTheDocument();
+  });
+
+  it("displays Bus Classification and Load Owner (Phase 7A)", async () => {
+    const previewResult: PreviewResult = {
+      ...FULL_PREVIEW_RESULT,
+      buses: [
+        { ...FULL_PREVIEW_RESULT.buses[0], bus_classification: "FICTITIOUS_BUS" },
+        { ...FULL_PREVIEW_RESULT.buses[1], bus_classification: "SPLIT_SWITCHYARD_BUS" },
+      ],
+      loads: [
+        { bus_number: 100, load_id: "1", status: true, p_mw: 10.5, q_mvar: 2.1, owner: 99 },
+      ],
+    };
+    renderAtRoute("/psse-integration/import/inspect", { previewResult });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("tab", { name: "Bus Data" }));
+    expect(screen.getByText("Classification")).toBeInTheDocument();
+    expect(screen.getByText("Fictitious Bus")).toBeInTheDocument();
+    expect(screen.getByText("Split Switchyard Bus")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Load Data" }));
+    expect(screen.getByText("Owner")).toBeInTheDocument();
+    expect(screen.getByText("99")).toBeInTheDocument();
+  });
+
+  it("displays correlated Substation and Correlation Status (Phase 7C)", async () => {
+    renderAtRoute("/psse-integration/import/inspect", { previewResult: FULL_PREVIEW_RESULT });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("tab", { name: "Bus Data" }));
+    expect(screen.getByText("Correlated Substation")).toBeInTheDocument();
+    expect(screen.getByText("Correlation Status")).toBeInTheDocument();
+    expect(screen.getByText("PKLG")).toBeInTheDocument();
+    expect(screen.getByText("Correlated")).toBeInTheDocument();
+    expect(screen.getByText("Unmatched (Operational)")).toBeInTheDocument();
   });
 });

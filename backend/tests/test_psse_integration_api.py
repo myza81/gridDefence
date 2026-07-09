@@ -103,7 +103,12 @@ def _viewer_only_token(client: TestClient, db_session: Session, username: str) -
     return _login(client, username, "correct-horse-battery")
 
 
-def _submit_commit(client: TestClient, headers: dict, filename: str = "case1.raw") -> dict:
+def _submit_commit(
+    client: TestClient,
+    headers: dict,
+    filename: str = "case1.raw",
+    content: bytes = _FULL_TOPOLOGY_RAW,
+) -> dict:
     """Submits Commit and returns the resulting batch dict regardless of
     execution mode (§8.9c): Direct mode (default) responds `200` with the
     result immediately; Queue mode responds `202` with a job id, polled via
@@ -111,7 +116,7 @@ def _submit_commit(client: TestClient, headers: dict, filename: str = "case1.raw
     response = client.post(
         "/api/v1/psse-integration/imports/commit",
         headers=headers,
-        files={"file": (filename, io.BytesIO(_FULL_TOPOLOGY_RAW), "text/plain")},
+        files={"file": (filename, io.BytesIO(content), "text/plain")},
     )
     assert response.status_code in (200, 202), response.text
     if response.status_code == 200:
@@ -184,6 +189,37 @@ def test_preview_response_includes_parsed_records_for_inspector(
     assert result["transformers"] == []
     assert result["loads"] == []
     assert result["generators"] == []
+
+
+def test_preview_response_includes_raw_file_information(
+    client: TestClient, db_session: Session
+) -> None:
+    """RAW File Information (Phase 7 discovery-support enhancement, §8.9f)
+    — header metadata is included in the same Preview response, with zero
+    router.py changes. This fixture's header has no case-identification
+    title lines or writer comment, so those two fields are gracefully
+    `None`."""
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    result = _upload_preview(client, headers)
+    assert result["frequency_hz"] == 50.0
+    assert result["case_description"] is None
+    assert result["raw_created"] is None
+
+
+def test_preview_response_includes_bus_classification(
+    client: TestClient, db_session: Session
+) -> None:
+    """Operational Bus classification (Phase 7A, EDR-007 §4) — a
+    naming-pattern classification exposed alongside every parsed Bus
+    record in the same Preview response, with zero router.py changes."""
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    result = _upload_preview(client, headers)
+    assert len(result["buses"]) == 2
+    assert all(bus["bus_classification"] == "SWITCHYARD_BUS" for bus in result["buses"])
 
 
 # --- Preview execution model (§8.9a) ---------------------------------------------
@@ -464,3 +500,326 @@ def test_get_unknown_job_returns_404(client: TestClient, db_session: Session) ->
         headers=headers,
     )
     assert response.status_code == 404
+
+
+# --- Correlated Operational Model (Phase 7C) ---------------------------------------
+
+
+def test_preview_response_includes_bus_correlation_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    """Correlated Operational Model Preview enrichment (Phase 7C) — Bus-
+    level correlation status is computed at Preview time (zero
+    persistence) and exposed alongside every parsed Bus record, with zero
+    Substation Registry data seeded in this test's own database."""
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    result = _upload_preview(client, headers)
+    assert len(result["buses"]) == 2
+    for bus in result["buses"]:
+        assert bus["correlation_status"] == "UNMATCHED_OPERATIONAL"
+        assert bus["substation_id"] is None
+        assert bus["in_service"] is True
+
+
+def test_operational_bus_views_endpoint_returns_correlation_status(
+    client: TestClient, db_session: Session
+) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}/operational-model/buses",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 2
+    assert {bus["bus_number"] for bus in body["items"]} == {100, 200}
+    assert all(bus["correlation_status"] == "UNMATCHED_OPERATIONAL" for bus in body["items"])
+
+
+def test_operational_bus_views_endpoint_requires_authentication(client: TestClient) -> None:
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{uuid.uuid4()}/operational-model/buses"
+    )
+    assert response.status_code == 401
+
+
+def test_operational_bus_view_endpoint_single_bus(client: TestClient, db_session: Session) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}"
+        "/operational-model/buses/100",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["bus_number"] == 100
+
+
+def test_operational_bus_view_endpoint_unknown_bus_returns_404(
+    client: TestClient, db_session: Session
+) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}"
+        "/operational-model/buses/999",
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+def test_operational_branch_views_endpoint(client: TestClient, db_session: Session) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}"
+        "/operational-model/branches",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["from_bus_number"] == 100
+    assert body["items"][0]["correlation_status"] == "UNMATCHED_OPERATIONAL"
+
+
+def test_operational_transformer_views_endpoint(client: TestClient, db_session: Session) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}"
+        "/operational-model/transformers",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"items": [], "page": 1, "page_size": 50, "total": 0}
+
+
+def test_operational_load_views_endpoint(client: TestClient, db_session: Session) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    load_snapshot_id = batch["load_snapshot_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/load-snapshots/{load_snapshot_id}/operational-model/loads",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 0
+
+
+def test_operational_load_views_endpoint_unknown_snapshot_returns_404(
+    client: TestClient, db_session: Session
+) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get(
+        f"/api/v1/psse-integration/load-snapshots/{uuid.uuid4()}/operational-model/loads",
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+# --- Bus Correlation Refresh (Phase 7D UAT follow-up, Finding 1) ---------------------
+
+
+def test_refresh_bus_correlation_endpoint_returns_summary(
+    client: TestClient, db_session: Session
+) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    batch = _submit_commit(client, headers)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.post(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}"
+        "/operational-model/refresh-correlation",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["topology_version_id"] == topology_version_id
+    assert body["buses_processed"] == 2
+    assert body["buses_correlated"] == 0
+    assert body["buses_unmatched"] == 2
+    assert body["buses_outside_scope"] == 0
+    assert body["updated_count"] == 0
+
+
+def test_refresh_bus_correlation_endpoint_requires_authentication(client: TestClient) -> None:
+    response = client.post(
+        f"/api/v1/psse-integration/topology-versions/{uuid.uuid4()}"
+        "/operational-model/refresh-correlation"
+    )
+    assert response.status_code == 401
+
+
+def test_refresh_bus_correlation_endpoint_without_import_permission_is_forbidden(
+    client: TestClient, db_session: Session
+) -> None:
+    bootstrap_iam(db_session)
+    token = _viewer_only_token(client, db_session, "viewer1")
+    response = client.post(
+        f"/api/v1/psse-integration/topology-versions/{uuid.uuid4()}"
+        "/operational-model/refresh-correlation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+
+
+def test_refresh_bus_correlation_endpoint_unknown_topology_version_returns_404(
+    client: TestClient, db_session: Session
+) -> None:
+    token = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.post(
+        f"/api/v1/psse-integration/topology-versions/{uuid.uuid4()}"
+        "/operational-model/refresh-correlation",
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+# --- AMBIGUOUS Correlation Status — API integration (Phase 7D, Finding 2) -----------
+
+_AMBIGUOUS_BRANCH_RAW = b"""0,100.0,34,0,1,50.0
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+100,'PKLG132',132.0,1,1,1,1,1.02,0.0
+200,'IGBK132',132.0,1,1,1,1,1.01,-1.0
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+100,200,'2',0.001,0.01,0.0002
+100,200,'3',0.002,0.02,0.0003
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"""
+
+
+def test_ambiguous_discrepancy_visible_through_the_equipment_map_api(
+    client: TestClient, db_session: Session
+) -> None:
+    """Same real, persisted multi-candidate scenario as
+    test_service.py::test_ambiguous_correlation_status_from_real_persisted_multi_candidate_discrepancy,
+    verified through the actual HTTP API path (`GET .../equipment-map`) a
+    user's browser calls, not just the service layer directly."""
+    from app.modules.equipment_registry.service import EquipmentRegistryService, TerminalInput
+    from app.modules.substation_registry.service import SubstationService
+    from app.reference_data.models import (
+        GridOwner,
+        LineType,
+        OperationalStatus,
+        Region,
+        State,
+        VoltageLevel,
+    )
+    from app.reference_data.seed import run_seed
+
+    admin_user = bootstrap_iam(db_session)
+    bootstrap_psse_integration(db_session)
+    settings = get_settings()
+    token = _login(client, settings.bootstrap_admin_username, settings.bootstrap_admin_password)
+    headers = {"Authorization": f"Bearer {token}"}
+    admin_user_id = admin_user.user_id
+
+    run_seed(db_session)
+    db_session.commit()
+    voltage_level = db_session.query(VoltageLevel).filter_by(label="500kV").one()
+    line_type = db_session.query(LineType).filter_by(code="OVERHEAD").one()
+    region = db_session.query(Region).filter_by(code="NORTH").one()
+    state = db_session.query(State).filter_by(code="SEL").one()
+    grid_owner = db_session.query(GridOwner).filter_by(code="TNB").one()
+    active_status_id = (
+        db_session.query(OperationalStatus).filter_by(code="ACTIVE").one().operational_status_id
+    )
+
+    sub_service = SubstationService(db_session)
+    eq_service = EquipmentRegistryService(db_session)
+    pklg = sub_service.create_substation(
+        mnemonic="PKLG",
+        official_name="PKLG Substation",
+        region_id=region.region_id,
+        state_id=state.state_id,
+        grid_owner_id=grid_owner.grid_owner_id,
+        operational_status_id=active_status_id,
+        psse_bus_number=None,
+        latitude=None,
+        longitude=None,
+        commissioned_date=None,
+        remarks=None,
+        actor_user_id=admin_user_id,
+    )
+    igbk = sub_service.create_substation(
+        mnemonic="IGBK",
+        official_name="IGBK Substation",
+        region_id=region.region_id,
+        state_id=state.state_id,
+        grid_owner_id=grid_owner.grid_owner_id,
+        operational_status_id=active_status_id,
+        psse_bus_number=None,
+        latitude=None,
+        longitude=None,
+        commissioned_date=None,
+        remarks=None,
+        actor_user_id=admin_user_id,
+    )
+    db_session.commit()
+    pklg_yard = eq_service.create_voltage_yard(
+        substation_id=pklg.substation_id,
+        voltage_level_id=voltage_level.voltage_level_id,
+        actor_user_id=admin_user_id,
+    )
+    igbk_yard = eq_service.create_voltage_yard(
+        substation_id=igbk.substation_id,
+        voltage_level_id=voltage_level.voltage_level_id,
+        actor_user_id=admin_user_id,
+    )
+    db_session.commit()
+    eq_service.create_circuit(
+        bay_number="1",
+        voltage_level_id=voltage_level.voltage_level_id,
+        line_type_id=line_type.line_type_id,
+        operational_status_id=active_status_id,
+        is_interconnector=False,
+        remarks=None,
+        terminals=[
+            TerminalInput(voltage_yard_id=pklg_yard.voltage_yard_id, breaker_number="CB1"),
+            TerminalInput(voltage_yard_id=igbk_yard.voltage_yard_id, breaker_number="CB2"),
+        ],
+        actor_user_id=admin_user_id,
+    )
+    db_session.commit()
+
+    batch = _submit_commit(client, headers, content=_AMBIGUOUS_BRANCH_RAW)
+    topology_version_id = batch["topology_version_id"]
+
+    response = client.get(
+        f"/api/v1/psse-integration/topology-versions/{topology_version_id}/equipment-map",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert len(items) == 2
+    assert all(item["match_outcome"] == "discrepancy" for item in items)
+    assert all(item["topology_branch_id"] is None for item in items)
+    assert all(item["topology_transformer_id"] is None for item in items)

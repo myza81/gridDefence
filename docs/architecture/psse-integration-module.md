@@ -341,6 +341,18 @@ Both live under `frontend/src/components/ui/`, alongside the project's existing 
 
 **No engineering behaviour changed.** The parser, `service.preview()`'s validation/matching logic, `service.commit()`, Activation, and Equipment Correlation are all untouched by this phase — confirmed by the full existing Preview/Commit/Activate test suite passing unchanged alongside the new Inspector-specific tests.
 
+### 8.9f RAW File Information (Phase 7 Discovery-Support Enhancement)
+
+**A small "RAW File Information" section on the Preview page surfaces the RAW file's own case-identification header — PSS®E Version, Base MVA, System Frequency, Study Case, and RAW Created — for engineering visibility only.** This is a Preview presentation enhancement, not a new engineering capability: none of these fields are new engineering facts, they are metadata the RAW writer tool already embeds in every file's header, previously parsed only in part (`rev`/`sbase`) and now read more completely from the same header line plus the file's two fixed case-identification title lines.
+
+**No new parsing pass, no new engineering behaviour.** `parse_raw()` gained three additive `ParsedCase` fields — `frequency_hz` (the header line's `BASFRQ` field), `case_description` (the second case-identification title line, falling back to the first), and `raw_created` (a best-effort regular-expression extraction of the RAW writer's own "created by ... " export-timestamp note from the header line's trailing comment) — read during the same single pass over the file Preview already performs. All three are best-effort, exactly like the pre-existing `rev`/`sbase`: a differently-worded writer comment, an absent header, or missing title lines simply yield `None`, never a parse failure (module docstring point 5, `raw_parser.py`).
+
+**`raw_created` is explicitly the file's export timestamp, never the network study date.** These are two independent facts that happen to both mention a date in this project's own reference sample (`docs/samples/psse/110226n.raw`) — the RAW writer's own comment (`PSS(R)E 34 RAW created by rawd34  WED, FEB 11 2026  14:43`) versus the case-identification title lines' own study reference (`CPF_03 JAN 2025`). The parser keeps them as two separate fields for exactly this reason; the Preview UI labels them "RAW Created" and "Study Case" respectively, never conflating the two.
+
+**Zero persistence, zero schema change.** The three new fields flow through `PreviewResultData`/`PreviewResult` exactly as `base_mva`/`source_file_reference` already do (§8.9e) — additive-only fields on the existing zero-persistence Preview response, never written to any table, never touching Commit, Activation, or topology/load-snapshot persistence.
+
+**UI placement.** The new section renders between Snapshot Summary and Network Size, on the existing Preview page only — not the Operational Context Inspector, not the Import Result page — matching this enhancement's own explicit "preview enhancement only" scope.
+
 ### 8.10 Workflow 7 — Current LoadSnapshot Activation
 
 An authenticated, authorized user (CLAUDE.md A10) reviews a batch's outcome (warnings, coverage) and explicitly activates it. Activation is a single atomic operation:

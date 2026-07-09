@@ -97,6 +97,8 @@ The key engineering distinction from the central chain above: a direct Shedding 
 
 A Shedding Action's engineering validity depends on **both** layers below it — Engineering Knowledge answers "does this equipment exist, and can it be operated" (Substation, Equipment, Grid Defence Capability, Sensitive Customer exclusion), while Operational Context answers "what would happen if it were operated, right now" (expected load, topology-derived pocket boundaries). Neither layer ever writes into Layer 3 directly — an engineer's decision is what turns information from either layer into part of a scheme (see **Engineering Decision** in [02-engineering-concepts.md](02-engineering-concepts.md)).
 
+**Registry vs. Operational Snapshot responsibility (Operational Snapshot pivot).** Within Layer 1, Line Connectivity Registry and the transformer-asset portion of Equipment Registry own curated engineering **identity and metadata** — bay numbers, breaker numbers, line type, interconnector flags, commissioning dates, alias/rename history. Within Layer 2, PSS/E Network Topology (realized as **Operational Snapshot** — see [EDR-007](edr/EDR-007-phase-7-operational-identity-mapping.md) and `docs/architecture/operational-snapshot-architecture.md`) owns **current electrical topology, current connectivity, and current bus/branch/transformer/load/generator representation**. Registries are never overwritten by Operational Snapshot data, and Operational Snapshot is never overwritten by registry data — GridDefence's Correlation Layer joins the two for engineering workflows (equipment identity → its current operational representation), it does not merge them into one owner.
+
 ---
 
 ## 4. The Scheme's Own Internal Lifecycle Relationship

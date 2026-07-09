@@ -120,6 +120,10 @@ describe("PsseImportUploadPage", () => {
     transformers: [],
     loads: [],
     generators: [],
+    // RAW File Information (Phase 7 discovery-support enhancement).
+    frequency_hz: 50.0,
+    case_description: "CPF_03 JAN 2025",
+    raw_created: "WED, FEB 11 2026 14:43",
   };
 
   const COMMIT_BATCH_RESULT = {
@@ -188,6 +192,38 @@ describe("PsseImportUploadPage", () => {
     ).toHaveAttribute("href", "/psse-integration/batches/33333333-3333-3333-3333-333333333333");
   });
 
+  it("displays RAW File Information before the object counts (Phase 7 discovery-support enhancement)", async () => {
+    authStorage.setToken("token");
+    stubFetch([...SESSION_HANDLERS(["psse_integration.import"]), previewHandler(FULL_TOPOLOGY_PREVIEW)]);
+
+    renderWithProviders(<PsseImportUploadPage />, { route: "/psse-integration/import" });
+
+    const user = userEvent.setup();
+    const fileInput = await screen.findByLabelText("RAW file");
+    await user.upload(fileInput, makeRawFile());
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("RAW File Information")).toBeInTheDocument();
+    });
+    expect(screen.getByText("PSS®E Version")).toBeInTheDocument();
+    expect(screen.getByText("Base MVA")).toBeInTheDocument();
+    expect(screen.getByText("100")).toBeInTheDocument();
+    expect(screen.getByText("Frequency")).toBeInTheDocument();
+    expect(screen.getByText("50 Hz")).toBeInTheDocument();
+    expect(screen.getByText("Study Case")).toBeInTheDocument();
+    expect(screen.getByText("CPF_03 JAN 2025")).toBeInTheDocument();
+    expect(screen.getByText("RAW Created")).toBeInTheDocument();
+    expect(screen.getByText("WED, FEB 11 2026 14:43")).toBeInTheDocument();
+
+    // Must appear before the object counts (Buses, Branches, etc.).
+    const infoHeading = screen.getByText("RAW File Information");
+    const networkSizeHeading = screen.getByText("Network Size");
+    expect(
+      infoHeading.compareDocumentPosition(networkSizeHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("commits via Queue execution mode, polling a job to completion", async () => {
     authStorage.setToken("token");
     stubFetch([
@@ -246,6 +282,12 @@ describe("PsseImportUploadPage", () => {
         unmatched_bus_count: 0,
         coverage_percent: 100.0,
         warnings: [],
+        // A load-only file's header is frequently absent entirely (§8.7) —
+        // every RAW File Information field is gracefully null.
+        base_mva: null,
+        frequency_hz: null,
+        case_description: null,
+        raw_created: null,
       }),
     ]);
 
@@ -265,7 +307,91 @@ describe("PsseImportUploadPage", () => {
     expect(screen.getByText("Load Buses Matched Against Current Topology")).toBeInTheDocument();
     expect(screen.getByText("Unmatched Load Buses")).toBeInTheDocument();
     expect(screen.queryByText("Registered Substations Matched")).not.toBeInTheDocument();
-    expect(screen.getByText("Not available")).toBeInTheDocument(); // PSS/E RAW Version
+    // PSS/E Version, Base MVA, Frequency, Study Case, RAW Created — all
+    // gracefully "Not available" when the RAW file has no header at all.
+    expect(screen.getAllByText("Not available")).toHaveLength(5);
+  });
+
+  it("displays the Load Synchronisation summary and bus identity mismatches (Phase 7B)", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      ...SESSION_HANDLERS(["psse_integration.import"]),
+      previewHandler({
+        import_type: "LOAD_ONLY",
+        raw_version: null,
+        bus_count: 0,
+        branch_count: 0,
+        transformer_count: 0,
+        load_count: 2,
+        generator_count: 0,
+        computed_signature: null,
+        topology_reused: false,
+        matched_bus_count: 2,
+        unmatched_bus_count: 0,
+        coverage_percent: 100.0,
+        warnings: [],
+        base_mva: null,
+        frequency_hz: null,
+        case_description: null,
+        raw_created: null,
+        sync_validation: {
+          total_load_records: 2,
+          total_distinct_load_buses: 2,
+          matched_load_buses: 2,
+          unmatched_load_buses: 0,
+          missing_topology_buses: 1,
+          identity_mismatch_buses: 1,
+          unmatched_load_bus_numbers: [],
+          missing_topology_bus_numbers: [200],
+          identity_mismatches: [
+            {
+              bus_number: 100,
+              active_bus_name: "PKLG132",
+              incoming_bus_name: "RENAMED_BUS",
+              active_base_kv: 132.0,
+              incoming_base_kv: 132.0,
+              mismatch_reason: "bus_name",
+            },
+          ],
+        },
+      }),
+    ]);
+
+    renderWithProviders(<PsseImportUploadPage />, { route: "/psse-integration/import" });
+
+    const user = userEvent.setup();
+    const fileInput = await screen.findByLabelText("RAW file");
+    await user.upload(fileInput, makeRawFile());
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Load Synchronisation")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Missing From Current Topology")).toBeInTheDocument();
+    expect(screen.getAllByText("Bus Identity Mismatches").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Bus 100: current topology reports/)).toBeInTheDocument();
+    expect(screen.getByText(/"PKLG132" at 132 kV/)).toBeInTheDocument();
+    expect(screen.getByText(/"RENAMED_BUS" at 132 kV/)).toBeInTheDocument();
+  });
+
+  it("does not show a Load Synchronisation section for a full topology import", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      ...SESSION_HANDLERS(["psse_integration.import"]),
+      previewHandler({ ...FULL_TOPOLOGY_PREVIEW, sync_validation: null }),
+    ]);
+
+    renderWithProviders(<PsseImportUploadPage />, { route: "/psse-integration/import" });
+
+    const user = userEvent.setup();
+    const fileInput = await screen.findByLabelText("RAW file");
+    await user.upload(fileInput, makeRawFile());
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Full Network Topology + Load Snapshot")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Load Synchronisation")).not.toBeInTheDocument();
   });
 
   it("shows a plain explanation, not a coverage number, when no current network topology exists yet", async () => {

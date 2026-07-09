@@ -4,7 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import { DataInspector } from "../../../components/ui/DataInspector";
 import { DataTable } from "../../../components/ui/DataTable";
-import { formatSnapshotType } from "../format";
+import { formatBusClassification, formatCorrelationStatus, formatSnapshotType } from "../format";
 import type {
   ParsedBranchRow,
   ParsedBusRow,
@@ -31,6 +31,21 @@ const busColumns: ColumnDef<ParsedBusRow>[] = (() => {
     helper.accessor("voltage_angle", {
       header: "Voltage Angle (deg)",
       cell: (info) => info.getValue() ?? "—",
+    }),
+    helper.accessor("bus_classification", {
+      header: "Classification",
+      cell: (info) => formatBusClassification(info.getValue()),
+    }),
+    helper.accessor("substation_mnemonic", {
+      header: "Correlated Substation",
+      cell: (info) => info.getValue() ?? "—",
+    }),
+    helper.accessor("correlation_status", {
+      header: "Correlation Status",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? formatCorrelationStatus(value) : "—";
+      },
     }),
   ] as ColumnDef<ParsedBusRow>[];
 })();
@@ -73,6 +88,7 @@ const loadColumns: ColumnDef<ParsedLoadRow>[] = (() => {
     helper.accessor("status", { header: "In Service", cell: (info) => (info.getValue() ? "Yes" : "No") }),
     helper.accessor("p_mw", { header: "P (MW)" }),
     helper.accessor("q_mvar", { header: "Q (MVAr)" }),
+    helper.accessor("owner", { header: "Owner", cell: (info) => info.getValue() ?? "—" }),
   ] as ColumnDef<ParsedLoadRow>[];
 })();
 

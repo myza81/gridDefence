@@ -3,6 +3,7 @@ import type {
   ActivateRequest,
   BatchPage,
   BatchSummary,
+  BusCorrelationRefreshSummary,
   CircuitCorrelation,
   CommitSubmission,
   CurrentStatus,
@@ -12,6 +13,11 @@ import type {
   JobStatus,
   LoadSnapshotPage,
   LoadSnapshotSummary,
+  OperationalBranchViewPage,
+  OperationalBusView,
+  OperationalBusViewPage,
+  OperationalLoadViewPage,
+  OperationalTransformerViewPage,
   PreviewResult,
   TopologyVersionPage,
   TopologyVersionSummary,
@@ -112,5 +118,39 @@ export const psseIntegrationApi = {
       `/api/v1/psse-integration/circuits/${circuitId}/correlation${buildQuery({
         topology_version_id: topologyVersionId,
       })}`,
+    ),
+
+  // --- Correlated Operational Model (Phase 7C/7D) -------------------------
+  refreshBusCorrelation: (topologyVersionId: string) =>
+    apiClient.post<BusCorrelationRefreshSummary>(
+      `/api/v1/psse-integration/topology-versions/${topologyVersionId}/operational-model/refresh-correlation`,
+    ),
+  listOperationalBusViews: (topologyVersionId: string, page = 1, pageSize = 50) =>
+    apiClient.get<OperationalBusViewPage>(
+      `/api/v1/psse-integration/topology-versions/${topologyVersionId}/operational-model/buses${buildQuery(
+        { page, page_size: pageSize },
+      )}`,
+    ),
+  getOperationalBusView: (topologyVersionId: string, busNumber: number) =>
+    apiClient.get<OperationalBusView>(
+      `/api/v1/psse-integration/topology-versions/${topologyVersionId}/operational-model/buses/${busNumber}`,
+    ),
+  listOperationalBranchViews: (topologyVersionId: string, page = 1, pageSize = 50) =>
+    apiClient.get<OperationalBranchViewPage>(
+      `/api/v1/psse-integration/topology-versions/${topologyVersionId}/operational-model/branches${buildQuery(
+        { page, page_size: pageSize },
+      )}`,
+    ),
+  listOperationalTransformerViews: (topologyVersionId: string, page = 1, pageSize = 50) =>
+    apiClient.get<OperationalTransformerViewPage>(
+      `/api/v1/psse-integration/topology-versions/${topologyVersionId}/operational-model/transformers${buildQuery(
+        { page, page_size: pageSize },
+      )}`,
+    ),
+  listOperationalLoadViews: (loadSnapshotId: string, page = 1, pageSize = 50) =>
+    apiClient.get<OperationalLoadViewPage>(
+      `/api/v1/psse-integration/load-snapshots/${loadSnapshotId}/operational-model/loads${buildQuery(
+        { page, page_size: pageSize },
+      )}`,
     ),
 };

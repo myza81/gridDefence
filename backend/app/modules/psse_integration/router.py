@@ -45,6 +45,7 @@ from app.modules.psse_integration.schemas import (
     ActivateRequest,
     BatchPage,
     BatchSummary,
+    BusCorrelationRefreshSummary,
     CircuitCorrelation,
     CurrentStatus,
     DiscrepancyResolveRequest,
@@ -53,6 +54,11 @@ from app.modules.psse_integration.schemas import (
     JobStatus,
     LoadSnapshotPage,
     LoadSnapshotSummary,
+    OperationalBranchViewPage,
+    OperationalBusView,
+    OperationalBusViewPage,
+    OperationalLoadViewPage,
+    OperationalTransformerViewPage,
     PreviewResult,
     TopologyVersionPage,
     TopologyVersionSummary,
@@ -331,3 +337,133 @@ def get_circuit_correlation(
         return service.get_circuit_correlation(circuit_id, topology_version_id)
     except AppError as exc:
         raise _error_response(exc) from exc
+
+
+# --- Correlated Operational Model (Phase 7C/7D) -------------------------------------
+#
+# Read-only — the intended, preferred engineering-consumption API for
+# future Defence Scheme modules, dashboards, and analytics
+# (operational-correlation-architecture.md §5, §6). Authentication only,
+# exactly like every other read endpoint in this router; this is
+# engineering reference data, not a write surface.
+#
+# The one exception is `refresh-correlation` below (Phase 7D) — it updates
+# only the correlation link (`TopologyBus.substation_id`), never topology
+# facts or registry records, and requires `psse_integration.import`
+# exactly like `recompute-matching` above (its Branch/Transformer-level
+# counterpart) — both are explicit, audited maintenance operations, not
+# passive reads.
+
+
+@router.post(
+    "/topology-versions/{topology_version_id}/operational-model/refresh-correlation",
+    response_model=BusCorrelationRefreshSummary,
+)
+def refresh_bus_correlation(
+    topology_version_id: uuid.UUID,
+    service: PsseIntegrationService = Depends(get_psse_integration_service),
+    actor: User = Depends(require_permission("psse_integration.import")),
+) -> BusCorrelationRefreshSummary:
+    try:
+        summary = service.refresh_bus_correlation(topology_version_id, actor_user_id=actor.user_id)
+    except AppError as exc:
+        raise _error_response(exc) from exc
+
+    service.db.commit()
+    return summary
+
+
+@router.get(
+    "/topology-versions/{topology_version_id}/operational-model/buses",
+    response_model=OperationalBusViewPage,
+)
+def list_operational_bus_views(
+    topology_version_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 50,
+    service: PsseIntegrationService = Depends(get_psse_integration_service),
+    _current_user: User = Depends(get_current_user),
+) -> OperationalBusViewPage:
+    try:
+        items, total = service.get_operational_bus_views(
+            topology_version_id, page=page, page_size=page_size
+        )
+    except AppError as exc:
+        raise _error_response(exc) from exc
+    return OperationalBusViewPage(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.get(
+    "/topology-versions/{topology_version_id}/operational-model/buses/{bus_number}",
+    response_model=OperationalBusView,
+)
+def get_operational_bus_view(
+    topology_version_id: uuid.UUID,
+    bus_number: int,
+    service: PsseIntegrationService = Depends(get_psse_integration_service),
+    _current_user: User = Depends(get_current_user),
+) -> OperationalBusView:
+    try:
+        return service.get_operational_bus_view(topology_version_id, bus_number)
+    except AppError as exc:
+        raise _error_response(exc) from exc
+
+
+@router.get(
+    "/topology-versions/{topology_version_id}/operational-model/branches",
+    response_model=OperationalBranchViewPage,
+)
+def list_operational_branch_views(
+    topology_version_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 50,
+    service: PsseIntegrationService = Depends(get_psse_integration_service),
+    _current_user: User = Depends(get_current_user),
+) -> OperationalBranchViewPage:
+    try:
+        items, total = service.get_operational_branch_views(
+            topology_version_id, page=page, page_size=page_size
+        )
+    except AppError as exc:
+        raise _error_response(exc) from exc
+    return OperationalBranchViewPage(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.get(
+    "/topology-versions/{topology_version_id}/operational-model/transformers",
+    response_model=OperationalTransformerViewPage,
+)
+def list_operational_transformer_views(
+    topology_version_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 50,
+    service: PsseIntegrationService = Depends(get_psse_integration_service),
+    _current_user: User = Depends(get_current_user),
+) -> OperationalTransformerViewPage:
+    try:
+        items, total = service.get_operational_transformer_views(
+            topology_version_id, page=page, page_size=page_size
+        )
+    except AppError as exc:
+        raise _error_response(exc) from exc
+    return OperationalTransformerViewPage(items=items, page=page, page_size=page_size, total=total)
+
+
+@router.get(
+    "/load-snapshots/{load_snapshot_id}/operational-model/loads",
+    response_model=OperationalLoadViewPage,
+)
+def list_operational_load_views(
+    load_snapshot_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 50,
+    service: PsseIntegrationService = Depends(get_psse_integration_service),
+    _current_user: User = Depends(get_current_user),
+) -> OperationalLoadViewPage:
+    try:
+        items, total = service.get_operational_load_views(
+            load_snapshot_id, page=page, page_size=page_size
+        )
+    except AppError as exc:
+        raise _error_response(exc) from exc
+    return OperationalLoadViewPage(items=items, page=page, page_size=page_size, total=total)

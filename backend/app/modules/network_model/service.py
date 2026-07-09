@@ -33,23 +33,42 @@ from collections import deque
 
 from sqlalchemy.orm import Session
 
-from app.modules.equipment_registry.models import CircuitTerminal
-from app.modules.network_model.exceptions import SubstationNotFoundError
+from app.modules.network_model.exceptions import (
+    NoCurrentTopologyVersionError,
+    SubstationNotFoundError,
+    TopologyVersionNotFoundError,
+    VoltageYardNotFoundError,
+    VoltageYardSubstationMismatchError,
+)
 from app.modules.network_model.repository import NetworkModelRepository
 from app.modules.network_model.schemas import (
+    BusProjectionEntry,
     ConnectingLine,
+    CorrelationCounts,
+    CorrelationSummary,
     ElectricalNeighbour,
     LineBay,
     NeighbourSubstation,
     NetworkOverview,
+    OperationalProjections,
+    PathBus,
+    PathStep,
+    PathVerificationRequest,
     ReachableSubstation,
+    SnapshotSummary,
     SubstationConnectivity,
     SubstationEquipment,
+    SwitchyardProjectionEntry,
     TerminalOnCircuit,
     TransformerBay,
     TraversalRequest,
     TraversalResult,
+    TraversalStatistics,
+    TraversalVerificationResult,
 )
+from app.modules.psse_integration.correlated_operational_model import CorrelationStatus
+from app.modules.psse_integration.models import TopologyBranch, TopologyBus, TopologyTransformer
+from app.modules.psse_integration.service import PsseIntegrationService
 from app.reference_data.repository import ReferenceDataRepository
 
 # Same TNB engineering short-name convention as
@@ -73,6 +92,15 @@ class NetworkModelService:
         self.db = db
         self.repo = NetworkModelRepository(db)
         self.reference_data = ReferenceDataRepository(db)
+        # Phase 7F — Operational Snapshot Verification Workspace calls
+        # PSS/E Integration's own service layer (CLAUDE.md A1: modules
+        # communicate through in-process service interfaces) for the
+        # Correlated Operational Model view-building it already owns
+        # (`OperationalBusView`/`OperationalBranchView`/
+        # `OperationalTransformerView`, "correlated Switchyard" resolution,
+        # current-status summary) — never a second implementation of that
+        # correlation logic inside this module.
+        self.psse_service = PsseIntegrationService(db)
 
     # --- Presentational helpers (replicated from equipment_registry.service) -----
 
@@ -326,82 +354,244 @@ class NetworkModelService:
             transformer_count=self.repo.count_active_transformers(),
         )
 
-    # --- Traversal -------------------------------------------------------------
+    # --- Traversal (Phase 7E — Operational Snapshot traversal migration) -------
+    #
+    # The graph itself is now built exclusively from `TopologyBus`/
+    # `TopologyBranch`/`TopologyTransformer` (Operational Snapshot,
+    # ADR-003) — never from Line Connectivity Registry. This answers
+    # "how is the operational network connected," which only the
+    # Operational Snapshot can answer (operational-snapshot-architecture.md,
+    # operational-correlation-architecture.md). The *public* traversal API
+    # (`TraversalRequest`/`TraversalResult`, substation-in/substation-out)
+    # is unchanged from before this migration — existing consumers (e.g.
+    # the frontend's Network Traversal page) do not need to know the graph
+    # now originates from PSS/E Integration's tables rather than Equipment
+    # Registry's. Bus Number (never Substation) is the traversal node
+    # identity internally; Substation is resolved only at the edges (start
+    # and result), via the Bus's own `substation_id` correlation — optional
+    # enrichment the traversal's own reachability computation never
+    # depends on (a bus with no correlated Substation still participates
+    # fully in the graph; it is simply invisible at the substation-shaped
+    # *output* layer, exactly as EDR-007 requires for Fictitious Buses).
 
-    def _build_adjacency_map(
-        self, excluded_circuit_ids: set[uuid.UUID]
-    ) -> dict[uuid.UUID, set[uuid.UUID]]:
-        """Builds an undirected adjacency map over substation ids from
-        every active circuit's terminal set, one query for the whole
-        network (`list_all_active_terminals`) rather than one per
-        substation. A tee-off circuit's three-or-more terminal substations
-        are made mutually adjacent to each other directly — modelled as
-        one multi-way electrical connection, never as a chain of pairwise
-        edges (which would misrepresent which substations are actually
-        directly connected through it).
+    def _resolve_topology_version(
+        self, requested_topology_version_id: uuid.UUID | None
+    ) -> uuid.UUID:
+        """Snapshot Awareness: an explicit `topology_version_id` is used
+        verbatim (404 if it does not exist); omitted means the Current
+        `TopologyVersion` (400 if none exists yet). Never silently mixes
+        snapshots — exactly one `TopologyVersion` is resolved, once, per
+        traversal call."""
+        if requested_topology_version_id is not None:
+            version = self.repo.get_topology_version_by_id(requested_topology_version_id)
+            if version is None:
+                raise TopologyVersionNotFoundError(requested_topology_version_id)
+            return version.topology_version_id
 
-        A terminal whose substation cannot currently be resolved is
-        simply excluded from this circuit's substation set — the
-        remaining, resolvable terminals of that circuit are still wired up
-        to each other. An entirely unresolvable circuit (e.g. every
-        terminal's substation unknown) safely contributes no edges."""
-        terminals = self.repo.list_all_active_terminals()
+        current = self.repo.get_current_topology_version()
+        if current is None:
+            raise NoCurrentTopologyVersionError()
+        return current.topology_version_id
 
-        by_circuit: dict[uuid.UUID, list[CircuitTerminal]] = {}
-        for terminal in terminals:
-            if terminal.circuit_id in excluded_circuit_ids:
+    def _in_service_element_ids(
+        self, topology_version_id: uuid.UUID
+    ) -> tuple[dict[int, bool], dict[int, bool]]:
+        """Branch Traversal / Transformer Traversal requirement: "Branch
+        status shall continue to respect Operational Snapshot state."
+        Reads the topology's own Current `LoadSnapshot`'s per-element
+        in-service state, if one exists. An element with no recorded state
+        (or no LoadSnapshot at all yet) defaults to in-service — the same
+        graceful, "unknown is not the same as false" tolerance this
+        module's docstring already establishes for incomplete data,
+        applied here to Operational Snapshot state instead of registry
+        completeness."""
+        snapshot = self.repo.get_current_load_snapshot_for_topology(topology_version_id)
+        if snapshot is None:
+            return {}, {}
+        branch_in_service: dict[int, bool] = {}
+        transformer_in_service: dict[int, bool] = {}
+        for state in self.repo.list_load_snapshot_element_states(snapshot.load_snapshot_id):
+            if state.topology_branch_id is not None:
+                branch_in_service[state.topology_branch_id] = state.in_service
+            elif state.topology_transformer_id is not None:
+                transformer_in_service[state.topology_transformer_id] = state.in_service
+        return branch_in_service, transformer_in_service
+
+    def _resolve_excluded_operational_edges(
+        self, excluded_circuit_ids: set[uuid.UUID], topology_version_id: uuid.UUID
+    ) -> tuple[set[int], set[int]]:
+        """Translates the registry-facing `excluded_circuit_ids`
+        convenience parameter into the Operational Branch/Transformer
+        elements those Circuits currently correlate to, via
+        `EquipmentTopologyMap`, for the `TopologyVersion` being traversed.
+        Operational Correlation is optional enrichment only (operational-
+        correlation-architecture.md §5) — a Circuit with no correlation
+        for this snapshot (never imported against it, or the correlation
+        is itself ambiguous/unmatched) simply excludes nothing; this never
+        raises and never blocks the underlying reachability computation."""
+        if not excluded_circuit_ids:
+            return set(), set()
+
+        terminals = self.repo.list_circuit_terminals_for_circuits(list(excluded_circuit_ids))
+        excluded_terminal_ids = {t.circuit_terminal_id for t in terminals}
+        if not excluded_terminal_ids:
+            return set(), set()
+
+        excluded_branch_ids: set[int] = set()
+        excluded_transformer_ids: set[int] = set()
+        for entry in self.repo.list_map_entries_for_topology_version(topology_version_id):
+            if entry.circuit_terminal_id not in excluded_terminal_ids:
                 continue
-            by_circuit.setdefault(terminal.circuit_id, []).append(terminal)
+            if entry.topology_branch_id is not None:
+                excluded_branch_ids.add(entry.topology_branch_id)
+            if entry.topology_transformer_id is not None:
+                excluded_transformer_ids.add(entry.topology_transformer_id)
+        return excluded_branch_ids, excluded_transformer_ids
 
-        adjacency: dict[uuid.UUID, set[uuid.UUID]] = {}
-        for circuit_terminals in by_circuit.values():
-            substation_ids: set[uuid.UUID] = set()
-            for terminal in circuit_terminals:
-                sub_id = self.repo.get_substation_id_for_voltage_yard(terminal.voltage_yard_id)
-                if sub_id is not None:
-                    substation_ids.add(sub_id)
+    @staticmethod
+    def _build_bus_adjacency_map(
+        buses: list[TopologyBus],
+        branches: list[TopologyBranch],
+        transformers: list[TopologyTransformer],
+        *,
+        branch_in_service: dict[int, bool],
+        transformer_in_service: dict[int, bool],
+        excluded_branch_ids: set[int],
+        excluded_transformer_ids: set[int],
+    ) -> dict[int, set[int]]:
+        """Undirected adjacency map over Bus Number, built from every
+        in-service, non-excluded Operational Branch and Operational
+        Transformer in one `TopologyVersion` — the direct Operational
+        Snapshot analogue of the pre-migration Circuit-terminal adjacency
+        map. A 3-winding Transformer's tertiary bus is wired mutually
+        adjacent to both the HV and LV bus (the same "multi-way
+        connection, never a chain of pairwise edges" principle the
+        pre-migration tee-off handling already established, here applied
+        naturally to Operational Transformers instead of tee-off Circuits
+        — Transformer Traversal's own "cross voltage levels" requirement).
+        No Bus is ever skipped because of its own `bus_classification`
+        (Fictitious, Blank-named, etc.) — this function has no knowledge
+        of classification at all; every Bus in `buses` is graph-eligible,
+        satisfying EDR-007's "traverse Fictitious Buses naturally"."""
+        bus_number_by_id = {bus.topology_bus_id: bus.bus_number for bus in buses}
 
-            for one_side in substation_ids:
-                for other_side in substation_ids:
+        adjacency: dict[int, set[int]] = {}
+
+        def _connect(*topology_bus_ids: int | None) -> None:
+            numbers = {
+                bus_number_by_id[i]
+                for i in topology_bus_ids
+                if i is not None and i in bus_number_by_id
+            }
+            for one_side in numbers:
+                for other_side in numbers:
                     if one_side != other_side:
                         adjacency.setdefault(one_side, set()).add(other_side)
+
+        for branch in branches:
+            if branch.topology_branch_id in excluded_branch_ids:
+                continue
+            if branch_in_service.get(branch.topology_branch_id, True) is False:
+                continue
+            _connect(branch.from_bus_id, branch.to_bus_id)
+
+        for transformer in transformers:
+            if transformer.topology_transformer_id in excluded_transformer_ids:
+                continue
+            if transformer_in_service.get(transformer.topology_transformer_id, True) is False:
+                continue
+            _connect(transformer.from_bus_id, transformer.to_bus_id, transformer.tertiary_bus_id)
 
         return adjacency
 
     def traverse(self, request: TraversalRequest) -> TraversalResult:
-        """Generic, parameterised breadth-first traversal over the static
-        connectivity graph — deliberately not an island-detection or
-        load-pocket feature (both remain out of this phase's scope). It
-        answers only "which substations are reachable from here, given
-        these lines are excluded" — the primitive a future boundary or
-        load-pocket analysis would be built on top of, not that analysis
-        itself."""
+        """Generic, parameterised breadth-first traversal over the
+        Operational Snapshot connectivity graph — deliberately not an
+        island-detection or load-pocket feature (both remain out of this
+        phase's scope). It answers only "which substations are reachable
+        from here, given these lines are excluded" — the primitive a
+        future boundary or load-pocket analysis would be built on top of,
+        not that analysis itself. The request/response shape is
+        substation-in/substation-out, unchanged from before this phase's
+        migration; only the underlying graph source changed."""
         if self.repo.get_substation_by_id(request.start_substation_id) is None:
             raise SubstationNotFoundError(request.start_substation_id)
 
-        excluded = set(request.excluded_circuit_ids)
-        adjacency = self._build_adjacency_map(excluded)
+        topology_version_id = self._resolve_topology_version(request.topology_version_id)
 
-        depths: dict[uuid.UUID, int] = {request.start_substation_id: 0}
-        queue: deque[uuid.UUID] = deque([request.start_substation_id])
+        buses = self.repo.list_topology_buses(topology_version_id)
+        branches = self.repo.list_topology_branches(topology_version_id)
+        transformers = self.repo.list_topology_transformers(topology_version_id)
+        branch_in_service, transformer_in_service = self._in_service_element_ids(
+            topology_version_id
+        )
+        excluded_branch_ids, excluded_transformer_ids = self._resolve_excluded_operational_edges(
+            set(request.excluded_circuit_ids), topology_version_id
+        )
+
+        adjacency = self._build_bus_adjacency_map(
+            buses,
+            branches,
+            transformers,
+            branch_in_service=branch_in_service,
+            transformer_in_service=transformer_in_service,
+            excluded_branch_ids=excluded_branch_ids,
+            excluded_transformer_ids=excluded_transformer_ids,
+        )
+
+        # Multi-source seed: every Bus already correlated to the start
+        # Substation starts at depth 0 (a multi-voltage Substation may
+        # correlate to more than one Bus — all of them are "the
+        # Substation itself," per Substation <-> Switchyard <-> Bus,
+        # EDR-007 §4.4). The start Substation is always included in the
+        # output at depth 0 even if it currently correlates to no Bus at
+        # all in this snapshot (an unmigrated/newly-registered substation)
+        # — preserving the pre-migration invariant "a substation is always
+        # reachable from itself."
+        seed_bus_numbers = [
+            bus.bus_number for bus in buses if bus.substation_id == request.start_substation_id
+        ]
+
+        depths: dict[int, int] = dict.fromkeys(seed_bus_numbers, 0)
+        queue: deque[int] = deque(seed_bus_numbers)
 
         while queue:
             current = queue.popleft()
             current_depth = depths[current]
             if request.max_depth is not None and current_depth >= request.max_depth:
                 continue
-            for neighbour_id in adjacency.get(current, ()):
-                if neighbour_id not in depths:
-                    depths[neighbour_id] = current_depth + 1
-                    queue.append(neighbour_id)
+            for neighbour_bus_number in adjacency.get(current, ()):
+                if neighbour_bus_number not in depths:
+                    depths[neighbour_bus_number] = current_depth + 1
+                    queue.append(neighbour_bus_number)
 
+        bus_by_number = {bus.bus_number: bus for bus in buses}
+        substation_depth: dict[uuid.UUID, int] = {request.start_substation_id: 0}
+        for bus_number, depth in depths.items():
+            bus = bus_by_number.get(bus_number)
+            if bus is None or bus.substation_id is None:
+                # Reached electrically (the Bus fully participated in the
+                # graph — Fictitious/Blank-named/unmatched Buses are never
+                # skipped), but there is no correlated Substation to report
+                # at this substation-shaped output layer. Optional
+                # enrichment absent, never a traversal failure.
+                continue
+            existing = substation_depth.get(bus.substation_id)
+            if existing is None or depth < existing:
+                substation_depth[bus.substation_id] = depth
+
+        substations_by_id = {
+            s.substation_id: s for s in self.repo.list_substations_by_ids(list(substation_depth))
+        }
         reachable: list[ReachableSubstation] = []
-        for sub_id, depth in depths.items():
-            substation = self.repo.get_substation_by_id(sub_id)
+        for sub_id, depth in substation_depth.items():
+            substation = substations_by_id.get(sub_id)
             if substation is None:
-                # A substation reachable through connectivity data that has
-                # since been removed/unresolvable — unknown, not an error;
-                # simply omitted rather than surfaced with placeholder data.
+                # Referentially impossible under FK RESTRICT for a
+                # Substation actually correlated on a TopologyBus, but the
+                # start Substation was already validated to exist above —
+                # never re-raise, simply omit (this module's own
+                # established "unknown, not invalid" tolerance).
                 continue
             reachable.append(
                 ReachableSubstation(
@@ -414,6 +604,390 @@ class NetworkModelService:
 
         return TraversalResult(
             start_substation_id=request.start_substation_id,
-            excluded_circuit_ids=list(excluded),
+            excluded_circuit_ids=list(request.excluded_circuit_ids),
             reachable_substations=reachable,
+            topology_version_id=topology_version_id,
+        )
+
+    # --- Phase 7F — Operational Snapshot Verification Workspace ----------------
+    #
+    # An engineering diagnostic surface, independent of `traverse()` and the
+    # existing Network Traversal page (both above, unchanged). It exists to
+    # let an engineer verify that the Operational Snapshot faithfully
+    # represents the imported PSS/E network, before that snapshot becomes
+    # the foundation of UFLS/UVLS/EMLS/Heatmap/Analytics (docs/architecture/
+    # network-model-module.md §19.10). Bus-level BFS remains the
+    # authoritative computation — `verify_path` reuses
+    # `_build_bus_adjacency_map` unchanged and performs the same reachability
+    # decision `traverse()` does; it only adds parent-edge bookkeeping and
+    # projects the one resulting BFS depth map into several engineering
+    # views (Operational Projections, operational-correlation-
+    # architecture.md §4.2), never a second graph or a second correlation
+    # mechanism.
+
+    def get_snapshot_summary(self) -> SnapshotSummary:
+        """Section 1 — Snapshot Summary. Delegates entirely to PSS/E
+        Integration's own `get_current_status_summary` (unchanged); this
+        method only reshapes that existing response into this workspace's
+        flat field list."""
+        status = self.psse_service.get_current_status_summary()
+        topology = status.current_topology_version
+        snapshot = status.current_load_snapshot
+        return SnapshotSummary(
+            topology_version_id=topology.topology_version_id if topology is not None else None,
+            topology_version_status=topology.status if topology is not None else None,
+            load_snapshot_id=snapshot.load_snapshot_id if snapshot is not None else None,
+            load_snapshot_status=snapshot.status if snapshot is not None else None,
+            import_date=topology.created_at if topology is not None else None,
+            bus_count=topology.bus_count if topology is not None else 0,
+            branch_count=topology.branch_count if topology is not None else 0,
+            transformer_count=topology.transformer_count if topology is not None else 0,
+            load_count=snapshot.load_count if snapshot is not None else 0,
+            generator_count=snapshot.generator_count if snapshot is not None else 0,
+        )
+
+    @staticmethod
+    def _build_bus_edge_index(
+        buses: list[TopologyBus],
+        branches: list[TopologyBranch],
+        transformers: list[TopologyTransformer],
+        *,
+        branch_in_service: dict[int, bool],
+        transformer_in_service: dict[int, bool],
+    ) -> dict[tuple[int, int], list[tuple[str, int]]]:
+        """Maps each unordered Bus Number pair to every in-service
+        Operational Branch/Transformer edge connecting them.
+        `_build_bus_adjacency_map` (unchanged, still the sole basis for the
+        reachability decision itself) only needs to know *that* two buses
+        are connected; this index additionally records *which* edge(s)
+        connect them, purely so Section 2's path can name the specific
+        Branch/Transformer crossed at each step. Never consulted to decide
+        reachability — only to label an edge the BFS has already walked."""
+        bus_number_by_id = {bus.topology_bus_id: bus.bus_number for bus in buses}
+        index: dict[tuple[int, int], list[tuple[str, int]]] = {}
+
+        def _add(bus_a: int | None, bus_b: int | None, edge_type: str, edge_id: int) -> None:
+            if bus_a is None or bus_b is None or bus_a == bus_b:
+                return
+            key = (bus_a, bus_b) if bus_a < bus_b else (bus_b, bus_a)
+            index.setdefault(key, []).append((edge_type, edge_id))
+
+        for branch in branches:
+            if branch_in_service.get(branch.topology_branch_id, True) is False:
+                continue
+            _add(
+                bus_number_by_id.get(branch.from_bus_id),
+                bus_number_by_id.get(branch.to_bus_id),
+                "BRANCH",
+                branch.topology_branch_id,
+            )
+
+        for transformer in transformers:
+            if transformer_in_service.get(transformer.topology_transformer_id, True) is False:
+                continue
+            hv = bus_number_by_id.get(transformer.from_bus_id)
+            lv = bus_number_by_id.get(transformer.to_bus_id)
+            tertiary = (
+                bus_number_by_id.get(transformer.tertiary_bus_id)
+                if transformer.tertiary_bus_id is not None
+                else None
+            )
+            _add(hv, lv, "TRANSFORMER", transformer.topology_transformer_id)
+            if tertiary is not None:
+                _add(hv, tertiary, "TRANSFORMER", transformer.topology_transformer_id)
+                _add(lv, tertiary, "TRANSFORMER", transformer.topology_transformer_id)
+
+        return index
+
+    @staticmethod
+    def _bucket_correlation_counts(statuses: list[CorrelationStatus]) -> CorrelationCounts:
+        """Section 7 — buckets the shared Correlated Operational Model
+        vocabulary (`CorrelationStatus`) into the three-tier funnel this
+        workspace's Correlation Summary displays. `CORRELATED` and
+        `OUTSIDE_CURRENT_SCOPE` map straight across; every other status
+        (`UNMATCHED_OPERATIONAL`/`UNMATCHED_REGISTRY`/`AMBIGUOUS`/
+        `ENGINEERING_REVIEW_REQUIRED`) is a form of "not yet correlated,"
+        bucketed together for this summary view — the precise status
+        remains visible per-item in Sections 3-5."""
+        total = len(statuses)
+        correlated = sum(1 for s in statuses if s == "CORRELATED")
+        outside_scope = sum(1 for s in statuses if s == "OUTSIDE_CURRENT_SCOPE")
+        return CorrelationCounts(
+            total=total,
+            correlated=correlated,
+            unmatched=total - correlated - outside_scope,
+            outside_scope=outside_scope,
+        )
+
+    def verify_path(self, request: PathVerificationRequest) -> TraversalVerificationResult:
+        """Section 2 ("Electrical Path Verification") and every section
+        derived from it (3-8). Reuses `_resolve_topology_version`,
+        `_in_service_element_ids`, and `_build_bus_adjacency_map` exactly as
+        `traverse()` does, and performs the identical Bus-level BFS
+        reachability computation — extended, additively, with parent-edge
+        bookkeeping (`_build_bus_edge_index`) so the path itself can be
+        reconstructed. Every list and summary in the response is read off
+        this one BFS result; nothing here re-traverses or re-derives
+        connectivity independently, and Bus/Branch/Transformer correlation
+        is always obtained from PSS/E Integration's own service methods
+        (`get_operational_*_views_for_*`) — never recomputed here."""
+        substation = self.repo.get_substation_by_id(request.start_substation_id)
+        if substation is None:
+            raise SubstationNotFoundError(request.start_substation_id)
+
+        topology_version_id = self._resolve_topology_version(request.topology_version_id)
+
+        buses = self.repo.list_topology_buses(topology_version_id)
+        branches = self.repo.list_topology_branches(topology_version_id)
+        transformers = self.repo.list_topology_transformers(topology_version_id)
+        branch_in_service, transformer_in_service = self._in_service_element_ids(
+            topology_version_id
+        )
+
+        adjacency = self._build_bus_adjacency_map(
+            buses,
+            branches,
+            transformers,
+            branch_in_service=branch_in_service,
+            transformer_in_service=transformer_in_service,
+            excluded_branch_ids=set(),
+            excluded_transformer_ids=set(),
+        )
+        edge_index = self._build_bus_edge_index(
+            buses,
+            branches,
+            transformers,
+            branch_in_service=branch_in_service,
+            transformer_in_service=transformer_in_service,
+        )
+
+        # --- Seed resolution: whole Substation, or one Switchyard within it
+        start_voltage_yard_id = request.start_voltage_yard_id
+        if start_voltage_yard_id is not None:
+            yard = self.repo.get_voltage_yard(start_voltage_yard_id)
+            if yard is None:
+                raise VoltageYardNotFoundError(start_voltage_yard_id)
+            if yard.substation_id != request.start_substation_id:
+                raise VoltageYardSubstationMismatchError(
+                    start_voltage_yard_id, request.start_substation_id
+                )
+            voltage_level = self.reference_data.get_voltage_level(yard.voltage_level_id)
+            target_base_kv = float(voltage_level.nominal_kv) if voltage_level is not None else None
+            seed_bus_numbers = [
+                bus.bus_number
+                for bus in buses
+                if bus.substation_id == request.start_substation_id
+                and target_base_kv is not None
+                and float(bus.base_kv) == target_base_kv
+            ]
+        else:
+            seed_bus_numbers = [
+                bus.bus_number for bus in buses if bus.substation_id == request.start_substation_id
+            ]
+
+        # --- Bus-level BFS, extended with parent-edge tracking (additive;
+        # the reachability decision itself is identical to `traverse()`'s)
+        bus_by_number = {bus.bus_number: bus for bus in buses}
+        branch_by_id = {b.topology_branch_id: b for b in branches}
+        transformer_by_id = {t.topology_transformer_id: t for t in transformers}
+
+        depths: dict[int, int] = dict.fromkeys(seed_bus_numbers, 0)
+        parent_step: dict[int, PathStep] = {}
+        queue: deque[int] = deque(seed_bus_numbers)
+
+        while queue:
+            current = queue.popleft()
+            current_depth = depths[current]
+            if request.max_depth is not None and current_depth >= request.max_depth:
+                continue
+            for neighbour in adjacency.get(current, ()):
+                if neighbour in depths:
+                    continue
+                depths[neighbour] = current_depth + 1
+                queue.append(neighbour)
+
+                key = (current, neighbour) if current < neighbour else (neighbour, current)
+                edges = edge_index.get(key, [])
+                if not edges:
+                    # Defensive only — `adjacency` and `edge_index` are
+                    # built from the same branch/transformer lists, so
+                    # every adjacency edge has a corresponding index entry.
+                    # This module's own "unknown, not invalid" tolerance:
+                    # skip labelling rather than raise.
+                    continue
+                edge_type, edge_id = edges[0]
+                branch = branch_by_id.get(edge_id) if edge_type == "BRANCH" else None
+                transformer = transformer_by_id.get(edge_id) if edge_type == "TRANSFORMER" else None
+                ckt_id = (
+                    branch.ckt_id
+                    if branch is not None
+                    else (transformer.ckt_id if transformer is not None else "")
+                )
+                from_bus = bus_by_number.get(current)
+                to_bus = bus_by_number.get(neighbour)
+                parent_step[neighbour] = PathStep(
+                    depth=current_depth + 1,
+                    from_bus_number=current,
+                    from_bus_name=from_bus.bus_name if from_bus is not None else None,
+                    to_bus_number=neighbour,
+                    to_bus_name=to_bus.bus_name if to_bus is not None else None,
+                    edge_type=edge_type,  # type: ignore[arg-type]
+                    ckt_id=ckt_id,
+                    topology_branch_id=edge_id if edge_type == "BRANCH" else None,
+                    topology_transformer_id=edge_id if edge_type == "TRANSFORMER" else None,
+                )
+
+        path_steps = sorted(
+            parent_step.values(),
+            key=lambda step: (step.depth, step.from_bus_number, step.to_bus_number),
+        )
+
+        # --- Section 4/5: every Branch/Transformer edge within the reached
+        # component (not only BFS-tree edges) — mirrors the pre-Phase-7E
+        # frontend's own "every line whose both ends are reachable" filter,
+        # now applied to the Operational Snapshot graph instead of Registry
+        # circuits.
+        bus_number_by_id = {bus.topology_bus_id: bus.bus_number for bus in buses}
+        traversed_branch_ids = [
+            b.topology_branch_id
+            for b in branches
+            if branch_in_service.get(b.topology_branch_id, True)
+            and bus_number_by_id.get(b.from_bus_id) in depths
+            and bus_number_by_id.get(b.to_bus_id) in depths
+        ]
+        traversed_transformer_ids = [
+            t.topology_transformer_id
+            for t in transformers
+            if transformer_in_service.get(t.topology_transformer_id, True)
+            and bus_number_by_id.get(t.from_bus_id) in depths
+            and bus_number_by_id.get(t.to_bus_id) in depths
+        ]
+
+        # --- Sections 3-5: Bus/Branch/Transformer views, obtained from
+        # PSS/E Integration's own service (its existing Correlated
+        # Operational Model builders), scoped to this traversal's reached
+        # elements — never recomputed here.
+        bus_views = self.psse_service.get_operational_bus_views_for_numbers(
+            topology_version_id, list(depths.keys())
+        )
+        bus_view_by_number = {v.bus_number: v for v in bus_views}
+        path_buses = [
+            PathBus(
+                depth=depths[number],
+                base_kv=float(bus_by_number[number].base_kv),
+                bus=bus_view_by_number[number],
+            )
+            for number in sorted(depths, key=lambda n: (depths[n], n))
+            if number in bus_view_by_number and number in bus_by_number
+        ]
+        branch_views = self.psse_service.get_operational_branch_views_for_ids(
+            topology_version_id, traversed_branch_ids
+        )
+        transformer_views = self.psse_service.get_operational_transformer_views_for_ids(
+            topology_version_id, traversed_transformer_ids
+        )
+
+        # --- Section 8: Operational Projections, all read off `depths` —
+        # no recomputation, no second graph.
+        switchyard_groups: dict[tuple[uuid.UUID, float], list[int]] = {}
+        for number in depths:
+            bus = bus_by_number.get(number)
+            if bus is None or bus.substation_id is None:
+                continue
+            switchyard_groups.setdefault((bus.substation_id, float(bus.base_kv)), []).append(number)
+
+        substation_depth: dict[uuid.UUID, int] = {request.start_substation_id: 0}
+        for number, depth in depths.items():
+            bus = bus_by_number.get(number)
+            if bus is None or bus.substation_id is None:
+                continue
+            existing = substation_depth.get(bus.substation_id)
+            if existing is None or depth < existing:
+                substation_depth[bus.substation_id] = depth
+
+        substations_by_id = {
+            s.substation_id: s
+            for s in self.repo.list_substations_by_ids(
+                list(set(substation_depth) | {sub_id for sub_id, _ in switchyard_groups})
+            )
+        }
+
+        bus_projection = [
+            BusProjectionEntry(
+                bus_number=number,
+                bus_name=bus_by_number[number].bus_name if number in bus_by_number else None,
+                depth=depth,
+            )
+            for number, depth in sorted(depths.items(), key=lambda kv: (kv[1], kv[0]))
+        ]
+
+        switchyard_projection: list[SwitchyardProjectionEntry] = []
+        for (sub_id, base_kv), bus_numbers_in_group in switchyard_groups.items():
+            substation_row = substations_by_id.get(sub_id)
+            if substation_row is None:
+                continue
+            sample_view = bus_view_by_number.get(bus_numbers_in_group[0])
+            switchyard_projection.append(
+                SwitchyardProjectionEntry(
+                    substation_id=sub_id,
+                    substation_mnemonic=substation_row.mnemonic,
+                    base_kv=base_kv,
+                    voltage_yard_id=sample_view.voltage_yard_id
+                    if sample_view is not None
+                    else None,
+                    depth=min(depths[n] for n in bus_numbers_in_group),
+                    bus_count=len(bus_numbers_in_group),
+                )
+            )
+        switchyard_projection.sort(
+            key=lambda e: (e.depth, e.substation_mnemonic.casefold(), e.base_kv)
+        )
+
+        substation_projection = [
+            ReachableSubstation(
+                substation_id=sub_id,
+                substation_mnemonic=substations_by_id[sub_id].mnemonic,
+                depth=depth,
+            )
+            for sub_id, depth in substation_depth.items()
+            if sub_id in substations_by_id
+        ]
+        substation_projection.sort(
+            key=lambda item: (item.depth, item.substation_mnemonic.casefold())
+        )
+
+        statistics = TraversalStatistics(
+            operational_buses_traversed=len(depths),
+            operational_branches_traversed=len(branch_views),
+            operational_transformers_traversed=len(transformer_views),
+            operational_switchyards_traversed=len(switchyard_projection),
+            registered_substations_correlated=len(substation_projection),
+            registered_switchyards_correlated=len(
+                {e.voltage_yard_id for e in switchyard_projection if e.voltage_yard_id is not None}
+            ),
+        )
+
+        correlation_summary = CorrelationSummary(
+            bus=self._bucket_correlation_counts([v.bus.correlation_status for v in path_buses]),
+            branch=self._bucket_correlation_counts([v.correlation_status for v in branch_views]),
+            transformer=self._bucket_correlation_counts(
+                [v.correlation_status for v in transformer_views]
+            ),
+        )
+
+        return TraversalVerificationResult(
+            start_substation_id=request.start_substation_id,
+            start_voltage_yard_id=start_voltage_yard_id,
+            topology_version_id=topology_version_id,
+            path_steps=path_steps,
+            buses=path_buses,
+            branches=branch_views,
+            transformers=transformer_views,
+            statistics=statistics,
+            correlation_summary=correlation_summary,
+            projections=OperationalProjections(
+                bus_projection=bus_projection,
+                switchyard_projection=switchyard_projection,
+                substation_projection=substation_projection,
+            ),
         )

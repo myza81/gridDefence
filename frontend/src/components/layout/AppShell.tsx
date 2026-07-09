@@ -35,6 +35,7 @@ export function AppShell({ children }: PropsWithChildren) {
               <Link to="/network-model">Network Explorer</Link>
               <Link to="/network-model/substations">Network Substations</Link>
               <Link to="/network-model/traversal">Network Traversal</Link>
+              <Link to="/network-model/verification">Snapshot Verification</Link>
               <Link to="/users">Users</Link>
               <Link to="/roles">Roles</Link>
               <Link to="/permissions">Permissions</Link>

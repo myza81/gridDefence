@@ -13,10 +13,36 @@ export type MatchOutcome = "clean_match" | "unmatched" | "discrepancy";
 export type DiscrepancyResolution = "accepted" | "rejected";
 export type JobRunStatus = "queued" | "started" | "finished" | "failed";
 
+/** EDR-007 §4 Bus Name naming-pattern classification (Phase 7A) — a
+ * read-only, derived-from-name accessor, never a registry correlation
+ * decision. See `matched_bus_count`/`unmatched_bus_count` on
+ * `PreviewResult` for the separate, existing correlation-status figures. */
+export type BusClassification =
+  | "SWITCHYARD_BUS"
+  | "SPLIT_SWITCHYARD_BUS"
+  | "FICTITIOUS_BUS"
+  | "BLANK_NAMED_BUS"
+  | "OTHER_NON_CONFORMING_BUS";
+
+/** Unified Correlation Status vocabulary (Phase 7C, Correlated Operational
+ * Model) — applies consistently across Bus/Branch/Transformer/Load views. */
+export type CorrelationStatus =
+  | "CORRELATED"
+  | "UNMATCHED_OPERATIONAL"
+  | "UNMATCHED_REGISTRY"
+  | "AMBIGUOUS"
+  | "OUTSIDE_CURRENT_SCOPE"
+  | "ENGINEERING_REVIEW_REQUIRED";
+
 /** One PSS/E bus record, exactly as the parser produced it — no
  * engineering translation, no registry correlation (Operational Context
  * Inspector). Mirrors backend `ParsedBusRow`/`raw_parser.ParsedBus`
- * field-for-field. */
+ * field-for-field.
+ *
+ * `in_service`/`substation_id`/`substation_mnemonic`/`voltage_yard_id`/
+ * `correlation_status` (Phase 7C) are Preview-time Correlated Operational
+ * Model enrichment — `null` when not computed (e.g. a load-only case's
+ * always-empty bus list). */
 export interface ParsedBusRow {
   bus_number: number;
   bus_name: string | null;
@@ -27,6 +53,12 @@ export interface ParsedBusRow {
   owner: number | null;
   voltage_mag: number | null;
   voltage_angle: number | null;
+  bus_classification: BusClassification;
+  in_service: boolean | null;
+  substation_id: string | null;
+  substation_mnemonic: string | null;
+  voltage_yard_id: string | null;
+  correlation_status: CorrelationStatus | null;
 }
 
 export interface ParsedLoadRow {
@@ -35,6 +67,9 @@ export interface ParsedLoadRow {
   status: boolean;
   p_mw: number;
   q_mvar: number;
+  /** PSS/E's own raw Owner field (Phase 7A, EDR-007 §7.3) — carried
+   * through faithfully, never interpreted or classified. */
+  owner: number | null;
 }
 
 export interface ParsedGeneratorRow {
@@ -101,6 +136,45 @@ export interface PreviewResult {
   transformers: ParsedTransformerRow[];
   loads: ParsedLoadRow[];
   generators: ParsedGeneratorRow[];
+  // RAW File Information (Phase 7 discovery-support enhancement) — header
+  // metadata read directly off the parsed RAW case, for engineering
+  // visibility only; never used in any calculation. All three are
+  // best-effort and may be `null`, same as `raw_version`.
+  frequency_hz: number | null;
+  case_description: string | null;
+  raw_created: string | null;
+  // Load-only Snapshot Synchronisation validation (Phase 7B) — `null` for
+  // FULL_TOPOLOGY_WITH_LOAD, and for LOAD_ONLY when no Current
+  // TopologyVersion exists yet to synchronise against.
+  sync_validation: LoadSyncValidationSummary | null;
+}
+
+/** One Bus Number present on both the active topology and the incoming
+ * load-only case's own bus references, with a differing Bus Name and/or
+ * nominal voltage (Phase 7B, EDR-007 Engineering Principle 12). Reported
+ * for engineering review — never auto-resolved. */
+export interface BusIdentityMismatchRow {
+  bus_number: number;
+  active_bus_name: string | null;
+  incoming_bus_name: string | null;
+  active_base_kv: number;
+  incoming_base_kv: number;
+  mismatch_reason: string;
+}
+
+/** Load-only Snapshot Synchronisation validation summary (Phase 7B,
+ * EDR-007 Engineering Principle 12 — Bus Number is the sole correlation
+ * key). */
+export interface LoadSyncValidationSummary {
+  total_load_records: number;
+  total_distinct_load_buses: number;
+  matched_load_buses: number;
+  unmatched_load_buses: number;
+  missing_topology_buses: number;
+  identity_mismatch_buses: number;
+  unmatched_load_bus_numbers: number[];
+  missing_topology_bus_numbers: number[];
+  identity_mismatches: BusIdentityMismatchRow[];
 }
 
 /** One category of Commit engineering findings, aggregated (Phase 6.1
@@ -112,6 +186,8 @@ export type FindingCategory =
   | "unmatched_branch_reference"
   | "unmatched_transformer_reference"
   | "unmatched_load_bus"
+  | "missing_topology_load_bus"
+  | "load_bus_identity_mismatch"
   | "unparsed_data_line"
   | "unrecognized_section";
 
@@ -232,6 +308,104 @@ export interface CircuitCorrelation {
   topology_version_id: string;
   terminals: EquipmentTopologyMapEntry[];
   fully_resolved: boolean;
+}
+
+// --- Correlated Operational Model (Phase 7C) -----------------------------
+//
+// Read models only — never a new source of truth. The preferred
+// engineering-consumption surface for future Defence Scheme modules,
+// dashboards, and analytics.
+
+export interface OperationalBusView {
+  topology_version_id: string;
+  bus_number: number;
+  bus_name: string | null;
+  bus_classification: BusClassification;
+  in_service: boolean | null;
+  substation_id: string | null;
+  substation_mnemonic: string | null;
+  voltage_yard_id: string | null;
+  correlation_status: CorrelationStatus;
+}
+
+export interface OperationalBusViewPage {
+  items: OperationalBusView[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+/** Result of an explicit Bus -> Substation Registry correlation refresh
+ * (Phase 7D). Updates only the correlation link, never topology facts,
+ * RAW-derived operational data, or Engineering Registry records. */
+export interface BusCorrelationRefreshSummary {
+  topology_version_id: string;
+  buses_processed: number;
+  buses_correlated: number;
+  buses_unmatched: number;
+  buses_outside_scope: number;
+  updated_count: number;
+}
+
+export interface OperationalBranchView {
+  topology_version_id: string;
+  topology_branch_id: number;
+  from_bus_number: number;
+  to_bus_number: number;
+  ckt_id: string;
+  in_service: boolean | null;
+  circuit_id: string | null;
+  circuit_bay_number: string | null;
+  correlation_status: CorrelationStatus;
+}
+
+export interface OperationalBranchViewPage {
+  items: OperationalBranchView[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface OperationalTransformerView {
+  topology_version_id: string;
+  topology_transformer_id: number;
+  from_bus_number: number;
+  to_bus_number: number;
+  tertiary_bus_number: number | null;
+  ckt_id: string;
+  in_service: boolean | null;
+  circuit_id: string | null;
+  circuit_bay_number: string | null;
+  correlation_status: CorrelationStatus;
+}
+
+export interface OperationalTransformerViewPage {
+  items: OperationalTransformerView[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface OperationalLoadView {
+  load_snapshot_id: string;
+  bus_number: number;
+  load_id: string;
+  p_mw: number;
+  q_mvar: number;
+  owner: number | null;
+  load_category: string | null;
+  substation_id: string | null;
+  substation_mnemonic: string | null;
+  voltage_yard_id: string | null;
+  relevance_classification: string | null;
+  correlation_status: CorrelationStatus;
+}
+
+export interface OperationalLoadViewPage {
+  items: OperationalLoadView[];
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 export interface JobStatus {

@@ -293,6 +293,8 @@ Runs on every PR; blocks merge on any failure. Expanded in Phase 13 (load/securi
 
 **Objective:** Implement connectivity/island analysis over PSS/E Integration's topology data.
 
+**Reconciliation note (what was actually delivered, and the Operational Snapshot pivot):** Phase 5, as executed, delivered a static, PSS/E-independent connectivity view derived from Substation Registry and Equipment Registry (see [network-model-module.md](network-model-module.md) §19) rather than the island/pocket analysis this section originally planned, which remains unbuilt. Per [EDR-007](../engineering/edr/EDR-007-phase-7-operational-identity-mapping.md) and [operational-snapshot-architecture.md](operational-snapshot-architecture.md), Operational Snapshot is authoritative for current electrical topology and connectivity; Engineering Registries (including this section's own connectivity data) remain authoritative for curated identity and metadata. Future phases building on Network Model should describe **correlating** Operational Snapshot against Engineering Registries for engineering workflows, not populating topology truth into a registry, and not treating a registry-derived view as authoritative current connectivity.
+
 **Architecture documents involved:** [network-model-module.md](network-model-module.md).
 
 **Backend deliverables:** `CutSetDefinition`; `IslandAnalysisResult` + `IslandAnalysisResultSubstation`; `ManualOverride` + `ManualOverrideSubstation`; `analyzeIsland`/`getEffectiveIsland`/`getConnectivityGraph`/`createManualOverride` service interfaces; async job wiring (reusing Phase 4's Redis/RQ setup, not reinventing it).

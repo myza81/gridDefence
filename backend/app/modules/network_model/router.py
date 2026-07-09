@@ -25,10 +25,13 @@ from app.modules.network_model.exceptions import AppError, NotFoundError
 from app.modules.network_model.schemas import (
     ElectricalNeighbour,
     NetworkOverview,
+    PathVerificationRequest,
+    SnapshotSummary,
     SubstationConnectivity,
     SubstationEquipment,
     TraversalRequest,
     TraversalResult,
+    TraversalVerificationResult,
 )
 from app.modules.network_model.service import NetworkModelService
 
@@ -103,5 +106,29 @@ def traverse(
 ) -> TraversalResult:
     try:
         return service.traverse(request)
+    except AppError as exc:
+        raise _error_response(exc) from exc
+
+
+# --- Phase 7F — Operational Snapshot Verification Workspace (independent of
+# the Network Traversal endpoint above, which is unchanged) -----------------
+
+
+@router.get("/verification/snapshot-summary", response_model=SnapshotSummary)
+def get_snapshot_summary(
+    service: NetworkModelService = Depends(get_network_model_service),
+    _current_user: User = Depends(get_current_user),
+) -> SnapshotSummary:
+    return service.get_snapshot_summary()
+
+
+@router.post("/verification/traverse", response_model=TraversalVerificationResult)
+def verify_path(
+    request: PathVerificationRequest,
+    service: NetworkModelService = Depends(get_network_model_service),
+    _current_user: User = Depends(get_current_user),
+) -> TraversalVerificationResult:
+    try:
+        return service.verify_path(request)
     except AppError as exc:
         raise _error_response(exc) from exc

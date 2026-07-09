@@ -36,7 +36,7 @@ For the corresponding **implementation** name of any engineering term below (whi
 
 **Line Bay Shedding** — A Shedding Action that disconnects a specific transmission line bay at a substation. See [02-engineering-concepts.md](02-engineering-concepts.md).
 
-**Line Connectivity Registry** — The Engineering Knowledge registry describing how transmission lines connect substations to one another.
+**Line Connectivity Registry** — A curated metadata registry for line/circuit identity and engineering attributes (bay numbers, breaker numbers, line type, interconnector flags, commissioning dates), part of Engineering Knowledge (Layer 1). It is not the authoritative source of *current* electrical topology or connectivity — that is Operational Snapshot's role (Layer 2). See **Operational Context**, [EDR-007](edr/EDR-007-phase-7-operational-identity-mapping.md), and `docs/architecture/operational-snapshot-architecture.md`. The same distinction applies to Equipment Registry's transformer-asset records: curated identity/metadata, not authoritative current operational transformer representation.
 
 **Load Assessment** — The workflow step in which an engineer identifies which loads are available in the network, using the selected PSS/E Load Snapshot. See [03-system-workflow.md](03-system-workflow.md).
 

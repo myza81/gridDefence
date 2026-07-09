@@ -17,6 +17,7 @@ import { BayViewPage } from "../modules/network_model/pages/BayViewPage";
 import { ConnectivityViewPage } from "../modules/network_model/pages/ConnectivityViewPage";
 import { NetworkOverviewPage } from "../modules/network_model/pages/NetworkOverviewPage";
 import { NetworkTraversalPage } from "../modules/network_model/pages/NetworkTraversalPage";
+import { OperationalSnapshotVerificationPage } from "../modules/network_model/pages/OperationalSnapshotVerificationPage";
 import { SubstationExplorerDetailPage } from "../modules/network_model/pages/SubstationExplorerDetailPage";
 import { SubstationExplorerListPage } from "../modules/network_model/pages/SubstationExplorerListPage";
 import { PsseBatchDetailPage } from "../modules/psse_integration/pages/PsseBatchDetailPage";
@@ -293,6 +294,16 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <NetworkTraversalPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/network-model/verification",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <OperationalSnapshotVerificationPage />
         </ProtectedRoute>
       </AppShell>
     ),

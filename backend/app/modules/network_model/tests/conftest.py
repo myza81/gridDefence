@@ -241,3 +241,117 @@ def bootstrapped_network_model_permissions(db_session: Session) -> None:
     bootstrap_iam(db_session)
     bootstrap_equipment_registry(db_session)
     bootstrap_network_model(db_session)
+
+
+# --- Operational Snapshot fixtures (Phase 7E — traversal migration) -----------------
+#
+# The traversal engine now reads TopologyBus/TopologyBranch/TopologyTransformer
+# (PSS/E Integration's own tables) rather than Circuit/CircuitTerminal. These
+# fixtures build a real Operational Snapshot via `PsseIntegrationService.commit()`
+# (never constructed directly — CLAUDE.md A1), using the same PKLG/IGBK/NKST/ABBA
+# mnemonics `substation_ids` already registers, so `_match_substation_for_bus`
+# correlates each Bus to the same Substation these tests already know by name.
+
+_OPERATIONAL_TOPOLOGY_RAW = """0,100.0,34,0,1,50.0
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+100,'PKLG132',132.0,1,1,1,1,1.0,0.0
+200,'IGBK132',132.0,1,1,1,1,1.0,0.0
+300,'NKST132',132.0,1,1,1,1,1.0,0.0
+400,'ABBA132',132.0,1,1,1,1,1.0,0.0
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+100,200,'1',0.001,0.01,0.0002
+200,300,'2',0.001,0.01,0.0002
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"""
+
+
+@pytest.fixture()
+def operational_topology_version_id(
+    db_session: Session,
+    substation_ids: dict[str, uuid.UUID],
+    actor_user_id: uuid.UUID,
+) -> uuid.UUID:
+    """The Operational Snapshot equivalent of `circuit_ids`' registry-only
+    PKLG-IGBK-NKST-ABBA topology: Bus 100/200/300/400 for PKLG/IGBK/NKST/
+    ABBA, Branch 100-200 and 200-300 (a simple chain — PKLG-IGBK-NKST all
+    connected). ABBA (bus 400) is deliberately isolated, no Branch at all
+    — mirrors `circuit_ids`' own "ABBA has zero circuits" design.
+    Committed and activated, so it is the Current TopologyVersion."""
+    from app.modules.psse_integration.service import PsseIntegrationService
+
+    service = PsseIntegrationService(db_session)
+    batch = service.commit(_OPERATIONAL_TOPOLOGY_RAW, "network-model-traversal.raw", actor_user_id)
+    db_session.commit()
+    service.activate(batch.batch_id, change_reason="test baseline", actor_user_id=actor_user_id)
+    db_session.commit()
+    return batch.topology_version_id
+
+
+@dataclass
+class OperationalCircuitCorrelation:
+    topology_version_id: uuid.UUID
+    pklg_igbk_circuit_id: uuid.UUID
+    igbk_nkst_circuit_id: uuid.UUID
+
+
+@pytest.fixture()
+def operational_topology_with_correlated_circuits(
+    db_session: Session,
+    operational_topology_version_id: uuid.UUID,
+    reference_ids: ReferenceIds,
+    voltage_yard_ids: dict[str, uuid.UUID],
+    actor_user_id: uuid.UUID,
+) -> OperationalCircuitCorrelation:
+    """Registers two real Circuits — bay_number '1' (PKLG-IGBK), bay_number
+    '2' (IGBK-NKST) — matching `operational_topology_version_id`'s own
+    Branch `ckt_id`s exactly, then recomputes `EquipmentTopologyMap`
+    correlation against it (`_run_matching` only runs automatically at
+    commit time for a *new* TopologyVersion; these Circuits are
+    registered afterward, so an explicit recompute is needed, exactly as
+    `psse_integration`'s own `recompute_matching` is designed for). This
+    is what `traverse()`'s `excluded_circuit_ids` -> Operational edge
+    translation needs to have something concrete to exclude."""
+    from app.modules.psse_integration.service import PsseIntegrationService
+
+    eq_service = EquipmentRegistryService(db_session)
+    pklg_igbk = eq_service.create_circuit(
+        bay_number="1",
+        voltage_level_id=reference_ids.voltage_level_id,
+        line_type_id=reference_ids.line_type_id,
+        operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+        is_interconnector=False,
+        remarks=None,
+        terminals=[
+            TerminalInput(voltage_yard_id=voltage_yard_ids["PKLG"], breaker_number="CB1"),
+            TerminalInput(voltage_yard_id=voltage_yard_ids["IGBK"], breaker_number="CB2"),
+        ],
+        actor_user_id=actor_user_id,
+    )
+    igbk_nkst = eq_service.create_circuit(
+        bay_number="2",
+        voltage_level_id=reference_ids.voltage_level_id,
+        line_type_id=reference_ids.line_type_id,
+        operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+        is_interconnector=False,
+        remarks=None,
+        terminals=[
+            TerminalInput(voltage_yard_id=voltage_yard_ids["IGBK"], breaker_number="CB3"),
+            TerminalInput(voltage_yard_id=voltage_yard_ids["NKST"], breaker_number="CB4"),
+        ],
+        actor_user_id=actor_user_id,
+    )
+    db_session.commit()
+
+    psse_service = PsseIntegrationService(db_session)
+    psse_service.recompute_matching(operational_topology_version_id, actor_user_id=actor_user_id)
+    db_session.commit()
+
+    return OperationalCircuitCorrelation(
+        topology_version_id=operational_topology_version_id,
+        pklg_igbk_circuit_id=pklg_igbk.circuit_id,
+        igbk_nkst_circuit_id=igbk_nkst.circuit_id,
+    )

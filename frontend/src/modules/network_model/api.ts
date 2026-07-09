@@ -2,10 +2,13 @@ import { apiClient } from "../../api/client";
 import type {
   ElectricalNeighbour,
   NetworkOverview,
+  PathVerificationRequest,
+  SnapshotSummary,
   SubstationConnectivity,
   SubstationEquipment,
   TraversalRequest,
   TraversalResult,
+  TraversalVerificationResult,
 } from "./types";
 
 /** Endpoint shapes per docs/architecture/network-model-module.md §19. */
@@ -25,4 +28,12 @@ export const networkModelApi = {
     ),
   traverse: (payload: TraversalRequest) =>
     apiClient.post<TraversalResult>("/api/v1/network-model/traverse", payload),
+  // Phase 7F — Operational Snapshot Verification Workspace (§19.10).
+  getSnapshotSummary: () =>
+    apiClient.get<SnapshotSummary>("/api/v1/network-model/verification/snapshot-summary"),
+  verifyPath: (payload: PathVerificationRequest) =>
+    apiClient.post<TraversalVerificationResult>(
+      "/api/v1/network-model/verification/traverse",
+      payload,
+    ),
 };

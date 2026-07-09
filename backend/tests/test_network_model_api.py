@@ -167,11 +167,45 @@ def test_any_authenticated_user_may_read_overview(client: TestClient, db_session
 # --- Full read flow ----------------------------------------------------------------
 
 
+def _commit_matching_operational_snapshot(
+    db_session: Session, actor_user_id: uuid.UUID
+) -> uuid.UUID:
+    """Phase 7E — traversal now reads the Operational Snapshot, not the
+    registry `Circuit` `_create_two_terminal_network` builds. Commits and
+    activates a matching PSS/E RAW (same PKLG132/IGBK132 bus names, so
+    `_match_substation_for_bus` correlates each Bus to the same
+    Substations `_create_two_terminal_network` already registered)
+    directly via the service layer — mirrors how this file's own
+    `_create_two_terminal_network` already calls `EquipmentRegistryService`/
+    `SubstationService` directly for setup, not through HTTP."""
+    from app.modules.psse_integration.service import PsseIntegrationService
+
+    raw = """0,100.0,34,0,1,50.0
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+100,'PKLG132',132.0,1,1,1,1,1.0,0.0
+200,'IGBK132',132.0,1,1,1,1,1.0,0.0
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+100,200,'1',0.001,0.01,0.0002
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"""
+    service = PsseIntegrationService(db_session)
+    batch = service.commit(raw, "network-model-api-test.raw", actor_user_id)
+    db_session.commit()
+    service.activate(batch.batch_id, change_reason="API test baseline", actor_user_id=actor_user_id)
+    db_session.commit()
+    return batch.topology_version_id
+
+
 def test_full_read_flow(client: TestClient, db_session: Session) -> None:
     ref = _seed_reference_data(db_session)
     token, admin_id = _admin_setup(client, db_session)
     headers = {"Authorization": f"Bearer {token}"}
     substation_ids, circuit_id = _create_two_terminal_network(db_session, ref, admin_id)
+    topology_version_id = _commit_matching_operational_snapshot(db_session, admin_id)
 
     overview_response = client.get("/api/v1/network-model/overview", headers=headers)
     assert overview_response.status_code == 200
@@ -210,8 +244,10 @@ def test_full_read_flow(client: TestClient, db_session: Session) -> None:
         json={"start_substation_id": str(substation_ids["PKLG"])},
     )
     assert traverse_response.status_code == 200
-    reached = {r["substation_mnemonic"] for r in traverse_response.json()["reachable_substations"]}
+    traverse_body = traverse_response.json()
+    reached = {r["substation_mnemonic"] for r in traverse_body["reachable_substations"]}
     assert reached == {"PKLG", "IGBK"}
+    assert traverse_body["topology_version_id"] == str(topology_version_id)
 
 
 def test_connectivity_for_unregistered_substation_is_404(
@@ -239,5 +275,135 @@ def test_traverse_from_unregistered_substation_is_404(
         "/api/v1/network-model/traverse",
         headers=headers,
         json={"start_substation_id": str(uuid.uuid4())},
+    )
+    assert response.status_code == 404
+
+
+# --- Phase 7E: Operational Snapshot traversal, Snapshot Awareness -------------------
+
+
+def test_traverse_with_no_current_topology_version_is_400(
+    client: TestClient, db_session: Session
+) -> None:
+    """A registered Substation exists, but no PSS/E RAW has ever been
+    imported/activated — traversal cannot silently proceed with no
+    Operational Snapshot to read (validation error, not a crash)."""
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, _circuit_id = _create_two_terminal_network(db_session, ref, admin_id)
+
+    response = client.post(
+        "/api/v1/network-model/traverse",
+        headers=headers,
+        json={"start_substation_id": str(substation_ids["PKLG"])},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "validation_error"
+
+
+def test_traverse_with_unknown_explicit_topology_version_is_404(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, _circuit_id = _create_two_terminal_network(db_session, ref, admin_id)
+    _commit_matching_operational_snapshot(db_session, admin_id)
+
+    response = client.post(
+        "/api/v1/network-model/traverse",
+        headers=headers,
+        json={
+            "start_substation_id": str(substation_ids["PKLG"]),
+            "topology_version_id": str(uuid.uuid4()),
+        },
+    )
+    assert response.status_code == 404
+
+
+# --- Phase 7F: Operational Snapshot Verification Workspace --------------------------
+
+
+def test_snapshot_summary_requires_authentication(client: TestClient) -> None:
+    response = client.get("/api/v1/network-model/verification/snapshot-summary")
+    assert response.status_code == 401
+
+
+def test_verify_path_requires_authentication(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/network-model/verification/traverse",
+        json={"start_substation_id": str(uuid.uuid4())},
+    )
+    assert response.status_code == 401
+
+
+def test_snapshot_summary_reports_current_topology(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _create_two_terminal_network(db_session, ref, admin_id)
+    topology_version_id = _commit_matching_operational_snapshot(db_session, admin_id)
+
+    response = client.get("/api/v1/network-model/verification/snapshot-summary", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["topology_version_id"] == str(topology_version_id)
+    assert body["bus_count"] == 2
+    assert body["branch_count"] == 1
+
+
+def test_verify_path_full_flow(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, _circuit_id = _create_two_terminal_network(db_session, ref, admin_id)
+    topology_version_id = _commit_matching_operational_snapshot(db_session, admin_id)
+
+    response = client.post(
+        "/api/v1/network-model/verification/traverse",
+        headers=headers,
+        json={"start_substation_id": str(substation_ids["PKLG"])},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["topology_version_id"] == str(topology_version_id)
+    reached_mnemonics = {b["bus"]["substation_mnemonic"] for b in body["buses"]}
+    assert reached_mnemonics == {"PKLG", "IGBK"}
+    assert body["statistics"]["operational_buses_traversed"] == 2
+    assert len(body["projections"]["substation_projection"]) == 2
+
+
+def test_verify_path_from_unregistered_substation_is_404(
+    client: TestClient, db_session: Session
+) -> None:
+    _seed_reference_data(db_session)
+    token, _admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post(
+        "/api/v1/network-model/verification/traverse",
+        headers=headers,
+        json={"start_substation_id": str(uuid.uuid4())},
+    )
+    assert response.status_code == 404
+
+
+def test_verify_path_with_unknown_voltage_yard_is_404(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, _circuit_id = _create_two_terminal_network(db_session, ref, admin_id)
+    _commit_matching_operational_snapshot(db_session, admin_id)
+
+    response = client.post(
+        "/api/v1/network-model/verification/traverse",
+        headers=headers,
+        json={
+            "start_substation_id": str(substation_ids["PKLG"]),
+            "start_voltage_yard_id": str(uuid.uuid4()),
+        },
     )
     assert response.status_code == 404

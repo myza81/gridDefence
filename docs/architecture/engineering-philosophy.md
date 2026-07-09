@@ -2,6 +2,8 @@
 
 ## Engineering Philosophy and System Vision
 
+> **Duplicate-document note (Architecture Synchronization Sprint).** This file and [`docs/engineering/01-engineering-philosophy.md`](../engineering/01-engineering-philosophy.md) both present GridDefence's engineering philosophy and both, in their own text, claim to be the authoritative reference. They are not identical and have drifted independently. Per CLAUDE.md's own precedence framing and this project's consistent practice of citing `docs/engineering/` as "the Engineering Reference Library" throughout Phase 6/7 work, **`docs/engineering/01-engineering-philosophy.md` is treated as the currently-maintained, authoritative copy.** This file is retained, unmodified in its remaining structure, and updated here only to keep its Engineering Information Layers section (§6, below) consistent with the Operational Snapshot pivot alongside the authoritative copy — not because this file is itself the reference of record. A future documentation pass should decide whether to consolidate, deprecate, or formally re-scope this file; that decision is not made here.
+
 ## 1. Introduction
 
 GridDefence is a centralized engineering decision support platform developed for managing, designing, validating, and maintaining the Grid Defence Schemes of the Peninsular Malaysia transmission network.
@@ -261,6 +263,8 @@ Includes:
 
 These registries describe the physical engineering environment.
 
+**Clarification (Operational Snapshot pivot).** Line Connectivity Registry, and the transformer-asset portion of Equipment Registry, curate engineering **identity and metadata** for lines, circuits, and transformers — bay numbers, breaker numbers, commissioning dates, line type, interconnector flags, alias/rename history, and other engineering attributes PSS®E cannot represent. They are not, and have never been intended to be, the authoritative source of *current* electrical topology or *current* operational connectivity — that authority belongs to Operational Snapshot (Layer 2, below). See [EDR-007](../engineering/edr/EDR-007-phase-7-operational-identity-mapping.md) and [operational-snapshot-architecture.md](operational-snapshot-architecture.md).
+
 ---
 
 ## Layer 2 – Operational Context
@@ -272,7 +276,7 @@ Includes:
 * Network topology
 * Load snapshots
 
-These represent the operational condition of the network at a particular point in time.
+These represent the operational condition of the network at a particular point in time. **Network topology — current electrical connectivity, and current bus/branch/transformer/load/generator representation — is authoritative here, in Operational Snapshot, never in a Layer 1 registry.** GridDefence correlates Layer 1 identity/metadata against Layer 2 operational state for engineering workflows; neither layer overwrites the other.
 
 ---
 

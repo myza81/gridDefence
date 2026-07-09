@@ -40,11 +40,11 @@ The Core Platform is where GridDefence's engineering truth is created, curated, 
 
 ### Registries
 
-The engineering knowledge layer: the Substation Registry, Equipment Registry, Line Connectivity Registry, Relay Registry, and Sensitive Customer Registry (see **Engineering Knowledge** in [02-engineering-concepts.md](02-engineering-concepts.md)). Registries answer "what exists, and what do we know about it" — the slow-changing foundation everything else in the platform is built on.
+The engineering knowledge layer: the Substation Registry, Equipment Registry, Line Connectivity Registry, Relay Registry, and Sensitive Customer Registry (see **Engineering Knowledge** in [02-engineering-concepts.md](02-engineering-concepts.md)). Registries answer "what exists, and what do we know about it" — the slow-changing foundation everything else in the platform is built on. Line Connectivity Registry and Equipment Registry's transformer-asset records answer that question for identity and engineering metadata only (bay/breaker numbers, line type, commissioning dates); they do not answer "what is currently connected to what" — that is Operational Snapshot's role, below.
 
 ### PSS/E Integration
 
-The operational context layer: importing, versioning, and correlating PSS®E network topology and load snapshot data against the Registries (see **Operational Context**). This is how GridDefence stays current with the real, evolving network without ever confusing that currency with engineering authority.
+The operational context layer: importing, versioning, and correlating PSS®E network topology and load snapshot data against the Registries (see **Operational Context**). This is how GridDefence stays current with the real, evolving network without ever confusing that currency with engineering authority. The resulting **Operational Snapshot** is authoritative for current electrical topology, connectivity, and operational bus/branch/transformer/load/generator state; the Registries above remain authoritative for identity and metadata. GridDefence correlates the two — neither overwrites the other.
 
 ### Scheme Management
 

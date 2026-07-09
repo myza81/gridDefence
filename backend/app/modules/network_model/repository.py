@@ -5,10 +5,23 @@ that is `service.py`'s responsibility.
 Per this phase's explicit architecture ("The Network Model should
 reference existing entities wherever practical. Do not duplicate registry
 information."), this module owns **no tables of its own**. Every query
-here reads Equipment Registry's and Substation Registry's models directly
-— read-only, never written to — mirroring the exact cross-module
-read-only-model-import pattern already established by
-`psse_integration/repository.py` for the same kind of composition.
+here reads Equipment Registry's, Substation Registry's, and (Phase 7E)
+PSS/E Integration's models directly — read-only, never written to —
+mirroring the exact cross-module read-only-model-import pattern already
+established by `psse_integration/repository.py` for the same kind of
+composition.
+
+**Phase 7E — Operational Snapshot traversal migration:** the traversal
+graph (`NetworkModelService.traverse`) now reads `TopologyBus`/
+`TopologyBranch`/`TopologyTransformer`/`LoadSnapshotElementState`/
+`EquipmentTopologyMap` from `psse_integration`'s own tables, exactly as
+this module already reads Equipment Registry's tables — the same
+established pattern, extended to a second module. The "Engineering
+queries" section below (`SubstationConnectivity`/`SubstationEquipment`/
+`ElectricalNeighbour`/`NetworkOverview`) is unaffected — those remain
+sourced from Equipment/Substation Registry, since they describe
+*registered equipment identity* (breaker numbers, bay numbers, circuit
+names) that only exists there, not in the Operational Snapshot.
 """
 
 from __future__ import annotations
@@ -24,6 +37,15 @@ from app.modules.equipment_registry.models import (
     SubstationVoltageYard,
     Transformer,
     TransformerTerminal,
+)
+from app.modules.psse_integration.models import (
+    EquipmentTopologyMap,
+    LoadSnapshot,
+    LoadSnapshotElementState,
+    TopologyBranch,
+    TopologyBus,
+    TopologyTransformer,
+    TopologyVersion,
 )
 from app.modules.substation_registry.models import Substation
 from app.reference_data.models import OperationalStatus
@@ -150,5 +172,84 @@ class NetworkModelRepository:
                 CircuitTerminal.operational_status_id != _entered_in_error_status_id_subquery(),
                 Circuit.operational_status_id != _entered_in_error_status_id_subquery(),
             )
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    # --- PSS/E Integration / Operational Snapshot (read-only, cross-module,
+    # Phase 7E) --------------------------------------------------------------------
+    def get_current_topology_version(self) -> TopologyVersion | None:
+        stmt = select(TopologyVersion).where(TopologyVersion.status == "Current")
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def get_topology_version_by_id(self, topology_version_id: uuid.UUID) -> TopologyVersion | None:
+        return self.db.get(TopologyVersion, topology_version_id)
+
+    def list_topology_buses(self, topology_version_id: uuid.UUID) -> list[TopologyBus]:
+        stmt = select(TopologyBus).where(TopologyBus.topology_version_id == topology_version_id)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_topology_branches(self, topology_version_id: uuid.UUID) -> list[TopologyBranch]:
+        stmt = select(TopologyBranch).where(
+            TopologyBranch.topology_version_id == topology_version_id
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_topology_transformers(
+        self, topology_version_id: uuid.UUID
+    ) -> list[TopologyTransformer]:
+        stmt = select(TopologyTransformer).where(
+            TopologyTransformer.topology_version_id == topology_version_id
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def get_current_load_snapshot_for_topology(
+        self, topology_version_id: uuid.UUID
+    ) -> LoadSnapshot | None:
+        """Mirrors `psse_integration.repository`'s own method of the same
+        name — the traversal engine's "respect Operational Snapshot
+        in-service state" requirement (Branch Traversal) needs whichever
+        `LoadSnapshot` is Current for the topology being traversed, never
+        an arbitrary or historical one."""
+        stmt = select(LoadSnapshot).where(
+            LoadSnapshot.topology_version_id == topology_version_id,
+            LoadSnapshot.status == "Current",
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def list_load_snapshot_element_states(
+        self, load_snapshot_id: uuid.UUID
+    ) -> list[LoadSnapshotElementState]:
+        stmt = select(LoadSnapshotElementState).where(
+            LoadSnapshotElementState.load_snapshot_id == load_snapshot_id
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_substations_by_ids(self, substation_ids: list[uuid.UUID]) -> list[Substation]:
+        """Bulk read for the traversal result's substation-level output
+        (mnemonic display for every reached substation in one query, not
+        one query per substation)."""
+        if not substation_ids:
+            return []
+        stmt = select(Substation).where(Substation.substation_id.in_(substation_ids))
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_circuit_terminals_for_circuits(
+        self, circuit_ids: list[uuid.UUID]
+    ) -> list[CircuitTerminal]:
+        """`excluded_circuit_ids` (a Line Connectivity Registry concept)
+        needs each excluded Circuit's own terminals to translate the
+        exclusion into Operational Snapshot edges, via
+        `EquipmentTopologyMap` correlation — see
+        `NetworkModelService._resolve_excluded_operational_edges`."""
+        if not circuit_ids:
+            return []
+        stmt = select(CircuitTerminal).where(CircuitTerminal.circuit_id.in_(circuit_ids))
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_map_entries_for_topology_version(
+        self, topology_version_id: uuid.UUID
+    ) -> list[EquipmentTopologyMap]:
+        stmt = select(EquipmentTopologyMap).where(
+            EquipmentTopologyMap.topology_version_id == topology_version_id
         )
         return list(self.db.execute(stmt).scalars().all())

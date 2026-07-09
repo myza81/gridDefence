@@ -40,12 +40,27 @@ real files, not generic documentation), not from an abstract spec:
    purely data-driven: zero parsed `TopologyBus` records means `LOAD_ONLY`,
    never a filename or user assertion (mirrors ADR-003's own "never by user
    assertion" principle for topology-reuse detection).
+5. **Header metadata** (`frequency_hz`/`case_description`/`raw_created`,
+   Phase 7 discovery-support enhancement) is extracted from the same
+   case-identification header already read for `rev`/`sbase` — never a
+   second pass over the file, and subject to the same best-effort,
+   never-required rule as point 2: any field the header does not supply
+   (or a differently-worded RAW writer comment) is simply `None`, never a
+   parse failure.
+6. **`ParsedLoad.owner`** (Phase 7A) is PSS/E's own `OWNER` field, carried
+   through faithfully as-is — a raw operational attribute, never
+   interpreted, classified, or mapped to any engineering meaning by this
+   parser (see EDR-007 §7.3's own caution against assuming what an Owner
+   code represents). `None` whenever the record uses the abbreviated
+   7-field shape (point 3), which has no `OWNER` field at all.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+
+from app.modules.psse_integration.bus_classification import BusClassification, classify_bus_name
 
 _TERMINATOR_RE = re.compile(r"^\s*0\s*/\s*END OF\s+.+?(?:,\s*BEGIN\s+(.+?))?\s*$", re.IGNORECASE)
 _EOF_MARKER = "Q"
@@ -88,6 +103,23 @@ class ParsedBus:
     voltage_mag: float | None = None
     voltage_angle: float | None = None
 
+    @property
+    def bus_classification(self) -> BusClassification:
+        """EDR-007 §4 naming-pattern classification (Phase 7A) — a thin,
+        read-only accessor delegating to `bus_classification.classify_bus_name`.
+        Never stored as a parsed field: it is always derived from
+        `bus_name`, never itself parsed from the RAW file."""
+        return classify_bus_name(self.bus_name)
+
+    @property
+    def in_service(self) -> bool:
+        """Phase 7C — the same `ide != 4` rule `service.py` already applies
+        when persisting `LoadSnapshotBusState.in_service` (PSS/E bus type 4
+        = isolated), exposed here as a read-only accessor so Preview (zero
+        persistence) can show the same "Operational Status" fact a
+        committed snapshot would, with no duplicated rule."""
+        return self.ide != 4
+
 
 @dataclass
 class ParsedLoad:
@@ -96,6 +128,12 @@ class ParsedLoad:
     status: bool
     p_mw: float
     q_mvar: float
+    # PSS/E's own OWNER field (position 11 of the standard 17-field shape) —
+    # an operational attribute carried faithfully from the RAW file, never
+    # interpreted here. Best-effort: `None` whenever the record uses the
+    # abbreviated 7-field shape (module docstring point 3), which has no
+    # OWNER field at all.
+    owner: int | None = None
 
 
 @dataclass
@@ -140,10 +178,16 @@ class ParsedTransformer:
 @dataclass
 class ParsedCase:
     """The full result of parsing one RAW file. `rev`/`sbase` are
-    best-effort (may be `None` — see module docstring point 2)."""
+    best-effort (may be `None` — see module docstring point 2).
+    `frequency_hz`/`case_description`/`raw_created` are likewise
+    best-effort header metadata (module docstring point 5) — display-only,
+    never structural, never required."""
 
     rev: int | None = None
     sbase: float | None = None
+    frequency_hz: float | None = None
+    case_description: str | None = None
+    raw_created: str | None = None
     buses: list[ParsedBus] = field(default_factory=list)
     loads: list[ParsedLoad] = field(default_factory=list)
     generators: list[ParsedGenerator] = field(default_factory=list)
@@ -173,6 +217,41 @@ def _strip_comment(line: str) -> str:
         elif ch == "/" and not in_quote:
             return line[:i]
     return line
+
+
+def _trailing_comment(line: str) -> str | None:
+    """Returns the text after the first un-quoted `/` comment delimiter
+    (mirrors `_strip_comment`'s own quote-awareness), or `None` if the line
+    has no comment at all."""
+    in_quote = False
+    for i, ch in enumerate(line):
+        if ch == "'":
+            in_quote = not in_quote
+        elif ch == "/" and not in_quote:
+            return line[i + 1 :].strip()
+    return None
+
+
+# The RAW writer's own "created by" note (e.g. `PSS(R)E 34 RAW created by
+# rawd34  WED, FEB 11 2026  14:43`) is free text produced by whichever tool
+# wrote the file, not a formal RAW field — this pattern matches the one
+# real writer tool observed in this project's own sample file
+# (module docstring); a differently-worded comment from another tool
+# simply yields `None` below, never a parse failure.
+_RAW_CREATED_RE = re.compile(r"RAW created by\s+\S+\s+(.+)$", re.IGNORECASE)
+
+
+def _extract_raw_created(comment: str | None) -> str | None:
+    """Best-effort extraction of the RAW writer's own file-export note —
+    this is the file's *export timestamp*, never the network study date
+    (module docstring point 5). Returns `None` whenever the marker text
+    isn't present; never raises."""
+    if not comment:
+        return None
+    match = _RAW_CREATED_RE.search(comment)
+    if not match:
+        return None
+    return re.sub(r"\s+", " ", match.group(1)).strip() or None
 
 
 def _split_fields(line: str) -> list[str]:
@@ -238,14 +317,15 @@ def _parse_load_fields(fields: list[str]) -> ParsedLoad | None | type[_NoReading
         return _NoReading
     # Both the standard (17-field) and abbreviated (7-field) shapes agree
     # on field positions 0-6 (I, ID, STAT, AREA, ZONE, PL, QL) — see module
-    # docstring point 3. Fields beyond position 6 (IP/IQ/YP/YQ/OWNER/...)
-    # are not needed at this phase's scope (P/Q only).
+    # docstring point 3. OWNER (position 11) is only present in the
+    # standard shape; the abbreviated shape simply has no such field.
     return ParsedLoad(
         bus_number=bus_number,
         load_id=fields[1] or "1",
         status=_to_int(fields[2], 1) == 1,
         p_mw=_to_float(fields[5], 0.0) or 0.0,
         q_mvar=_to_float(fields[6], 0.0) or 0.0,
+        owner=_to_int(fields[11]) if len(fields) > 11 else None,
     )
 
 
@@ -261,7 +341,15 @@ def parse_raw(content: str) -> ParsedCase:
 
     case = ParsedCase()
     current_section = "SYSTEM-WIDE DATA"
-    header_line_seen = False
+    # Position within the case-identification header (module docstring
+    # point 5): line 1 is the numeric IC/SBASE/REV/.../BASFRQ line; lines 2
+    # and 3 are the two fixed, free-text case-identification title lines
+    # (always in this position when present — never detected by keyword);
+    # anything beyond line 3 (GENERAL/GAUSS/RATING/... in newer RAW
+    # revisions) is ignored, unchanged from before this enhancement.
+    system_wide_data_line_index = 0
+    case_title_line_1: str | None = None
+    case_title_line_2: str | None = None
     unknown_sections_warned: set[str] = set()
 
     # Transformer records span multiple lines — tracked as an explicit
@@ -291,13 +379,24 @@ def parse_raw(content: str) -> ParsedCase:
 
         # --- SYSTEM-WIDE DATA (case identification header) -------------
         if current_section == "SYSTEM-WIDE DATA":
-            if not header_line_seen:
-                header_line_seen = True
+            system_wide_data_line_index += 1
+            if system_wide_data_line_index == 1:
                 header_fields = _split_fields(_strip_comment(stripped))
                 if len(header_fields) >= 3:
                     case.sbase = _to_float(header_fields[1])
                     case.rev = _to_int(header_fields[2])
-            continue  # title lines / GENERAL / GAUSS / RATING etc. — ignored
+                if len(header_fields) >= 6:
+                    case.frequency_hz = _to_float(header_fields[5])
+                case.raw_created = _extract_raw_created(_trailing_comment(stripped))
+            elif system_wide_data_line_index == 2:
+                # Case-identification title line 1 — free text, preserved
+                # verbatim (never comment-stripped: unlike a data line, a
+                # title line has no CSV structure of its own, so a `/`
+                # within it is just text, not a comment delimiter).
+                case_title_line_1 = stripped.strip() or None
+            elif system_wide_data_line_index == 3:
+                case_title_line_2 = stripped.strip() or None
+            continue  # GENERAL / GAUSS / RATING etc. (rev 33+, line 4+) — ignored
 
         data = _strip_comment(stripped)
         if not data.strip():
@@ -426,5 +525,11 @@ def parse_raw(content: str) -> ParsedCase:
                     f"Section '{current_section}' is not recognized by this parser — its "
                     "data (if any) was skipped."
                 )
+
+    # Title line 2 is conventionally the specific case/study identifier
+    # (e.g. "CPF_03 JAN 2025"); title line 1 is typically a general study
+    # description (e.g. "OPERATION STUDY") — preferred only when line 2 is
+    # absent or blank, never both concatenated (module docstring point 5).
+    case.case_description = case_title_line_2 or case_title_line_1
 
     return case

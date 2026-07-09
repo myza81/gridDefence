@@ -12,18 +12,30 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
 
 from app.modules.equipment_registry.models import Circuit, CircuitTerminal, SubstationVoltageYard
 from app.modules.iam.schemas import UserSummary
 from app.modules.iam.service import IAMService
+from app.modules.psse_integration.bus_classification import classify_bus_name
+from app.modules.psse_integration.correlated_operational_model import (
+    CorrelationStatus,
+    bus_correlation_status,
+    equipment_correlation_status,
+)
 from app.modules.psse_integration.exceptions import (
     BatchNotActivatableError,
     DiscrepancyAlreadyResolvedError,
     NoCurrentTopologyVersionError,
     NotFoundError,
     RawFileParseError,
+)
+from app.modules.psse_integration.load_sync_validation import (
+    ActiveTopologyBusRef,
+    LoadSyncValidationResult,
+    validate_load_only_synchronization,
 )
 from app.modules.psse_integration.matching import (
     TerminalCandidate,
@@ -48,11 +60,18 @@ from app.modules.psse_integration.raw_parser import ParsedCase, RawParseError, p
 from app.modules.psse_integration.repository import PsseIntegrationRepository
 from app.modules.psse_integration.schemas import (
     BatchSummary,
+    BusCorrelationRefreshSummary,
+    BusIdentityMismatchRow,
     CircuitCorrelation,
     CurrentStatus,
     EquipmentTopologyMapEntry,
     FindingGroup,
     LoadSnapshotSummary,
+    LoadSyncValidationSummary,
+    OperationalBranchView,
+    OperationalBusView,
+    OperationalLoadView,
+    OperationalTransformerView,
     TopologyVersionSummary,
 )
 from app.modules.psse_integration.signature import compute_topology_signature
@@ -74,6 +93,8 @@ _FINDING_CATEGORY_GROUPS: dict[str, str] = {
     "unmatched_branch_reference": "engineering_review_required",
     "unmatched_transformer_reference": "engineering_review_required",
     "unmatched_load_bus": "engineering_review_required",
+    "missing_topology_load_bus": "engineering_review_required",
+    "load_bus_identity_mismatch": "engineering_review_required",
     "unparsed_data_line": "engineering_review_required",
     "unrecognized_section": "parser_notices",
 }
@@ -113,6 +134,18 @@ def _summarize_finding_group(category: str, count: int) -> str:
     if category == "unmatched_load_bus":
         noun = "load" if count == 1 else "loads"
         return f"{count} {noun} could not be matched to the current network topology."
+    if category == "missing_topology_load_bus":
+        noun = "bus" if count == 1 else "buses"
+        return (
+            f"{count} {noun} previously had load in the current network topology but "
+            "are absent from this file."
+        )
+    if category == "load_bus_identity_mismatch":
+        noun = "bus" if count == 1 else "buses"
+        return (
+            f"{count} {noun} matched by Bus Number but reported a different Bus Name "
+            "or nominal voltage than the current network topology."
+        )
     if category == "unrecognized_section":
         noun = "section was" if count == 1 else "sections were"
         return (
@@ -195,6 +228,10 @@ class PreviewResultData:
         transformers: list,
         loads: list,
         generators: list,
+        frequency_hz: float | None,
+        case_description: str | None,
+        raw_created: str | None,
+        sync_validation: LoadSyncValidationSummary | None = None,
     ) -> None:
         self.import_type = import_type
         self.raw_version = raw_version
@@ -216,6 +253,10 @@ class PreviewResultData:
         self.transformers = transformers
         self.loads = loads
         self.generators = generators
+        self.frequency_hz = frequency_hz
+        self.case_description = case_description
+        self.raw_created = raw_created
+        self.sync_validation = sync_validation
 
 
 class PsseIntegrationService:
@@ -249,7 +290,7 @@ class PsseIntegrationService:
             )
         )
 
-    def _match_substation_for_bus(self, bus_name: str | None) -> uuid.UUID | None:
+    def _match_substation_for_bus(self, bus_name: str | None) -> Substation | None:
         """Best-effort bus-to-substation matching by mnemonic prefix
         (psse-integration-module.md §9 rule 12's "unmatched buses are
         warnings only" — this module never invents or auto-creates a
@@ -258,12 +299,191 @@ class PsseIntegrationService:
         characters (e.g. `PKLG`, `IGBK`); real PSS/E bus names commonly
         embed the mnemonic plus a voltage/suffix (`PKLG132`, `SDAOFIC`) —
         matching the leading 4 characters is a deliberately simple,
-        transparent heuristic, not a claim of perfect fidelity."""
+        transparent heuristic, not a claim of perfect fidelity.
+
+        Returns the full `Substation` row (not just its id) — Phase 7C's
+        Correlated Operational Model and Preview enrichment both need the
+        mnemonic for display, not only the id; callers that only need the
+        id (e.g. `TopologyBus.substation_id`) read `.substation_id` off the
+        result."""
         if not bus_name or len(bus_name.strip()) < 4:
             return None
         candidate_mnemonic = bus_name.strip()[:4]
-        substation = self.repo.find_substation_by_mnemonic_ci(candidate_mnemonic)
-        return substation.substation_id if substation is not None else None
+        return self.repo.find_substation_by_mnemonic_ci(candidate_mnemonic)
+
+    def _build_voltage_yard_lookup(
+        self, substation_ids: list[uuid.UUID]
+    ) -> dict[tuple[uuid.UUID, float], uuid.UUID]:
+        """Phase 7C — "correlated Switchyard" resolution: matches a Bus's
+        own `base_kv` against `SubstationVoltageYard`'s voltage level (via
+        `VoltageLevel.nominal_kv`), for every Substation in
+        `substation_ids`, in exactly two bulk queries regardless of how
+        many Buses are being resolved (never one query per Bus)."""
+        distinct_ids = list({sid for sid in substation_ids if sid is not None})
+        yards = self.repo.list_voltage_yards_by_substation_ids(distinct_ids)
+        if not yards:
+            return {}
+        nominal_kv_by_level_id = {
+            vl.voltage_level_id: vl.nominal_kv for vl in self.repo.list_voltage_levels()
+        }
+        return {
+            (yard.substation_id, float(nominal_kv_by_level_id[yard.voltage_level_id])): (
+                yard.voltage_yard_id
+            )
+            for yard in yards
+            if yard.voltage_level_id in nominal_kv_by_level_id
+        }
+
+    def _enrich_buses_for_preview(
+        self, buses: list, bus_substations: list[Substation | None]
+    ) -> list[SimpleNamespace]:
+        """Phase 7C — Preview/Inspector enrichment (zero persistence): the
+        same Substation match Preview's own Registry Matching count
+        already computes (`_match_substation_for_bus`), now also exposed
+        per-Bus with the shared Correlated Operational Model vocabulary,
+        plus the "correlated Switchyard" resolution. Returns
+        `SimpleNamespace` objects (not `ParsedBus` instances) — attribute-
+        accessible like a real `ParsedBus` (for existing callers that read
+        `result.buses[i].bus_number` directly off `preview()`'s own return
+        value, and for Pydantic's `from_attributes=True`), while keeping
+        `raw_parser.py` itself free of any dependency on Engineering
+        Registry correlation; only this service-layer enrichment step
+        carries that dependency (mirrors the same separation
+        `bus_classification.py`'s own docstring already establishes for
+        classification vs. correlation)."""
+        voltage_yard_lookup = self._build_voltage_yard_lookup(
+            [s.substation_id for s in bus_substations if s is not None]
+        )
+        enriched: list[SimpleNamespace] = []
+        for bus, substation in zip(buses, bus_substations, strict=True):
+            substation_id = substation.substation_id if substation is not None else None
+            voltage_yard_id = (
+                voltage_yard_lookup.get((substation_id, bus.base_kv))
+                if substation_id is not None
+                else None
+            )
+            enriched.append(
+                SimpleNamespace(
+                    bus_number=bus.bus_number,
+                    bus_name=bus.bus_name,
+                    base_kv=bus.base_kv,
+                    ide=bus.ide,
+                    area=bus.area,
+                    zone=bus.zone,
+                    owner=bus.owner,
+                    voltage_mag=bus.voltage_mag,
+                    voltage_angle=bus.voltage_angle,
+                    bus_classification=bus.bus_classification,
+                    in_service=bus.in_service,
+                    substation_id=substation_id,
+                    substation_mnemonic=(substation.mnemonic if substation is not None else None),
+                    voltage_yard_id=voltage_yard_id,
+                    correlation_status=bus_correlation_status(
+                        bus.bus_classification, substation_id
+                    ),
+                )
+            )
+        return enriched
+
+    # --- Load-only Snapshot Synchronisation validation (Phase 7B) ---------------
+    def _validate_load_only_sync(
+        self, case: ParsedCase, current_topology: TopologyVersion
+    ) -> LoadSyncValidationResult:
+        """Compares a load-only case's loads against the active topology's
+        own bus records, correlated exclusively by Bus Number (EDR-007
+        Engineering Principle 12). Read-only — never creates, updates, or
+        infers `TopologyVersion`/`TopologyBus` rows."""
+        topology_buses = self.repo.list_topology_buses(current_topology.topology_version_id)
+        active_topology_buses = [
+            ActiveTopologyBusRef(
+                bus_number=bus.bus_number, bus_name=bus.bus_name, base_kv=bus.base_kv
+            )
+            for bus in topology_buses
+        ]
+        bus_number_by_id = {bus.topology_bus_id: bus.bus_number for bus in topology_buses}
+
+        # "Active topology bus missing from load-only RAW" (requirement 2)
+        # is answered against the topology's own previously Current
+        # LoadSnapshot — the only reliable, already-known signal for "this
+        # bus was expected to have load," since a topology bus is not
+        # required to carry load at all (e.g. a generator or switching
+        # bus); every other candidate signal would be a guess.
+        previously_loaded_bus_numbers: set[int] = set()
+        previous_snapshot = self.repo.get_current_load_snapshot()
+        if (
+            previous_snapshot is not None
+            and previous_snapshot.topology_version_id == current_topology.topology_version_id
+        ):
+            previously_loaded_bus_numbers = {
+                bus_number_by_id[load.topology_bus_id]
+                for load in self.repo.list_network_loads(previous_snapshot.load_snapshot_id)
+                if load.topology_bus_id in bus_number_by_id
+            }
+
+        incoming_bus_references = [
+            ActiveTopologyBusRef(
+                bus_number=bus.bus_number, bus_name=bus.bus_name, base_kv=bus.base_kv
+            )
+            for bus in case.buses
+        ]
+
+        return validate_load_only_synchronization(
+            load_bus_numbers=[load.bus_number for load in case.loads],
+            active_topology_buses=active_topology_buses,
+            previously_loaded_bus_numbers=previously_loaded_bus_numbers,
+            incoming_bus_references=incoming_bus_references,
+        )
+
+    def _sync_validation_summary(
+        self, result: LoadSyncValidationResult
+    ) -> LoadSyncValidationSummary:
+        return LoadSyncValidationSummary(
+            total_load_records=result.total_load_records,
+            total_distinct_load_buses=result.total_distinct_load_buses,
+            matched_load_buses=result.matched_load_buses,
+            unmatched_load_buses=len(result.unmatched_load_bus_numbers),
+            missing_topology_buses=len(result.missing_topology_bus_numbers),
+            identity_mismatch_buses=len(result.identity_mismatches),
+            unmatched_load_bus_numbers=result.unmatched_load_bus_numbers,
+            missing_topology_bus_numbers=result.missing_topology_bus_numbers,
+            identity_mismatches=[
+                BusIdentityMismatchRow(
+                    bus_number=mismatch.bus_number,
+                    active_bus_name=mismatch.active_bus_name,
+                    incoming_bus_name=mismatch.incoming_bus_name,
+                    active_base_kv=mismatch.active_base_kv,
+                    incoming_base_kv=mismatch.incoming_base_kv,
+                    mismatch_reason=mismatch.mismatch_reason,
+                )
+                for mismatch in result.identity_mismatches
+            ],
+        )
+
+    def _sync_validation_findings(self, result: LoadSyncValidationResult) -> list[tuple[str, str]]:
+        """(category, message) pairs for `missing_topology_load_bus`/
+        `load_bus_identity_mismatch` — mirrors the existing
+        `unmatched_load_bus` warning text style exactly, so both flow
+        through the same `_aggregate_findings`/finding-group pipeline."""
+        findings: list[tuple[str, str]] = []
+        for bus_number in result.missing_topology_bus_numbers:
+            findings.append(
+                (
+                    "missing_topology_load_bus",
+                    f"Bus {bus_number} previously had load in the current network topology "
+                    "but is absent from this file.",
+                )
+            )
+        for mismatch in result.identity_mismatches:
+            findings.append(
+                (
+                    "load_bus_identity_mismatch",
+                    f"Bus {mismatch.bus_number} identity mismatch: current topology reports "
+                    f"name '{mismatch.active_bus_name}' at {mismatch.active_base_kv} kV; this "
+                    f"file reports name '{mismatch.incoming_bus_name}' at "
+                    f"{mismatch.incoming_base_kv} kV.",
+                )
+            )
+        return findings
 
     # --- Preview (Workflow 6, §8.9) — zero persistence ---------------------------
     def preview(self, file_content: str, source_file_reference: str) -> PreviewResultData:
@@ -277,9 +497,11 @@ class PsseIntegrationService:
             signature = compute_topology_signature(case.buses, case.branches, case.transformers)
             existing = self.repo.find_topology_version_by_signature(signature)
             topology_reused = existing is not None
-            matched = sum(1 for bus in case.buses if self._match_substation_for_bus(bus.bus_name))
+            bus_substations = [self._match_substation_for_bus(bus.bus_name) for bus in case.buses]
+            matched = sum(1 for s in bus_substations if s is not None)
             unmatched = len(case.buses) - matched
             coverage = (matched / len(case.buses) * 100.0) if case.buses else 0.0
+            enriched_buses = self._enrich_buses_for_preview(case.buses, bus_substations)
             return PreviewResultData(
                 import_type="FULL_TOPOLOGY_WITH_LOAD",
                 raw_version=case.rev,
@@ -296,17 +518,21 @@ class PsseIntegrationService:
                 warnings=warnings,
                 source_file_reference=source_file_reference,
                 base_mva=case.sbase,
-                buses=case.buses,
+                buses=enriched_buses,
                 branches=case.branches,
                 transformers=case.transformers,
                 loads=case.loads,
                 generators=case.generators,
+                frequency_hz=case.frequency_hz,
+                case_description=case.case_description,
+                raw_created=case.raw_created,
             )
 
         # LOAD_ONLY — validate against the Current TopologyVersion, if any.
         current_topology = self.repo.get_current_topology_version()
         matched = 0
         unmatched = 0
+        sync_validation_summary: LoadSyncValidationSummary | None = None
         if current_topology is not None:
             for load in case.loads:
                 bus = self.repo.get_topology_bus_by_number(
@@ -317,6 +543,12 @@ class PsseIntegrationService:
                 else:
                     unmatched += 1
                     warnings.append(f"Load bus {load.bus_number} not found in Current topology.")
+
+            sync_result = self._validate_load_only_sync(case, current_topology)
+            sync_validation_summary = self._sync_validation_summary(sync_result)
+            warnings.extend(
+                message for _category, message in self._sync_validation_findings(sync_result)
+            )
         else:
             unmatched = len(case.loads)
             warnings.append("No Current TopologyVersion exists to validate load buses against.")
@@ -342,6 +574,10 @@ class PsseIntegrationService:
             transformers=case.transformers,
             loads=case.loads,
             generators=case.generators,
+            frequency_hz=case.frequency_hz,
+            case_description=case.case_description,
+            raw_created=case.raw_created,
+            sync_validation=sync_validation_summary,
         )
 
     # --- Commit (Workflow 1-5, §8.4-§8.8) — persists, never activates -----------
@@ -409,7 +645,8 @@ class PsseIntegrationService:
             bus_id_by_number: dict[int, int] = {}
             buses: list[TopologyBus] = []
             for parsed_bus in case.buses:
-                substation_id = self._match_substation_for_bus(parsed_bus.bus_name)
+                substation = self._match_substation_for_bus(parsed_bus.bus_name)
+                substation_id = substation.substation_id if substation is not None else None
                 if substation_id is None:
                     warnings.append(
                         {
@@ -602,6 +839,10 @@ class PsseIntegrationService:
                     }
                 )
 
+        sync_result = self._validate_load_only_sync(case, current_topology)
+        for category, message in self._sync_validation_findings(sync_result):
+            warnings.append({"category": category, "message": message})
+
         if case.loads and not matched_loads:
             batch.status = "Failed"
             batch.fatal_error = "Zero loads matched the Current TopologyVersion's buses."
@@ -624,6 +865,7 @@ class PsseIntegrationService:
                     load_id=load.load_id,
                     p_mw=load.p_mw,
                     q_mvar=load.q_mvar,
+                    owner=load.owner,
                 )
             )
 
@@ -702,6 +944,7 @@ class PsseIntegrationService:
                     load_id=load.load_id,
                     p_mw=load.p_mw,
                     q_mvar=load.q_mvar,
+                    owner=load.owner,
                 )
             )
         for generator in case.generators:
@@ -1161,3 +1404,484 @@ class PsseIntegrationService:
             match_outcome=match_outcome,
         )
         return [self._map_entry_summary(entry) for entry in entries], total
+
+    # --- Correlated Operational Model (Phase 7C) --------------------------------
+    #
+    # Read-only query methods over already-persisted Operational Snapshot
+    # (`psse_integration`) and Engineering Registry (Substation Registry /
+    # Equipment Registry) data — never a new source of truth, never a
+    # write path (operational-correlation-architecture.md §5, §9). These
+    # are the intended, preferred engineering-consumption API for future
+    # Defence Scheme modules, dashboards, and analytics — mirroring
+    # `get_circuit_correlation`'s own, already-accepted shape, generalized
+    # across every operational object type.
+
+    _CORRELATION_STATUS_PRIORITY: dict[CorrelationStatus, int] = {
+        "CORRELATED": 0,
+        "ENGINEERING_REVIEW_REQUIRED": 1,
+        "AMBIGUOUS": 2,
+        "UNMATCHED_REGISTRY": 3,
+        "UNMATCHED_OPERATIONAL": 4,
+        "OUTSIDE_CURRENT_SCOPE": 5,
+    }
+
+    def refresh_bus_correlation(
+        self, topology_version_id: uuid.UUID, actor_user_id: uuid.UUID
+    ) -> BusCorrelationRefreshSummary:
+        """Explicit, on-demand Bus -> Substation Registry correlation
+        refresh (Phase 7D; UAT follow-up — `docs/testing/phase-7-uat-
+        results.md` §10 remark on Test 10.4: Bus-to-Substation correlation
+        is otherwise computed only once, at commit time, and does not
+        automatically pick up a Substation created or corrected
+        afterward). Mirrors `recompute_matching`'s own established pattern
+        for `EquipmentTopologyMap` (psse-integration-module.md §8a) — an
+        explicit, audited, callable-any-time recomputation, never
+        automatic.
+
+        Recomputes `TopologyBus.substation_id` via the same
+        `_match_substation_for_bus` heuristic already used at commit time
+        — introduces no new matching rule, no new engineering
+        interpretation. Never creates, updates, or infers a Substation
+        Registry record (`_match_substation_for_bus` only reads). Never
+        touches RAW-derived topology facts (`bus_number`/`bus_name`/
+        `base_kv`) or any other operational data — only the correlation
+        link (`substation_id`) itself. "Correlated Switchyard"
+        (`voltage_yard_id`) needs no separate refresh step: it is already
+        computed at read time from `substation_id` + `base_kv`
+        (`_build_voltage_yard_lookup`), never persisted, so it reflects
+        the refreshed `substation_id` on the very next read."""
+        topology_version = self.repo.get_topology_version_by_id(topology_version_id)
+        if topology_version is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+
+        buses = self.repo.list_topology_buses(topology_version_id)
+        buses_correlated = 0
+        buses_unmatched = 0
+        buses_outside_scope = 0
+        updated_count = 0
+
+        for bus in buses:
+            classification = classify_bus_name(bus.bus_name)
+            substation = self._match_substation_for_bus(bus.bus_name)
+            new_substation_id = substation.substation_id if substation is not None else None
+            if new_substation_id != bus.substation_id:
+                bus.substation_id = new_substation_id
+                updated_count += 1
+
+            status = bus_correlation_status(classification, new_substation_id)
+            if status == "CORRELATED":
+                buses_correlated += 1
+            elif status == "OUTSIDE_CURRENT_SCOPE":
+                buses_outside_scope += 1
+            else:
+                buses_unmatched += 1
+
+        self._audit(
+            entity_type="TopologyVersion",
+            entity_id=str(topology_version_id),
+            event_type="operational_correlation_refreshed",
+            actor_user_id=actor_user_id,
+            change_reason=(
+                f"Bus correlation refresh: {updated_count} of {len(buses)} bus(es) updated "
+                f"({buses_correlated} correlated, {buses_unmatched} unmatched, "
+                f"{buses_outside_scope} outside current scope)"
+            ),
+        )
+
+        return BusCorrelationRefreshSummary(
+            topology_version_id=topology_version_id,
+            buses_processed=len(buses),
+            buses_correlated=buses_correlated,
+            buses_unmatched=buses_unmatched,
+            buses_outside_scope=buses_outside_scope,
+            updated_count=updated_count,
+        )
+
+    def get_operational_bus_views(
+        self, topology_version_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[OperationalBusView], int]:
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        buses = self.repo.list_topology_buses(topology_version_id)
+        total = len(buses)
+        offset = (page - 1) * page_size
+        page_buses = buses[offset : offset + page_size]
+        return self._build_operational_bus_views(topology_version_id, page_buses), total
+
+    def get_operational_bus_view(
+        self, topology_version_id: uuid.UUID, bus_number: int
+    ) -> OperationalBusView:
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        bus = self.repo.get_topology_bus_by_number(topology_version_id, bus_number)
+        if bus is None:
+            raise NotFoundError(
+                f"Bus {bus_number} not found in TopologyVersion {topology_version_id}"
+            )
+        return self._build_operational_bus_views(topology_version_id, [bus])[0]
+
+    def _build_operational_bus_views(
+        self, topology_version_id: uuid.UUID, buses: list[TopologyBus]
+    ) -> list[OperationalBusView]:
+        substation_ids = [b.substation_id for b in buses if b.substation_id is not None]
+        substations_by_id = {
+            s.substation_id: s for s in self.repo.list_substations_by_ids(substation_ids)
+        }
+        voltage_yard_lookup = self._build_voltage_yard_lookup(substation_ids)
+
+        in_service_by_bus_id: dict[int, bool] = {}
+        snapshot = self.repo.get_current_load_snapshot_for_topology(topology_version_id)
+        if snapshot is not None:
+            in_service_by_bus_id = {
+                state.topology_bus_id: state.in_service
+                for state in self.repo.list_load_snapshot_bus_states(snapshot.load_snapshot_id)
+            }
+
+        views: list[OperationalBusView] = []
+        for bus in buses:
+            classification = classify_bus_name(bus.bus_name)
+            substation = (
+                substations_by_id.get(bus.substation_id) if bus.substation_id is not None else None
+            )
+            voltage_yard_id = (
+                voltage_yard_lookup.get((bus.substation_id, bus.base_kv))
+                if bus.substation_id is not None
+                else None
+            )
+            views.append(
+                OperationalBusView(
+                    topology_version_id=topology_version_id,
+                    bus_number=bus.bus_number,
+                    bus_name=bus.bus_name,
+                    bus_classification=classification,
+                    in_service=in_service_by_bus_id.get(bus.topology_bus_id),
+                    substation_id=bus.substation_id,
+                    substation_mnemonic=substation.mnemonic if substation is not None else None,
+                    voltage_yard_id=voltage_yard_id,
+                    correlation_status=bus_correlation_status(classification, bus.substation_id),
+                )
+            )
+        return views
+
+    def _element_correlation(
+        self, map_entries: list[EquipmentTopologyMap]
+    ) -> tuple[CorrelationStatus, EquipmentTopologyMap | None]:
+        """Picks the "best" entry among possibly-multiple
+        `EquipmentTopologyMap` rows referencing the same operational
+        element (rare — e.g. both ends of a tee-off circuit discrepancy-
+        matching the same element) and returns its correlation status. A
+        deliberate simplification, documented rather than silently
+        assumed away: not expected to arise in the ordinary single-
+        circuit, two-terminal case."""
+        if not map_entries:
+            status = equipment_correlation_status(
+                None, has_single_candidate=False, discrepancy_resolution=None
+            )
+            return status, None
+
+        best_entry: EquipmentTopologyMap | None = None
+        best_status: CorrelationStatus | None = None
+        for entry in map_entries:
+            has_single = (
+                entry.topology_branch_id is not None or entry.topology_transformer_id is not None
+            )
+            status = equipment_correlation_status(
+                entry.match_outcome,
+                has_single_candidate=has_single,
+                discrepancy_resolution=entry.discrepancy_resolution,
+            )
+            if best_status is None or (
+                self._CORRELATION_STATUS_PRIORITY[status]
+                < self._CORRELATION_STATUS_PRIORITY[best_status]
+            ):
+                best_status, best_entry = status, entry
+        assert best_status is not None  # map_entries is non-empty here
+        return best_status, best_entry
+
+    def _resolve_circuit_context(
+        self,
+        entry: EquipmentTopologyMap | None,
+        terminals_by_id: dict[uuid.UUID, CircuitTerminal],
+        circuits_by_id: dict[uuid.UUID, Circuit],
+    ) -> Circuit | None:
+        if entry is None:
+            return None
+        terminal = terminals_by_id.get(entry.circuit_terminal_id)
+        if terminal is None:
+            return None
+        return circuits_by_id.get(terminal.circuit_id)
+
+    def _load_element_correlation_context(
+        self, topology_version_id: uuid.UUID
+    ) -> tuple[
+        dict[int, list[EquipmentTopologyMap]],
+        dict[int, list[EquipmentTopologyMap]],
+        dict[uuid.UUID, CircuitTerminal],
+        dict[uuid.UUID, Circuit],
+    ]:
+        """One bulk fetch of every `EquipmentTopologyMap` entry for this
+        `TopologyVersion`, plus the `CircuitTerminal`/`Circuit` rows those
+        entries reference — three queries total, shared by both
+        `get_operational_branch_views` and `get_operational_transformer_views`,
+        never one query per element (task's own "avoid N+1" requirement)."""
+        entries = self.repo.list_all_map_entries(topology_version_id)
+        entries_by_branch_id: dict[int, list[EquipmentTopologyMap]] = {}
+        entries_by_transformer_id: dict[int, list[EquipmentTopologyMap]] = {}
+        for entry in entries:
+            if entry.topology_branch_id is not None:
+                entries_by_branch_id.setdefault(entry.topology_branch_id, []).append(entry)
+            if entry.topology_transformer_id is not None:
+                entries_by_transformer_id.setdefault(entry.topology_transformer_id, []).append(
+                    entry
+                )
+
+        circuit_terminal_ids = [e.circuit_terminal_id for e in entries]
+        terminals_by_id = {
+            t.circuit_terminal_id: t
+            for t in self.repo.list_circuit_terminals_by_ids(circuit_terminal_ids)
+        }
+        circuit_ids = [t.circuit_id for t in terminals_by_id.values()]
+        circuits_by_id = {c.circuit_id: c for c in self.repo.list_circuits_by_ids(circuit_ids)}
+        return entries_by_branch_id, entries_by_transformer_id, terminals_by_id, circuits_by_id
+
+    def _build_operational_branch_views(
+        self, topology_version_id: uuid.UUID, branches: list[TopologyBranch]
+    ) -> list[OperationalBranchView]:
+        """Extracted from `get_operational_branch_views` (Phase 7F) so the
+        same correlation logic can be reused for an arbitrary caller-supplied
+        subset of branches — e.g. Network Model's path-verification
+        traversal (`get_operational_branch_views_for_ids`) — without
+        duplicating it. `get_operational_branch_views` itself is unchanged
+        in behaviour; this is a pure extraction, not a new computation."""
+        bus_number_by_id = {
+            bus.topology_bus_id: bus.bus_number
+            for bus in self.repo.list_topology_buses(topology_version_id)
+        }
+        entries_by_branch_id, _, terminals_by_id, circuits_by_id = (
+            self._load_element_correlation_context(topology_version_id)
+        )
+        in_service_by_branch_id = self._element_in_service_map(
+            topology_version_id, element_type="branch"
+        )
+
+        views = []
+        for branch in branches:
+            status, entry = self._element_correlation(
+                entries_by_branch_id.get(branch.topology_branch_id, [])
+            )
+            circuit = self._resolve_circuit_context(entry, terminals_by_id, circuits_by_id)
+            views.append(
+                OperationalBranchView(
+                    topology_version_id=topology_version_id,
+                    topology_branch_id=branch.topology_branch_id,
+                    from_bus_number=bus_number_by_id.get(branch.from_bus_id, 0),
+                    to_bus_number=bus_number_by_id.get(branch.to_bus_id, 0),
+                    ckt_id=branch.ckt_id,
+                    in_service=in_service_by_branch_id.get(branch.topology_branch_id),
+                    circuit_id=circuit.circuit_id if circuit is not None else None,
+                    circuit_bay_number=circuit.bay_number if circuit is not None else None,
+                    correlation_status=status,
+                )
+            )
+        return views
+
+    def get_operational_branch_views(
+        self, topology_version_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[OperationalBranchView], int]:
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        branches = self.repo.list_topology_branches(topology_version_id)
+        total = len(branches)
+        offset = (page - 1) * page_size
+        page_branches = branches[offset : offset + page_size]
+        return self._build_operational_branch_views(topology_version_id, page_branches), total
+
+    def get_operational_branch_views_for_ids(
+        self, topology_version_id: uuid.UUID, topology_branch_ids: list[int]
+    ) -> list[OperationalBranchView]:
+        """Phase 7F — Operational Snapshot Verification Workspace. Same
+        correlation logic as `get_operational_branch_views`, scoped to a
+        caller-supplied set of Branch ids (e.g. Network Model's
+        path-verification traversal's reached component) instead of a full
+        paginated listing — avoids paginating through an entire topology
+        version to look up a handful of branches, and never recomputes
+        correlation a second way."""
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        if not topology_branch_ids:
+            return []
+        wanted = set(topology_branch_ids)
+        branches = [
+            b
+            for b in self.repo.list_topology_branches(topology_version_id)
+            if b.topology_branch_id in wanted
+        ]
+        return self._build_operational_branch_views(topology_version_id, branches)
+
+    def _build_operational_transformer_views(
+        self, topology_version_id: uuid.UUID, transformers: list[TopologyTransformer]
+    ) -> list[OperationalTransformerView]:
+        """Extracted from `get_operational_transformer_views` (Phase 7F) —
+        see `_build_operational_branch_views`'s own docstring for the same
+        rationale, applied here to Transformers."""
+        bus_number_by_id = {
+            bus.topology_bus_id: bus.bus_number
+            for bus in self.repo.list_topology_buses(topology_version_id)
+        }
+        _, entries_by_transformer_id, terminals_by_id, circuits_by_id = (
+            self._load_element_correlation_context(topology_version_id)
+        )
+        in_service_by_transformer_id = self._element_in_service_map(
+            topology_version_id, element_type="transformer"
+        )
+
+        views = []
+        for transformer in transformers:
+            status, entry = self._element_correlation(
+                entries_by_transformer_id.get(transformer.topology_transformer_id, [])
+            )
+            circuit = self._resolve_circuit_context(entry, terminals_by_id, circuits_by_id)
+            views.append(
+                OperationalTransformerView(
+                    topology_version_id=topology_version_id,
+                    topology_transformer_id=transformer.topology_transformer_id,
+                    from_bus_number=bus_number_by_id.get(transformer.from_bus_id, 0),
+                    to_bus_number=bus_number_by_id.get(transformer.to_bus_id, 0),
+                    tertiary_bus_number=(
+                        bus_number_by_id.get(transformer.tertiary_bus_id)
+                        if transformer.tertiary_bus_id is not None
+                        else None
+                    ),
+                    ckt_id=transformer.ckt_id,
+                    in_service=in_service_by_transformer_id.get(
+                        transformer.topology_transformer_id
+                    ),
+                    circuit_id=circuit.circuit_id if circuit is not None else None,
+                    circuit_bay_number=circuit.bay_number if circuit is not None else None,
+                    correlation_status=status,
+                )
+            )
+        return views
+
+    def get_operational_transformer_views(
+        self, topology_version_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[OperationalTransformerView], int]:
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        transformers = self.repo.list_topology_transformers(topology_version_id)
+        total = len(transformers)
+        offset = (page - 1) * page_size
+        page_transformers = transformers[offset : offset + page_size]
+        return (
+            self._build_operational_transformer_views(topology_version_id, page_transformers),
+            total,
+        )
+
+    def get_operational_transformer_views_for_ids(
+        self, topology_version_id: uuid.UUID, topology_transformer_ids: list[int]
+    ) -> list[OperationalTransformerView]:
+        """Phase 7F — mirrors `get_operational_branch_views_for_ids`, for
+        Transformers."""
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        if not topology_transformer_ids:
+            return []
+        wanted = set(topology_transformer_ids)
+        transformers = [
+            t
+            for t in self.repo.list_topology_transformers(topology_version_id)
+            if t.topology_transformer_id in wanted
+        ]
+        return self._build_operational_transformer_views(topology_version_id, transformers)
+
+    def get_operational_bus_views_for_numbers(
+        self, topology_version_id: uuid.UUID, bus_numbers: list[int]
+    ) -> list[OperationalBusView]:
+        """Phase 7F — mirrors `get_operational_branch_views_for_ids`, for
+        Buses: same correlation logic as `get_operational_bus_views`,
+        scoped to a caller-supplied set of Bus Numbers (e.g. Network
+        Model's path-verification traversal's reached set)."""
+        if self.repo.get_topology_version_by_id(topology_version_id) is None:
+            raise NotFoundError(f"TopologyVersion {topology_version_id} not found")
+        if not bus_numbers:
+            return []
+        wanted = set(bus_numbers)
+        buses = [
+            b
+            for b in self.repo.list_topology_buses(topology_version_id)
+            if b.bus_number in wanted
+        ]
+        return self._build_operational_bus_views(topology_version_id, buses)
+
+    def _element_in_service_map(
+        self, topology_version_id: uuid.UUID, *, element_type: str
+    ) -> dict[int, bool]:
+        snapshot = self.repo.get_current_load_snapshot_for_topology(topology_version_id)
+        if snapshot is None:
+            return {}
+        states = self.repo.list_load_snapshot_element_states(snapshot.load_snapshot_id)
+        if element_type == "branch":
+            return {
+                state.topology_branch_id: state.in_service
+                for state in states
+                if state.topology_branch_id is not None
+            }
+        return {
+            state.topology_transformer_id: state.in_service
+            for state in states
+            if state.topology_transformer_id is not None
+        }
+
+    def get_operational_load_views(
+        self, load_snapshot_id: uuid.UUID, *, page: int, page_size: int
+    ) -> tuple[list[OperationalLoadView], int]:
+        """Collection-only (no singular getter) — `NetworkLoad` has no
+        stable client-facing id beyond `(load_snapshot_id, bus_number,
+        load_id)`, and Loads are consumed as a whole snapshot's worth, not
+        looked up individually, per this phase's own scope."""
+        snapshot = self.repo.get_load_snapshot_by_id(load_snapshot_id)
+        if snapshot is None:
+            raise NotFoundError(f"LoadSnapshot {load_snapshot_id} not found")
+        loads = self.repo.list_network_loads(load_snapshot_id)
+        total = len(loads)
+        offset = (page - 1) * page_size
+        page_loads = loads[offset : offset + page_size]
+
+        topology_buses = self.repo.list_topology_buses(snapshot.topology_version_id)
+        bus_by_id = {bus.topology_bus_id: bus for bus in topology_buses}
+        substation_ids = [b.substation_id for b in topology_buses if b.substation_id is not None]
+        substations_by_id = {
+            s.substation_id: s for s in self.repo.list_substations_by_ids(substation_ids)
+        }
+        voltage_yard_lookup = self._build_voltage_yard_lookup(substation_ids)
+
+        views = []
+        for load in page_loads:
+            bus = bus_by_id.get(load.topology_bus_id)
+            substation = (
+                substations_by_id.get(bus.substation_id)
+                if bus is not None and bus.substation_id is not None
+                else None
+            )
+            voltage_yard_id = (
+                voltage_yard_lookup.get((bus.substation_id, bus.base_kv))
+                if bus is not None and bus.substation_id is not None
+                else None
+            )
+            views.append(
+                OperationalLoadView(
+                    load_snapshot_id=load.load_snapshot_id,
+                    bus_number=bus.bus_number if bus is not None else 0,
+                    load_id=load.load_id,
+                    p_mw=load.p_mw,
+                    q_mvar=load.q_mvar,
+                    owner=load.owner,
+                    load_category=None,
+                    substation_id=bus.substation_id if bus is not None else None,
+                    substation_mnemonic=substation.mnemonic if substation is not None else None,
+                    voltage_yard_id=voltage_yard_id,
+                    relevance_classification=None,
+                    correlation_status="OUTSIDE_CURRENT_SCOPE",
+                )
+            )
+        return views, total
