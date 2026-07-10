@@ -26,6 +26,8 @@ GridDefence is composed of independent bounded contexts ("modules"), each owning
 | UVLS | Defence Scheme | Voltage stages, load blocks, assignments, thresholds | Planned (Phase 7) |
 | EMLS | Defence Scheme | Manual shedding priorities, assignments | Planned (Phase 8) |
 | Critical Infrastructure | Engineering Registry | Critical-asset classification, referenced by `substation_id` | Planned (Phase 9) |
+| Automatic Load Shedding Functionality Registry | Engineering Registry | Per-Bay-Terminal automatic UFLS/UVLS shedding readiness ([ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md)) | Planned; architecture complete |
+| *(future)* Sensitive Customer Registry | Engineering Registry | Policy-exclusion classification for candidate loads | Unscheduled; architecture pending its own ADR |
 | Cross-Scheme Compliance | Audit and Analytics | `ComplianceRuleConfig`, `ComplianceCheckRun`, `ComplianceViolation` | Planned (Phase 10) |
 | Dashboard | Audit and Analytics | Nothing — composes read-only interfaces from every other module | Planned (Phase 11); no dedicated architecture document yet |
 | *(future)* SPS / RAS | Defence Scheme | Special protection / remedial action scheme logic | Unscheduled |

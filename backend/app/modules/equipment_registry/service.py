@@ -83,10 +83,12 @@ from app.modules.equipment_registry.schemas import (
     CircuitAuditLogEntry,
     CircuitDetail,
     CircuitSummary,
+    CircuitTerminalIdentity,
     CircuitTerminalSummary,
     TransformerAuditLogEntry,
     TransformerDetail,
     TransformerSummary,
+    TransformerTerminalIdentity,
     TransformerTerminalSummary,
     VoltageYardAuditLogEntry,
     VoltageYardSummary,
@@ -831,6 +833,51 @@ class EquipmentRegistryService:
             )
         return summaries
 
+    def get_circuit_terminal_summary(
+        self, circuit_terminal_id: uuid.UUID
+    ) -> CircuitTerminalSummary | None:
+        """Single-terminal read, reusing `_terminal_summaries`'s own display
+        resolution — added for cross-module callers (e.g. the Automatic
+        Load Shedding Functionality Registry, ADR-011) that reference one
+        Bay Terminal by id and need its resolved substation/voltage-level
+        context without reaching into this module's repository directly
+        (CLAUDE.md A1)."""
+        terminal = self.repo.get_terminal_by_id(circuit_terminal_id)
+        if terminal is None:
+            return None
+        return self._terminal_summaries([terminal])[0]
+
+    def get_circuit_terminal_identity(
+        self, circuit_terminal_id: uuid.UUID
+    ) -> CircuitTerminalIdentity | None:
+        """Full engineering identity for one `CircuitTerminal` — reuses
+        `get_circuit`'s already-computed `circuit_name` (never re-derives
+        the sorted-mnemonic computation a second way) plus this terminal's
+        own substation/voltage/breaker context. Added for cross-module
+        callers (e.g. the Automatic Load Shedding Functionality Registry,
+        ADR-011) that must let an engineer distinguish, unambiguously,
+        between multiple terminals at the same substation and voltage
+        level (e.g. two parallel circuits, "IGBK–ROMEO No.1" vs "No.2")."""
+        terminal = self.repo.get_terminal_by_id(circuit_terminal_id)
+        if terminal is None:
+            return None
+        terminal_summary = self._terminal_summaries([terminal])[0]
+        circuit_detail = self.get_circuit(terminal.circuit_id)
+        if circuit_detail is None:
+            return None
+        return CircuitTerminalIdentity(
+            circuit_terminal_id=circuit_terminal_id,
+            circuit_id=terminal.circuit_id,
+            circuit_name=circuit_detail.circuit_name,
+            bay_number=circuit_detail.bay_number,
+            breaker_number=terminal_summary.breaker_number,
+            substation_id=terminal_summary.substation_id,
+            substation_mnemonic=terminal_summary.substation_mnemonic,
+            substation_official_name=terminal_summary.substation_official_name,
+            voltage_level_id=terminal_summary.voltage_level_id,
+            voltage_level_label=terminal_summary.voltage_level_label,
+        )
+
     def get_circuit(self, circuit_id: uuid.UUID) -> CircuitDetail | None:
         circuit = self.repo.get_circuit_by_id(circuit_id)
         if circuit is None:
@@ -1320,6 +1367,45 @@ class EquipmentRegistryService:
                 )
             )
         return summaries
+
+    def get_transformer_terminal_summary(
+        self, transformer_terminal_id: uuid.UUID
+    ) -> TransformerTerminalSummary | None:
+        """Mirrors `get_circuit_terminal_summary` for `TransformerTerminal`
+        — see that method's docstring."""
+        terminal = self.repo.get_transformer_terminal_by_id(transformer_terminal_id)
+        if terminal is None:
+            return None
+        return self._transformer_terminal_summaries([terminal])[0]
+
+    def get_transformer_terminal_identity(
+        self, transformer_terminal_id: uuid.UUID
+    ) -> TransformerTerminalIdentity | None:
+        """Mirrors `get_circuit_terminal_identity` for `TransformerTerminal`
+        — reuses `get_transformer`'s already-computed `generated_short_name`
+        (e.g. "T1"/"SGT2"), letting a caller distinguish, unambiguously,
+        between multiple transformers at the same substation and voltage
+        level (e.g. Transformer T1 vs Transformer T2)."""
+        terminal = self.repo.get_transformer_terminal_by_id(transformer_terminal_id)
+        if terminal is None:
+            return None
+        terminal_summary = self._transformer_terminal_summaries([terminal])[0]
+        transformer_detail = self.get_transformer(terminal.transformer_id)
+        if transformer_detail is None:
+            return None
+        return TransformerTerminalIdentity(
+            transformer_terminal_id=transformer_terminal_id,
+            transformer_id=terminal.transformer_id,
+            generated_short_name=transformer_detail.generated_short_name,
+            transformer_number=transformer_detail.transformer_number,
+            side=terminal_summary.side,
+            breaker_number=terminal_summary.breaker_number,
+            substation_id=terminal_summary.substation_id,
+            substation_mnemonic=terminal_summary.substation_mnemonic,
+            substation_official_name=terminal_summary.substation_official_name,
+            voltage_level_id=terminal_summary.voltage_level_id,
+            voltage_level_label=terminal_summary.voltage_level_label,
+        )
 
     def get_transformer(self, transformer_id: uuid.UUID) -> TransformerDetail | None:
         transformer = self.repo.get_transformer_by_id(transformer_id)

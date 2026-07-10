@@ -70,7 +70,7 @@ Dependency flows strictly left-to-right / top-to-bottom through this grouping: *
 
 ## 3. Engineering Registry Domain
 
-**Purpose:** Owns engineering identity and engineering master data — the single source of truth for "what physically exists and what do we call it," independent of any one scheme's or import's use of it. Two modules complete this domain (Phases 2 and 3); a third is planned (Phase 9).
+**Purpose:** Owns engineering identity and engineering master data — the single source of truth for "what physically exists and what do we call it," independent of any one scheme's or import's use of it. Two modules complete this domain (Phases 2 and 3); further modules are planned.
 
 **Owns (today):**
 - **Substation Registry** (Phase 2, complete) — substation identity, mnemonic, official name, metadata, geography, operational status. See [substation-registry.md](substation-registry.md) for full detail.
@@ -78,6 +78,8 @@ Dependency flows strictly left-to-right / top-to-bottom through this grouping: *
 
 **Owns (planned):**
 - **Critical Infrastructure** (Phase 9, not yet built) — critical-asset classification (category, criticality level, restriction type), referenced by `substation_id`, per [ADR-004](../adr/ADR-004-cross-scheme-compliance-mechanism.md)'s explicit placement of this module in the Master Data domain (this document's Engineering Registry). See [critical-infrastructure-module.md](critical-infrastructure-module.md).
+- **Automatic Load Shedding Functionality Registry** (not yet built) — per Bay Terminal (`CircuitTerminal`/`TransformerTerminal`) record of whether automatic UFLS/UVLS shedding functionality is installed, wired, configured, commissioned, and available, referenced by terminal ID. Retires the earlier "Relay Registry" naming and the general-purpose relay-wiring direction sketched in [equipment-registry-module.md](equipment-registry-module.md) §7.8 (superseded), per [ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md). See [automatic-load-shedding-functionality-registry-module.md](automatic-load-shedding-functionality-registry-module.md).
+- **Sensitive Customer Registry** (not yet designed — pending its own ADR) — policy-exclusion classification for candidate loads, structurally expected to follow the same Engineering Registry pattern as Critical Infrastructure and the Automatic Load Shedding Functionality Registry.
 
 **References:** Core Platform reference data (voltage level, region, state, grid owner, operational status, line type) via foreign key.
 

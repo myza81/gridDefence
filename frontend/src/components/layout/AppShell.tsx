@@ -29,6 +29,7 @@ export function AppShell({ children }: PropsWithChildren) {
               <Link to="/substations">Substations</Link>
               <Link to="/circuits">Circuits</Link>
               <Link to="/transformers">Transformers</Link>
+              <Link to="/automatic-load-shedding-functionality">ALSF Registry</Link>
               <Link to="/psse-integration/import">PSS/E Import</Link>
               <Link to="/psse-integration/history">PSS/E History</Link>
               <Link to="/psse-integration/current-status">PSS/E Status</Link>

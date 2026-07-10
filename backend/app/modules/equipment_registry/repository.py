@@ -510,6 +510,15 @@ class EquipmentRegistryRepository:
             by_transformer.setdefault(terminal.transformer_id, []).append(terminal)
         return by_transformer
 
+    def get_transformer_terminal_by_id(
+        self, transformer_terminal_id: uuid.UUID
+    ) -> TransformerTerminal | None:
+        """Single-terminal lookup by its own PK — added for cross-module
+        callers (e.g. the Automatic Load Shedding Functionality Registry)
+        that reference one `TransformerTerminal` by id, mirroring
+        `get_terminal_by_id`'s identical role for `CircuitTerminal`."""
+        return self.db.get(TransformerTerminal, transformer_terminal_id)
+
     def get_transformer_terminal_by_side(
         self, transformer_id: uuid.UUID, side: str
     ) -> TransformerTerminal | None:

@@ -2,6 +2,10 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { AppShell } from "../components/layout/AppShell";
 import { StatusPage } from "../components/layout/StatusPage";
+import { FunctionalityCandidatePage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityCandidatePage";
+import { FunctionalityCreatePage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityCreatePage";
+import { FunctionalityDetailPage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityDetailPage";
+import { FunctionalityListPage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityListPage";
 import { CircuitCreatePage } from "../modules/equipment_registry/pages/CircuitCreatePage";
 import { CircuitDetailPage } from "../modules/equipment_registry/pages/CircuitDetailPage";
 import { CircuitListPage } from "../modules/equipment_registry/pages/CircuitListPage";
@@ -144,6 +148,46 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <CircuitDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/automatic-load-shedding-functionality",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FunctionalityListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/automatic-load-shedding-functionality/candidates",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FunctionalityCandidatePage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/automatic-load-shedding-functionality/new",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FunctionalityCreatePage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/automatic-load-shedding-functionality/:functionalityId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FunctionalityDetailPage />
         </ProtectedRoute>
       </AppShell>
     ),

@@ -197,6 +197,47 @@ class CircuitDetail(BaseModel):
     terminals: list[CircuitTerminalSummary]
 
 
+class CircuitTerminalIdentity(BaseModel):
+    """Full engineering identity of one `CircuitTerminal` — its owning
+    Substation, voltage level, and the `Circuit` it belongs to (route name
+    + bay/circuit number) — composed read-only from already-owned data
+    (`Circuit.circuit_name`, computed once by `get_circuit`, never
+    re-derived here) for cross-module callers (e.g. the Automatic Load
+    Shedding Functionality Registry, ADR-011) that need to display or
+    select a specific Bay Terminal unambiguously, without duplicating any
+    Equipment Registry fact as stored data of their own."""
+
+    circuit_terminal_id: uuid.UUID
+    circuit_id: uuid.UUID
+    circuit_name: str
+    bay_number: str
+    breaker_number: str
+    substation_id: uuid.UUID
+    substation_mnemonic: str
+    substation_official_name: str
+    voltage_level_id: int
+    voltage_level_label: str
+
+
+class TransformerTerminalIdentity(BaseModel):
+    """Mirrors `CircuitTerminalIdentity` for `TransformerTerminal` — the
+    owning `Transformer`'s generated short name and transformer number,
+    plus the terminal's own HV/LV side, composed from `get_transformer`'s
+    already-computed `generated_short_name` (never re-derived here)."""
+
+    transformer_terminal_id: uuid.UUID
+    transformer_id: uuid.UUID
+    generated_short_name: str
+    transformer_number: str
+    side: str
+    breaker_number: str
+    substation_id: uuid.UUID
+    substation_mnemonic: str
+    substation_official_name: str
+    voltage_level_id: int
+    voltage_level_label: str
+
+
 class CircuitAuditLogEntry(BaseModel):
     log_id: int
     field_name: str
