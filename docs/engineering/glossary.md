@@ -8,6 +8,8 @@ For the corresponding **implementation** name of any engineering term below (whi
 
 **Archived Scheme** — A Grid Defence Scheme version that was previously the operational reference (a Published Scheme) but has since been superseded by a newer Published version. Preserved permanently, never deleted. See [02-engineering-concepts.md](02-engineering-concepts.md).
 
+**Automatic Load Shedding Functionality Registry (ALSF)** — The Engineering Knowledge registry recording, per Bay Terminal, whether automatic UFLS and/or UVLS shedding functionality is installed, wired, configured, commissioned, and available, with a computed Available/Assigned/Decommissioned status. This is the implementation of the engineering concept previously discussed as **Relay Registry** — see that entry below. Complete; see [ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md) and `docs/architecture/automatic-load-shedding-functionality-registry-module.md`.
+
 **Bay** — The permanent engineering identity of one substation's local connection point to a single piece of Primary Equipment (a transformer or a transmission line), together with its breaker. A Transformer Bay and a Line Bay are the two kinds. Primary equipment hosted by a Bay may change over time; the Bay's own identity normally does not. Currently represented in the implementation by `TransformerTerminal` (Transformer Bay) and `CircuitTerminal` (Line Bay) — see [02-engineering-concepts.md](02-engineering-concepts.md), [EDR-005](edr/EDR-005-bay-as-engineering-identity.md), and [08-engineering-terminology.md](08-engineering-terminology.md).
 
 **Boundary Line** — A transmission line whose disconnection, together with one or more other Boundary Lines, electrically isolates a Load Pocket as a single block. See [02-engineering-concepts.md](02-engineering-concepts.md).
@@ -30,7 +32,7 @@ For the corresponding **implementation** name of any engineering term below (whi
 
 **Grid Defence** — The set of coordinated, pre-planned operational strategies used to protect the stability of the interconnected transmission system during major disturbances by deliberately removing load or reconfiguring the network. See [02-engineering-concepts.md](02-engineering-concepts.md).
 
-**Grid Defence Capability** — The engineering property of a specific bay or switching point indicating whether it can be operated as part of a Grid Defence Scheme action. Recorded in the Relay Registry. See [02-engineering-concepts.md](02-engineering-concepts.md).
+**Grid Defence Capability** — The engineering property of a specific bay or switching point indicating whether it can be operated as part of a Grid Defence Scheme action. Recorded in the Relay Registry (see that entry — implemented as the Automatic Load Shedding Functionality Registry). See [02-engineering-concepts.md](02-engineering-concepts.md).
 
 **Grid Defence Scheme** — An engineered, version-controlled operational strategy defining what load is shed, where, and under what triggering condition, to preserve transmission system stability during a defined class of disturbance. UFLS, UVLS, and EMLS are the three Grid Defence Schemes GridDefence currently manages. See [02-engineering-concepts.md](02-engineering-concepts.md).
 
@@ -48,9 +50,9 @@ For the corresponding **implementation** name of any engineering term below (whi
 
 **Published Scheme** — A Grid Defence Scheme version that has completed Scheme Review and is the current operational reference. Immutable once published. See [02-engineering-concepts.md](02-engineering-concepts.md).
 
-**Relay Capability Verification** — The workflow step in which an engineer confirms, via the Relay Registry, that a candidate bay or switching point has Grid Defence Capability. See [03-system-workflow.md](03-system-workflow.md).
+**Relay Capability Verification** — The workflow step in which an engineer confirms, via the Relay Registry, that a candidate bay or switching point has Grid Defence Capability. The registry side of this step is implemented (Automatic Load Shedding Functionality Registry); the step becomes fully realized once UFLS/UVLS (not yet built) call its capability interfaces during Selection of Shedding Actions. See [03-system-workflow.md](03-system-workflow.md).
 
-**Relay Registry** — The Engineering Knowledge registry recording, for each bay or switching point, whether it has Grid Defence Capability. Deliberately scoped to this capability question, not general relay asset management. See [02-engineering-concepts.md](02-engineering-concepts.md); [EDR-003](edr/EDR-003-relay-registry-scope.md).
+**Relay Registry** — The engineering concept naming the registry that records, for each bay or switching point, whether it has Grid Defence Capability. Deliberately scoped to this capability question, not general relay asset management. **Implemented as the Automatic Load Shedding Functionality Registry** (see that entry above) — "Relay Registry" is retired as a working/implementation name, per [ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md), but remains the name of the underlying engineering concept this glossary and [02-engineering-concepts.md](02-engineering-concepts.md) describe. See [EDR-003](edr/EDR-003-relay-registry-scope.md).
 
 **Review** (Scheme Review) — The formal engineering evaluation a Working Draft undergoes before it may become a Published Scheme. See [02-engineering-concepts.md](02-engineering-concepts.md).
 

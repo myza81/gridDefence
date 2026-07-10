@@ -31,14 +31,14 @@ Primary Equipment  (a Transformer or a Transmission Line)
         │
         │ controlled by
         ▼
-   Relay / IED   (future Relay Registry)
+   Relay / IED   (Relay Registry)
 ```
 
-Read top to bottom: a **Scheme** is made of **Stages**; a **Stage** is made of **Shedding Actions**; a **Shedding Action** references a **Bay**; a Bay belongs to a **Substation** and hosts one piece of **Primary Equipment**; that equipment is operated by a **Breaker**, controlled by a **Relay/IED** — the future Relay Registry's own subject matter.
+Read top to bottom: a **Scheme** is made of **Stages**; a **Stage** is made of **Shedding Actions**; a **Shedding Action** references a **Bay**; a Bay belongs to a **Substation** and hosts one piece of **Primary Equipment**; that equipment is operated by a **Breaker**, controlled by a **Relay/IED** — the Relay Registry's own subject matter.
 
 Two relationships from the previous version of this chain still hold, attached at the level where they actually apply: **Grid Defence Capability** (Relay Registry) validates the **Bay**, not the Primary Equipment it happens to host today — this is exactly why replacing a Bay's equipment does not require re-verifying capability. Primary Equipment's expected load contribution is evaluated against a **PSS/E Load Snapshot**, itself always captured within one **PSS/E Network Topology**, unchanged from before.
 
-**Implementation correspondence** (see [08-engineering-terminology.md](08-engineering-terminology.md) for the complete table): the current implementation already represents a **Line Bay** as `CircuitTerminal` and a **Transformer Bay** as `TransformerTerminal` (both Equipment Registry) — the same Bay concept described above, under different, already-existing names. No implementation change is required by this clarification; see [EDR-005](edr/EDR-005-bay-as-engineering-identity.md).
+**Implementation correspondence** (see [08-engineering-terminology.md](08-engineering-terminology.md) for the complete table): the current implementation already represents a **Line Bay** as `CircuitTerminal` and a **Transformer Bay** as `TransformerTerminal` (both Equipment Registry) — the same Bay concept described above, under different, already-existing names. No implementation change is required by this clarification; see [EDR-005](edr/EDR-005-bay-as-engineering-identity.md). The **Relay Registry** itself is implemented as the **Automatic Load Shedding Functionality Registry** ([ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md)) — "Relay Registry" is retired only as a working/implementation name, not as the engineering concept this diagram describes.
 
 Every arrow in this diagram is a real engineering relationship an engineer reasons about while designing a scheme (03-system-workflow.md) — none of it is an artifact of how the software happens to store the data.
 
@@ -128,7 +128,7 @@ A **Grid Defence Scheme** does not relate to its own past versions the way a Sta
 | Boundary Line(s) **isolate** a Load Pocket | The combined effect of opened boundary lines, derived from topology. |
 | Bay **belongs to** Substation | Every Bay has exactly one home substation. |
 | Bay **hosts** Primary Equipment | A transformer or transmission line, which may be replaced without changing the Bay's own identity. |
-| Primary Equipment **operated by** Breaker, **controlled by** Relay/IED | The physical switching chain a Grid Defence action ultimately triggers (future Relay Registry). |
+| Primary Equipment **operated by** Breaker, **controlled by** Relay/IED | The physical switching chain a Grid Defence action ultimately triggers (Relay Registry — implemented as the Automatic Load Shedding Functionality Registry). |
 | Bay **validated by** Grid Defence Capability | Recorded in the Relay Registry; answers "can this Bay be shed." |
 | Primary Equipment / Load Pocket **evaluated against** PSS/E Load Snapshot | Determines expected MW/MVAr contribution at a point in time. |
 | PSS/E Load Snapshot **captured within** PSS/E Network Topology | A snapshot is only meaningful relative to the topology it was taken against. |

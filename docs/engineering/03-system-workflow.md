@@ -82,6 +82,8 @@ Every candidate load identified in Load Assessment is checked against the Sensit
 
 For each remaining candidate, the engineer confirms — via the Relay Registry — that the bay or switching point is actually capable of being operated as a Grid Defence action. A load that cannot be answered "yes" here cannot be selected, regardless of how attractive it looks on paper (01-engineering-philosophy.md §5, Step 5).
 
+*Implementation status: the Relay Registry is built, as the Automatic Load Shedding Functionality Registry (ADR-011) — `is_ufls_capable`/`is_uvls_capable` and its candidate-search interfaces answer exactly this question today. This workflow step becomes fully realized once UFLS/UVLS (not yet built) call those interfaces during their own Selection of Shedding Actions design flow — UFLS must consult UFLS capability, UVLS must consult UVLS capability; EMLS has no automatic-capability prerequisite and never consults this registry at all (module document §4, §9 rule 4). See `docs/architecture/automatic-load-shedding-functionality-registry-module.md` §13.*
+
 ### Selection of Shedding Actions
 
 The engineer chooses which validated, capable, non-sensitive loads to actually include, and how — as direct Transformer Bay or Line Bay Shedding, or as a Boundary Line action isolating a Load Pocket. This is the step where individual engineering choices become concrete Shedding Actions (01-engineering-philosophy.md §5, Step 6).

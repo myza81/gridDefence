@@ -11,6 +11,109 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Phase 3.6 — Automatic Load Shedding Functionality Registry
+
+**Scope:** A new, dedicated Engineering Registry module answering, per Bay Terminal, "can this
+bay be operated by a Grid Defence Scheme?" —
+[`docs/architecture/automatic-load-shedding-functionality-registry-module.md`](docs/architecture/automatic-load-shedding-functionality-registry-module.md),
+[ADR-011](docs/adr/ADR-011-automatic-load-shedding-functionality-registry.md). This is the
+implementation of the engineering concept previously discussed as "Relay Registry"
+([EDR-003](docs/engineering/edr/EDR-003-relay-registry-scope.md),
+[02-engineering-concepts.md](docs/engineering/02-engineering-concepts.md)) — "Relay Registry" is
+retired as a working/implementation name, not as an engineering concept; EDR-003's scope
+discipline (a capability answer, never general relay asset management) is unchanged and fully
+carried into the as-built module. Retires the general-purpose relay-wiring direction sketched
+(never built) in `equipment-registry-module.md` §7.8, in favor of this simpler, purpose-built
+entity.
+
+**Backend**
+
+- New module `app/modules/automatic_load_shedding_functionality/`: `models.py`
+  (`AutomaticLoadSheddingFunctionality`, `AutomaticLoadSheddingFunctionalityAuditLog`),
+  `schemas.py`, `service.py`, `repository.py`, `router.py`, `bootstrap.py`, `exceptions.py`,
+  `dependencies.py`.
+- **One record per Bay Terminal** — `circuit_terminal_id` XOR `transformer_terminal_id`
+  (database-enforced two-way `CHECK`), referencing Equipment Registry's `CircuitTerminal`/
+  `TransformerTerminal` by ID only, never duplicating their attributes (CLAUDE.md A1). A partial
+  unique index enforces at most one non-decommissioned record per terminal.
+- **UFLS and UVLS capability represented independently, on the same record**:
+  `ufls_function`/`uvls_function` booleans — a single bay terminal may support both
+  simultaneously (one multifunction relay serving both schemes). **EMLS is intentionally excluded
+  in every respect** — no field, enum value, or query parameter anywhere in this module references
+  EMLS, since EMLS is manually invoked and has no automatic-functionality prerequisite (module
+  document §4, §9 rule 4).
+- **Simplified two-state persisted lifecycle**: `lifecycle_status` (`ACTIVE`/`DECOMMISSIONED`) —
+  a record is always created `ACTIVE`; `Active → Decommissioned` is the only transition, terminal,
+  one-way, requires a non-empty reason, and is fully audited. A decommissioned record is
+  permanently immutable — including against a second decommission attempt, which is rejected, not
+  silently accepted.
+- **Computed, never-stored display status** — `AVAILABLE` / `ASSIGNED` / `DECOMMISSIONED` — is
+  derived at read time from `lifecycle_status` plus an optional, caller-supplied
+  `assigned_terminal_ids` set (the Future Integration Contract for UFLS/UVLS, module document
+  §8.2): no caller exists yet, so every non-decommissioned record displays `AVAILABLE` today, with
+  zero placeholder assignment table anywhere in this module's schema.
+- **Candidate-search and capability-check service interfaces** for future UFLS/UVLS consumption:
+  `is_ufls_capable`/`is_uvls_capable`, `list_candidate_terminals`, `list_assigned_and_available`.
+  New endpoints under `/api/v1/automatic-load-shedding-functionality`: `GET`/`POST` (list/create),
+  `GET`/`PATCH /{id}` (detail/metadata edit), `POST /{id}/decommission`, `GET /{id}/audit-log`,
+  `GET /candidates`, `GET /capability-check`. No `/activate`/`/deactivate` endpoints exist —
+  Available/Assigned are always computed, never manually set.
+- **Equipment Registry additions** (read-only, cross-module, via its own service layer per
+  CLAUDE.md A1): `get_circuit_terminal_identity`/`get_transformer_terminal_identity`,
+  `get_circuit_terminal_summary`/`get_transformer_terminal_summary`,
+  `get_transformer_terminal_by_id` — compose each terminal's full engineering identity
+  (substation, voltage level, and `Circuit.circuit_name`/`Transformer.generated_short_name`,
+  reusing those already-computed values, never re-deriving them) so two terminals at the same
+  substation and voltage level are always displayed distinctly.
+- New permissions: `automatic_load_shedding_functionality.read` (open to any authenticated user,
+  matching this project's existing read-permission precedent) and
+  `automatic_load_shedding_functionality.write` (Administrator + Engineer; Viewer receives read
+  only) — `bootstrap.py` registers and grants both to the baseline roles.
+- Migration `0014_alsf_registry` — hand-written, manually reviewed, edited in place multiple times
+  before its first merge (never after — CLAUDE.md §5.2), verified `upgrade → downgrade → upgrade`
+  against real PostgreSQL each time.
+
+**Frontend**
+
+- New module `frontend/src/modules/automatic_load_shedding_functionality/` (`types.ts`, `api.ts`,
+  `displayHelpers.ts`) plus 4 pages under `pages/`: `FunctionalityListPage` (filterable registry
+  list, with an explanatory message rather than a silently-hidden action when the current user
+  lacks write permission), `FunctionalityCreatePage`, `FunctionalityDetailPage` (detail, metadata
+  edit, and the sole remaining Decommission lifecycle action), `FunctionalityCandidatePage`
+  (scheme-design-time candidate search by UFLS/UVLS scheme type).
+- **Full engineering identity displayed consistently across every view** — `"Substation | Voltage
+  | Bay"` (e.g. `IGBK | 33kV | Transformer T1`), composed client-side (CLAUDE.md A12,
+  display-only derivation) from three already-separate fields every read DTO reports, never
+  stored as its own column.
+- Wired into `router.tsx` (`/automatic-load-shedding-functionality`, `/new`,
+  `/:functionalityId`, `/candidates`) and `AppShell.tsx`'s nav ("ALSF Registry").
+
+**Tests**
+
+- Backend: 41 service-layer tests (`test_service.py` — creation/validation, uniqueness, the
+  decommission lifecycle, bay-identity distinctness, Available/Assigned/Decommissioned status
+  computation from a caller-supplied `assigned_terminal_ids` set, candidate/capability queries),
+  6 bootstrap tests, and 10 API contract tests
+  (`backend/tests/test_automatic_load_shedding_functionality_api.py` — auth/RBAC, full create→
+  decommission HTTP flow, `/activate`/`/deactivate` confirmed absent, re-decommission rejected).
+  Full backend suite (600+ tests across every module) passing against real PostgreSQL.
+- Frontend: 28 tests across the 4 pages plus `displayHelpers`, including explicit coverage for
+  two ambiguous terminals at the same substation and voltage level always rendering distinct
+  identities. Full frontend suite passing; lint/typecheck/build all clean.
+
+**Known limitations**
+
+- Relay Capability Verification (03-system-workflow.md) is not yet an end-to-end workflow step —
+  this module provides every interface UFLS/UVLS need, but neither scheme module exists yet to
+  call them. See `docs/architecture/implementation-plan.md` Phase 6/7 for the recorded dependency.
+- This module was built and merged outside the original 14-phase numbered sequence (it was
+  originally deferred out of Phase 3 as `RelayDetail`/`RelayControlledEquipment`, never built,
+  then re-scoped by ADR-011); labeled **Phase 3.6** in `implementation-plan.md`, following the
+  precedent already set by Phase 3.5 (Transformer Registry) — see that document's phase numbering
+  note for the full reasoning.
+
+---
+
 ## Phase 4 — PSS/E Integration
 
 **Scope:** RAW file import infrastructure —

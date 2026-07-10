@@ -4,6 +4,8 @@
 - **Governing document:** [02-engineering-concepts.md](../02-engineering-concepts.md) — Bay; [04-domain-model.md](../04-domain-model.md) §1 (Central Relationship Chain)
 - **Related:** [08-engineering-terminology.md](../08-engineering-terminology.md); `docs/architecture/equipment-registry-module.md` §7.5–§7.7; `docs/architecture/network-model-module.md` §19; ADR-007 (Canonical Engineering Reference Object); ADR-008 (Substation Voltage Yard)
 
+> **Status update (post-ADR-011).** Every reference below to a "still-unbuilt" or "future" Relay Registry describes the state of the project at the time this EDR was accepted. That registry is now built, as the **Automatic Load Shedding Functionality Registry** — see [ADR-011](../../adr/ADR-011-automatic-load-shedding-functionality-registry.md) and `docs/architecture/automatic-load-shedding-functionality-registry-module.md`. It attaches to `CircuitTerminal`/`TransformerTerminal` exactly as this EDR's Decision anticipated — no part of this EDR's reasoning needed to change; this note only updates which references below are historical rather than current. The text below is left as originally accepted, per this project's practice of not rewriting past decisions as though they were always known.
+
 ---
 
 ## Background

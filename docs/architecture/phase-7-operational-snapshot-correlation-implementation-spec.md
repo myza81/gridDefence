@@ -127,7 +127,9 @@ Operational Branch / Operational Transformer → Line Connectivity Registry /
 
 Operational Branch Terminal / Operational Transformer Terminal (a Bay)
     → Relay Registry, where applicable
-    (not yet applicable — Relay Registry is not yet built)
+    (not yet applicable — Relay Registry itself is now built, as the Automatic Load Shedding
+    Functionality Registry, ADR-011; this specific operational-snapshot correlation against it
+    is not yet built)
 
 Operational Load → Sensitive Customer Registry, where applicable
     (not yet applicable — Sensitive Customer Registry is not yet built)
@@ -206,7 +208,7 @@ All of the following already exist in some form (Phase 4/6 PSS/E Integration fro
 - **Load-only synchronisation report** — already exists as part of Import Result's Registry Matching section; would gain classification-aware wording once §6 exists.
 - **Correlation validation report** — already exists in narrower form (Registry Matching, `EquipmentTopologyMap` review page); would generalize toward the unified §7 status vocabulary.
 - **Operational object browser** — already exists (the Operational Context Inspector, `PsseOperationalContextInspectorPage`, per §8.9e of `psse-integration-module.md`) — its Bus Data tab is the natural home for the new classification column.
-- **Correlated operational model preview** — new; no existing page composes registry metadata onto operational objects yet, since the registries this would correlate against (Relay Registry, Sensitive Customer Registry) are not yet built.
+- **Correlated operational model preview** — new; no existing page composes registry metadata onto operational objects yet. Relay Registry is now built (Automatic Load Shedding Functionality Registry, ADR-011), but this specific correlation view does not yet exist; Sensitive Customer Registry remains unbuilt.
 
 No UI design detail is specified, consistent with the constraint.
 

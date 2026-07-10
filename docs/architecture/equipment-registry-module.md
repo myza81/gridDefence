@@ -428,7 +428,7 @@ A `Circuit` has **two or more** `CircuitTerminal` rows: an ordinary point-to-poi
 
 ### 7.5 CircuitTerminal Model
 
-**`CircuitTerminal` is the per-substation terminal of a `Circuit`.** It replaces and generalizes the earlier `IncomingBranchDetail` design (Appendix), and is the object Relay Registry wires to and PSS/E's `EquipmentTopologyMap` matches against (ADR-007 §6, §10; §7.8, §7.10 below).
+**`CircuitTerminal` is the per-substation terminal of a `Circuit`.** It replaces and generalizes the earlier `IncomingBranchDetail` design (Appendix), and is the object the Automatic Load Shedding Functionality Registry (the "Relay Registry" concept, retired as a working name per [ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md)) wires to and PSS/E's `EquipmentTopologyMap` matches against (ADR-007 §6, §10; §7.8, §7.10 below).
 
 Structurally, `CircuitTerminal` follows the same pattern as `LoadTransformerDetail`/`AutoTransformerDetail`: it is a per-`Equipment`-row detail table, one row per `Equipment` row of type `CircuitTerminal`, satisfying §7.1's "exactly one detail row per `Equipment` row" rule unchanged. What is new is that **multiple `CircuitTerminal` rows, at different substations, now share a common `circuit_id`** — the structural link the earlier design lacked (Appendix, Gap 3).
 

@@ -175,6 +175,8 @@ Information such as manufacturer, model, or firmware is secondary.
 
 The primary concern is engineering capability.
 
+*Implementation note: this engineering question is answered by the Automatic Load Shedding Functionality Registry (ADR-011), which realizes what this document calls the Relay Registry — see [02-engineering-concepts.md](02-engineering-concepts.md)'s Relay Registry entry and [EDR-003](edr/EDR-003-relay-registry-scope.md) for the scope decision this step's philosophy is built on.*
+
 ---
 
 ### Step 6 – Select Load Shedding Strategy
@@ -268,6 +270,8 @@ Includes:
 These registries describe the physical engineering environment.
 
 **Clarification (Operational Snapshot pivot).** Line Connectivity Registry, and the transformer-asset portion of Equipment Registry, curate engineering **identity and metadata** for lines, circuits, and transformers — bay numbers, breaker numbers, commissioning dates, line type, interconnector flags, alias/rename history, and other engineering attributes PSS®E cannot represent. They are not, and have never been intended to be, the authoritative source of *current* electrical topology or *current* operational connectivity — that authority belongs to Operational Snapshot (Layer 2, below). See [EDR-007](edr/EDR-007-phase-7-operational-identity-mapping.md) and [operational-snapshot-architecture.md](../architecture/operational-snapshot-architecture.md).
+
+**Clarification (Relay Registry implemented).** "Relay Registry" above names the engineering concept — the capability-answer registry Step 5 (§5) describes. It is implemented as the **Automatic Load Shedding Functionality Registry**, per [ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md); "Relay Registry" is retired only as a working/implementation name, not as an engineering concept. Sensitive Customer Registry remains not yet built.
 
 ---
 

@@ -124,7 +124,7 @@ Each concept is defined the way a power system engineer would explain it to a co
 
 **Implementation.** GridDefence's current implementation already represents Bays, under different names, at exactly the granularity this concept requires — no generic `Bay` database entity exists or is required:
 - **Transformer Bay → `TransformerTerminal`** (Equipment Registry) — one side (HV or LV) of a `Transformer`, with its own identity, its own breaker, and its own voltage yard.
-- **Line Bay → `CircuitTerminal`** (Equipment Registry) — one substation's own terminal of a `Circuit`, already the object PSS®E's `EquipmentTopologyMap` correlates against, and the object a future Relay Registry entry would attach to.
+- **Line Bay → `CircuitTerminal`** (Equipment Registry) — one substation's own terminal of a `Circuit`, already the object PSS®E's `EquipmentTopologyMap` correlates against, and the object each Automatic Load Shedding Functionality Registry (Relay Registry) entry attaches to.
 
 See [EDR-005](edr/EDR-005-bay-as-engineering-identity.md) for the full engineering decision, and [08-engineering-terminology.md](08-engineering-terminology.md) for the complete engineering-to-implementation translation table.
 
@@ -201,6 +201,8 @@ See [EDR-005](edr/EDR-005-bay-as-engineering-identity.md) for the full engineeri
 **Engineering significance.** The Relay Registry is deliberately *not* a general-purpose relay asset management system. It does not track maintenance history, settings files, or firmware versions as primary data — those may be recorded as secondary metadata, but the registry's authoritative purpose is the capability answer alone (01-engineering-philosophy.md §5, Step 5). This scoping decision is deliberate and durable — see [EDR-003](edr/EDR-003-relay-registry-scope.md).
 
 **Relationship to other concepts.** The Relay Registry is part of **Engineering Knowledge** (Layer 1). It is consulted every time an engineer attempts to add a **Shedding Action** referencing a specific bay, and its answer does not depend on, or change with, the currently selected **PSS®E Load Snapshot**.
+
+**Implementation.** The Relay Registry is implemented as the **Automatic Load Shedding Functionality Registry** ([ADR-011](../adr/ADR-011-automatic-load-shedding-functionality-registry.md)), attaching to `CircuitTerminal`/`TransformerTerminal` (the Bay identities EDR-005 confirms) exactly as this concept requires — "Relay Registry" is retired only as a working/implementation name, not as an engineering concept; the capability question it answers, and EDR-003's scope discipline, are unchanged. UFLS and UVLS capability are recorded independently on the same record (a bay may support both); EMLS has no automatic-capability prerequisite and is never referenced. See `docs/architecture/automatic-load-shedding-functionality-registry-module.md` for full detail.
 
 ---
 
