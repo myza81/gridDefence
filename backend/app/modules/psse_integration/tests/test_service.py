@@ -1289,6 +1289,7 @@ def test_refresh_bus_correlation_correlates_bus_after_substation_registered(
         mnemonic="PKLG",
         official_name="PKLG Substation",
         region_id=reference_ids.region_id,
+        gm_zone_id=reference_ids.gm_zone_id,
         state_id=reference_ids.state_id,
         grid_owner_id=reference_ids.grid_owner_id,
         operational_status_id=reference_ids.status_id_by_code["ACTIVE"],

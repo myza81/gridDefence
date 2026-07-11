@@ -62,6 +62,25 @@ class State(Base):
     label: Mapped[str] = mapped_column(String(50), nullable=False)
 
 
+class GmZone(Base):
+    """Grid Maintenance Zone — the organizational maintenance zone
+    responsible for a substation (Substation Registry enhancement). Purely
+    organizational, not electrical, and independent of `Region` (a
+    grid-planning grouping): a single `Region` typically contains several
+    GM Zones (e.g. Northern region -> Alor Setar / Butterworth / Ipoh
+    zones). Mirrors `Region`'s own shape and placement exactly — a simple
+    Core Platform reference/lookup table (CLAUDE.md §11.3), not owned by
+    Substation Registry itself, following this module's own established
+    precedent (`LineType`, conceptually Equipment Registry's domain but
+    stored here as ordinary lookup data)."""
+
+    __tablename__ = "gm_zone"
+
+    gm_zone_id: Mapped[int] = mapped_column(_ReferenceKey, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(String(50), nullable=False)
+
+
 class GridOwner(Base):
     __tablename__ = "grid_owner"
 

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { referenceDataApi } from "./api";
 import type {
+  GmZoneSummary,
   GridOwnerSummary,
   LineTypeSummary,
   OperationalStatusSummary,
@@ -28,6 +29,10 @@ export function useReferenceData() {
     queryKey: ["reference-data", "regions"],
     queryFn: referenceDataApi.listRegions,
   });
+  const gmZones = useQuery({
+    queryKey: ["reference-data", "gm-zones"],
+    queryFn: referenceDataApi.listGmZones,
+  });
   const states = useQuery({
     queryKey: ["reference-data", "states"],
     queryFn: referenceDataApi.listStates,
@@ -48,6 +53,7 @@ export function useReferenceData() {
   const isLoading =
     voltageLevels.isLoading ||
     regions.isLoading ||
+    gmZones.isLoading ||
     states.isLoading ||
     gridOwners.isLoading ||
     operationalStatuses.isLoading ||
@@ -55,6 +61,7 @@ export function useReferenceData() {
 
   const voltageLevelItems: VoltageLevelSummary[] = voltageLevels.data ?? [];
   const regionItems: RegionSummary[] = regions.data ?? [];
+  const gmZoneItems: GmZoneSummary[] = gmZones.data ?? [];
   const stateItems: StateSummary[] = states.data ?? [];
   const gridOwnerItems: GridOwnerSummary[] = gridOwners.data ?? [];
   const operationalStatusItems: OperationalStatusSummary[] = operationalStatuses.data ?? [];
@@ -64,12 +71,14 @@ export function useReferenceData() {
     isLoading,
     voltageLevels: voltageLevelItems,
     regions: regionItems,
+    gmZones: gmZoneItems,
     states: stateItems,
     gridOwners: gridOwnerItems,
     operationalStatuses: operationalStatusItems,
     lineTypes: lineTypeItems,
     voltageLevelsById: byId(voltageLevelItems, "voltage_level_id"),
     regionsById: byId(regionItems, "region_id"),
+    gmZonesById: byId(gmZoneItems, "gm_zone_id"),
     statesById: byId(stateItems, "state_id"),
     gridOwnersById: byId(gridOwnerItems, "grid_owner_id"),
     operationalStatusesById: byId(operationalStatusItems, "operational_status_id"),

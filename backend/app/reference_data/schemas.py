@@ -33,6 +33,14 @@ class StateSummary(BaseModel):
     label: str
 
 
+class GmZoneSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    gm_zone_id: int
+    code: str
+    label: str
+
+
 class GridOwnerSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

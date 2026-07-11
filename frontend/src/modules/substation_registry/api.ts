@@ -13,6 +13,7 @@ export interface SubstationListFilters {
   page?: number;
   page_size?: number;
   region_id?: number;
+  gm_zone_id?: number;
   state_id?: number;
   grid_owner_id?: number;
   operational_status_id?: number;

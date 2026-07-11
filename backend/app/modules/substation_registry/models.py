@@ -77,6 +77,18 @@ class Substation(Base):
     region_id: Mapped[int] = mapped_column(
         SmallInteger, ForeignKey("region.region_id", ondelete="RESTRICT"), nullable=False
     )
+    # GM Zone (Grid Maintenance Zone) — organizational maintenance
+    # responsibility, independent of `region_id` (a grid-planning
+    # grouping); the two are deliberately never coupled by any constraint
+    # (Project Owner instruction: "Region and GM Zone ... must remain
+    # separate"). NOT NULL, exactly like region_id/state_id/grid_owner_id
+    # — every Substation shall reference exactly one GM Zone. (Briefly
+    # nullable during initial rollout, tightened once every pre-existing
+    # Substation had a valid GM Zone assigned — see migration
+    # 0016_gm_zone's own docstring.)
+    gm_zone_id: Mapped[int] = mapped_column(
+        SmallInteger, ForeignKey("gm_zone.gm_zone_id", ondelete="RESTRICT"), nullable=False
+    )
     state_id: Mapped[int] = mapped_column(
         SmallInteger, ForeignKey("state.state_id", ondelete="RESTRICT"), nullable=False
     )
@@ -128,6 +140,7 @@ class Substation(Base):
         Index("uq_substation_mnemonic_ci", func.lower(mnemonic), unique=True),
         Index("uq_substation_name_ci", func.lower(official_name), unique=True),
         Index("ix_substation_region", "region_id"),
+        Index("ix_substation_gm_zone", "gm_zone_id"),
         Index("ix_substation_state", "state_id"),
         Index("ix_substation_voltage", "voltage_level_id"),
         Index("ix_substation_owner", "grid_owner_id"),

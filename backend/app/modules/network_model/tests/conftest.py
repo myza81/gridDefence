@@ -24,6 +24,7 @@ from app.modules.iam.service import IAMService
 from app.modules.network_model.bootstrap import run_bootstrap as bootstrap_network_model
 from app.modules.substation_registry.service import SubstationService
 from app.reference_data.models import (
+    GmZone,
     GridOwner,
     LineType,
     OperationalStatus,
@@ -41,6 +42,7 @@ class ReferenceIds:
     line_type_id: int
     status_id_by_code: dict[str, int]
     region_id: int
+    gm_zone_id: int
     state_id: int
     grid_owner_id: int
 
@@ -54,6 +56,7 @@ def reference_ids(db_session: Session) -> ReferenceIds:
     second_voltage_level = db_session.query(VoltageLevel).filter_by(label="132kV").one()
     line_type = db_session.query(LineType).filter_by(code="OVERHEAD").one()
     region = db_session.query(Region).filter_by(code="NORTH").one()
+    gm_zone = db_session.query(GmZone).filter_by(code="ALOR_SETAR").one()
     state = db_session.query(State).filter_by(code="SEL").one()
     grid_owner = db_session.query(GridOwner).filter_by(code="TNB").one()
     statuses = {s.code: s.operational_status_id for s in db_session.query(OperationalStatus).all()}
@@ -64,6 +67,7 @@ def reference_ids(db_session: Session) -> ReferenceIds:
         line_type_id=line_type.line_type_id,
         status_id_by_code=statuses,
         region_id=region.region_id,
+        gm_zone_id=gm_zone.gm_zone_id,
         state_id=state.state_id,
         grid_owner_id=grid_owner.grid_owner_id,
     )
@@ -100,6 +104,7 @@ def substation_ids(
             mnemonic=mnemonic,
             official_name=f"{mnemonic} Substation",
             region_id=reference_ids.region_id,
+            gm_zone_id=reference_ids.gm_zone_id,
             state_id=reference_ids.state_id,
             grid_owner_id=reference_ids.grid_owner_id,
             operational_status_id=reference_ids.status_id_by_code["ACTIVE"],

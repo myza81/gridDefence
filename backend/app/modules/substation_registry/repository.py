@@ -50,6 +50,7 @@ class SubstationRepository:
         offset: int,
         limit: int,
         region_id: int | None = None,
+        gm_zone_id: int | None = None,
         state_id: int | None = None,
         grid_owner_id: int | None = None,
         operational_status_id: int | None = None,
@@ -58,6 +59,8 @@ class SubstationRepository:
         stmt = select(Substation)
         if region_id is not None:
             stmt = stmt.where(Substation.region_id == region_id)
+        if gm_zone_id is not None:
+            stmt = stmt.where(Substation.gm_zone_id == gm_zone_id)
         if state_id is not None:
             stmt = stmt.where(Substation.state_id == state_id)
         if grid_owner_id is not None:

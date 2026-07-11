@@ -11,6 +11,7 @@ export interface SubstationSummary {
   mnemonic: string;
   official_name: string;
   region_id: number;
+  gm_zone_id: number;
   state_id: number;
   grid_owner_id: number;
   operational_status_id: number;
@@ -29,6 +30,7 @@ export interface SubstationDetail {
   mnemonic: string;
   official_name: string;
   region_id: number;
+  gm_zone_id: number;
   state_id: number;
   grid_owner_id: number;
   operational_status_id: number;
@@ -47,6 +49,10 @@ export interface SubstationCreate {
   mnemonic: string;
   official_name: string;
   region_id: number;
+  // GM Zone — organizational maintenance responsibility, independent of
+  // region_id. Required, exactly like region_id — every Substation shall
+  // reference exactly one GM Zone.
+  gm_zone_id: number;
   state_id: number;
   grid_owner_id: number;
   operational_status_id: number;
@@ -61,6 +67,7 @@ export interface SubstationUpdate {
   mnemonic?: string;
   official_name?: string;
   region_id?: number;
+  gm_zone_id?: number;
   state_id?: number;
   grid_owner_id?: number;
   psse_bus_number?: number | null;

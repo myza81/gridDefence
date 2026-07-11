@@ -16,6 +16,27 @@ Scope: Master Data Management (MDM) module for GridDefence
 > historical text below is left as-is per this project's immutable-history
 > practice — read it as Phase 2's original design, not the current model.
 
+> **Status update (GM Zone metadata enhancement, Project Owner-approved).**
+> `Substation` gained a new attribute, **GM Zone** (Grid Maintenance Zone)
+> — the organizational maintenance zone responsible for a substation.
+> Purely organizational, not electrical, and **independent of `region_id`**
+> (a grid-planning grouping) — the two are never coupled by any FK,
+> constraint, or derivation; a substation's GM Zone and Region are two
+> separately-assigned attributes. `gm_zone` is a new Core Platform
+> reference/lookup table (`app/reference_data/`), mirroring `region`'s own
+> shape and placement exactly — not a table owned by this module itself,
+> following this project's own established precedent for simple lookup
+> tables that conceptually belong to one module's domain (`line_type`,
+> equipment-registry-module.md). `Substation.gm_zone_id` is **`NOT NULL`**,
+> exactly like `region_id`/`state_id`/`grid_owner_id` — every Substation
+> shall reference exactly one GM Zone. (The column was briefly nullable
+> during initial rollout, before every pre-existing Substation had a valid
+> GM Zone assigned; that transitional state is no longer part of the
+> implementation — see migration `0016_gm_zone` for the full history.)
+> §4, §6, §7, §8, §9, and §13 below describe the original Region-only
+> schema and are left as-is per this project's immutable-history practice;
+> GM Zone is additive to, not a rewrite of, that design.
+
 ---
 
 ## 1. Module Overview
@@ -90,9 +111,10 @@ The Registry explicitly does **not** own:
 **Reference (lookup) data** — modeled as small, independently managed tables rather than hardcoded enums, so new values can be added without a schema migration:
 - `voltage_level` (e.g. 500kV, 275kV, 132kV, 66kV, 33kV, 11kV)
 - `region` (planning regions, e.g. Northern, Central, Southern, Eastern)
+- `gm_zone` (Grid Maintenance Zone — organizational maintenance responsibility, e.g. Alor Setar, Butterworth, Ipoh, Selangor, Kuala Lumpur, Seremban, Ayer Keroh, Kluang, Johor Bahru, Kuantan, Dungun, Kota Bharu — independent of `region`)
 - `state` (the 11 Peninsular Malaysia states + Federal Territories)
 - `grid_owner` (TNB, and future IPP/third-party interconnection owners)
-- `operational_status` (Planned, Under Construction, Active, Mothballed, Decommissioned, Retired)
+- `operational_status` (Planned, Under Construction, Active, Mothballed, Decommissioned, Retired, Entered in Error) — shared Core Platform reference data; only `Under Construction`, `Active`, `Decommissioned`, and `Entered in Error` are legal for a `Substation` (ADR-014, §10). `Planned`/`Mothballed`/`Retired` remain seeded for Equipment Registry's own, independent status model.
 
 **Value concepts (not separate tables, but validated as a unit)**
 - Geolocation (`latitude`, `longitude`) — validated together, optional as a pair.
@@ -293,6 +315,7 @@ Note: no `DELETE` privilege is granted at the application-role level on `substat
 | `official_name` | Full descriptive name | Human-facing; unique to avoid ambiguity in reports |
 | `voltage_level_id` | Nominal voltage class | FK to reference table, supports future voltage classes (e.g. HVDC) |
 | `region_id` | Grid planning region | FK; used for regional reporting/filtering |
+| `gm_zone_id` | Grid Maintenance Zone — organizational maintenance responsibility | FK, `NOT NULL` (exactly like region_id); independent of region_id (GM Zone status update) |
 | `state_id` | Malaysian state | FK; administrative/geographic grouping |
 | `grid_owner_id` | Asset owner | FK; TNB today, extensible to IPPs/third parties |
 | `operational_status_id` | Lifecycle state of the physical asset | FK; independent from whether any scheme currently uses it |
@@ -320,8 +343,9 @@ Note: no `DELETE` privilege is granted at the application-role level on `substat
 4. **Geolocation pair integrity.** Latitude and longitude must both be present or both be null — a partial coordinate is worse than none.
 5. **Referential immutability of identity.** `substation_id` is never reused, never changed, and is the only value scheme modules are permitted to store as a foreign key.
 6. **No back-writes from scheme modules.** UFLS/UVLS/EMLS modules have read-only access to `substation`; only the Registry's own service can write to it. This is enforced architecturally (service boundary) and can be reinforced at the DB role/grant level.
-7. **Status transitions follow a defined, closed-list lifecycle** (see §10; [ADR-005](../adr/ADR-005-substation-operational-status-lifecycle.md)) — e.g. a substation cannot go directly from `Planned` to `Active`; it must pass through `Under Construction`. Only the seven transitions §10 enumerates are legal; every other transition, including `Planned → Decommissioned` in any number of hops other than the defined path, is rejected at the service layer.
+7. **Status transitions follow a defined, closed-list lifecycle** (see §10; [ADR-014](../adr/ADR-014-substation-lifecycle-simplification.md), superseding [ADR-005](../adr/ADR-005-substation-operational-status-lifecycle.md)) — e.g. a substation cannot go directly from `Active` to `Under Construction`. Only the four transitions §10 enumerates are legal; every other transition is rejected at the service layer.
 8. **Every attribute change is audited.** Any update to a tracked field on `substation` produces a corresponding `substation_audit_log` row (via application-level service logic or a DB trigger — see §11).
+9. **GM Zone is required, independent of Region (GM Zone status update).** `gm_zone_id` is `NOT NULL`, exactly like `region_id`/`state_id`/`grid_owner_id` — every Substation shall reference exactly one GM Zone, enforced at the database level. `region_id` and `gm_zone_id` are never coupled — no constraint, FK, or derivation relates one to the other.
 
 ---
 
@@ -338,60 +362,44 @@ Note: no `DELETE` privilege is granted at the application-role level on `substat
 
 ## 10. CRUD Lifecycle
 
-Status: v2 (revised by [ADR-005](../adr/ADR-005-substation-operational-status-lifecycle.md)) — v1's diagram omitted `Under Construction` entirely (despite it being seeded reference data since Phase 1) and showed no direct `Active → Decommissioned` edge. Both gaps are resolved below; see ADR-005 for the full rationale.
+Status: v3 (revised by [ADR-014](../adr/ADR-014-substation-lifecycle-simplification.md), superseding [ADR-005](../adr/ADR-005-substation-operational-status-lifecycle.md)) — the Project Owner simplified the lifecycle from six states to four, removing `Planned`, `Mothballed`, and `Retired`. See ADR-014 for the full rationale, and ADR-005 for the lifecycle's prior, seven-edge form (left unmodified as a historical record).
 
 ```
-        ┌─────────┐
-        │ Planned │  (registered ahead of commissioning; usable for
-        └────┬────┘   forward-looking scheme planning)
-             │ begin construction
-             ▼
   ┌─────────────────────┐
-  │ Under Construction   │  (physically being built; not yet in service)
-  └──────────┬───────────┘
-             │ commission
-             ▼
-        ┌─────────┐
-   ┌───▶│ Active  │───────────────────┐
-   │    └────┬────┘                   │
-   │         │ mothball                │ decommission
-   │         ▼                         │
-   │    ┌───────────┐                  │
-   └────┤ Mothballed├───decommission───┤
-reactivate└─────┬─────┘                │
-                │                      │
-                └──────────┬───────────┘
-                            ▼
-                    ┌──────────────┐
-                    │ Decommissioned│  (terminal for operational purposes,
-                    └──────┬────────┘   but record is retained)
-                           │ (optional, admin-only, rare)
-                           ▼
-                    ┌──────────┐
-                    │ Retired  │  (fully closed record; still never
-                    └──────────┘   hard-deleted if ever referenced
-                                    historically)
+  │ Under Construction   │  (physically exists, construction has
+  └──────────┬───────────┘   commenced; not yet operational)
+             │ commission              │
+             ▼                         │ entered in error
+        ┌─────────┐                    │
+        │ Active  │────────────────────┤
+        └────┬────┘                    │
+             │ decommission            ▼
+             ▼                  ┌──────────────────┐
+     ┌──────────────┐           │ Entered in Error  │  (should never have
+     │ Decommissioned│           └──────────────────┘   existed; retained
+     └───────────────┘  (terminal — permanently removed   only for audit)
+                          from service, retained for
+                          engineering history)
 ```
 
 **Allowed transitions (closed list — no other transition is legal):**
 
 | From | To | Trigger |
 |---|---|---|
-| `Planned` | `Under Construction` | begin construction |
 | `Under Construction` | `Active` | commission |
-| `Active` | `Mothballed` | mothball |
-| `Mothballed` | `Active` | reactivate |
+| `Under Construction` | `Entered in Error` | correction — record should never have existed |
 | `Active` | `Decommissioned` | decommission |
-| `Mothballed` | `Decommissioned` | decommission |
-| `Decommissioned` | `Retired` | administrative closure (optional, admin-only, rare) |
+| `Active` | `Entered in Error` | correction — record should never have existed |
 
-Any transition not listed above — including `Planned → Active` directly, anything into or out of `Retired` other than the one edge shown, or any transition touching `Under Construction` other than the two edges shown — is illegal and must be rejected at the service layer (§8 rule 7).
+Any transition not listed above is illegal and must be rejected at the service layer (§8 rule 7). Both `Decommissioned` and `Entered in Error` are terminal — neither has an outgoing edge.
 
-- **Create:** always starts as `Planned` or `Active` (data migration/backfill case) — this is a *creation-time* exception, not a transition, and remains unchanged by ADR-005. A newly created row does not pass through `Under Construction`; only a status *change* on an existing row is validated against the transition table above. Requires mnemonic, name, voltage level, region, state, owner — geolocation and PSS/E bus number may be added later.
+- **Create:** always starts as `Under Construction` or `Active` (data migration/backfill case) — this is a *creation-time* exception, not a transition (ADR-014, unchanged in kind from ADR-005's own creation-time exception). A newly created row does not pass through any transition; only a status *change* on an existing row is validated against the transition table above. Requires mnemonic, name, region, GM Zone, state, owner — geolocation and PSS/E bus number may be added later.
 - **Read:** open to all authenticated modules/users; this is reference data, not sensitive.
-- **Update:** metadata can be updated at any time; every update writes an audit log entry. Mnemonic changes are a special, gated operation (see §8, #1) requiring an alias record.
+- **Update:** metadata can be updated at any time; every update writes an audit log entry. Mnemonic changes are a special, gated operation (see §8, #1) requiring an alias record. **`region_id`, `state_id`, `grid_owner_id`, and `gm_zone_id` are independently editable** — each was already supported at the service layer since Phase 2/the GM Zone enhancement (validated against reference data, audited, no-op-safe), but the frontend Edit form only exposed GM Zone until a UAT finding surfaced that Region/State/Grid Owner had no corresponding controls; this was a frontend omission, never an architectural restriction, and is now closed. None of the four fields are derived from or coupled to any other — each is set independently by the caller.
 - **Status change:** validated against the transition table above; illegal transitions rejected at the service layer.
 - **Delete:** never a hard delete in normal operation — see §12.
+
+`Planned`, `Mothballed`, and `Retired` remain seeded `operational_status` reference rows — Equipment Registry's own service layer (Circuit, Transformer, SubstationVoltageYard) independently uses them for its own, unrelated status model (see ADR-014). They are simply no longer legal for a Substation.
 
 ---
 
@@ -410,7 +418,7 @@ The critical constraint (Design Principle #4) is: **changing substation metadata
 
 **Recommendation: soft delete only, via lifecycle status — hard delete is disallowed by default.**
 
-- A substation is retired by transitioning `operational_status` to `Decommissioned`/`Retired`, not by removing the row. This satisfies Design Principle #4 automatically: any scheme that historically referenced this substation continues to resolve its FK successfully.
+- A substation is retired by transitioning `operational_status` to `Decommissioned` (or `Entered in Error` for a genuine data-entry correction — ADR-014), not by removing the row. This satisfies Design Principle #4 automatically: any scheme that historically referenced this substation continues to resolve its FK successfully.
 - Enforce this at the database level: scheme assignment tables' FKs to `substation_id` use `ON DELETE RESTRICT`, so even an attempted hard delete of a referenced substation fails loudly rather than silently orphaning scheme data.
 - Hard delete should be reserved for a narrow, admin-only, audited exception: correcting a genuine data-entry error (e.g. a duplicate substation created by mistake, never referenced by any scheme, never exposed externally). This should require explicit confirmation that zero references exist across all consuming modules (present and future) before being permitted, and itself should be logged (who, why, when) outside the normal audit table structure (e.g. a separate administrative action log), since the row being deleted won't exist to hold its own audit trail.
 - Do **not** implement a generic `deleted_at`/`is_deleted` soft-delete flag in addition to `operational_status` — that would create two overlapping "is this substation gone" signals. Status *is* the soft-delete mechanism here; adding a redundant flag invites inconsistency.
@@ -423,7 +431,7 @@ The Registry is a bounded context with its own service layer and API surface, in
 
 **Registry-owned API surface (conceptual, not implementation):**
 - Create/update/retrieve a substation.
-- Search/filter substations (by region, state, voltage level, owner, status, free-text on name/mnemonic).
+- Search/filter substations (by region, GM Zone, state, voltage level, owner, status, free-text on name/mnemonic).
 - Retrieve a substation's audit history.
 - Resolve one or many `substation_id`s to display attributes (used heavily by scheme modules for UI rendering — e.g. TanStack Table joins, map rendering via ECharts).
 - Manage reference/lookup data (voltage levels, regions, states, owners, statuses) — likely an admin-only sub-surface.

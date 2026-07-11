@@ -14,6 +14,7 @@ export function SubstationCreatePage() {
   const [mnemonic, setMnemonic] = useState("");
   const [officialName, setOfficialName] = useState("");
   const [regionId, setRegionId] = useState("");
+  const [gmZoneId, setGmZoneId] = useState("");
   const [stateId, setStateId] = useState("");
   const [gridOwnerId, setGridOwnerId] = useState("");
   const [operationalStatusId, setOperationalStatusId] = useState("");
@@ -25,6 +26,7 @@ export function SubstationCreatePage() {
         mnemonic,
         official_name: officialName,
         region_id: Number(regionId),
+        gm_zone_id: Number(gmZoneId),
         state_id: Number(stateId),
         grid_owner_id: Number(gridOwnerId),
         operational_status_id: Number(operationalStatusId),
@@ -43,9 +45,10 @@ export function SubstationCreatePage() {
     createMutation.mutate();
   }
 
-  // Create: always starts as Planned or Active (substation-registry.md §10).
+  // Create: always starts as Under Construction or Active
+  // (substation-registry.md §10, ADR-014).
   const initialStatusOptions = referenceData.operationalStatuses.filter((status) =>
-    ["PLANNED", "ACTIVE"].includes(status.code),
+    ["UNDER_CONSTRUCTION", "ACTIVE"].includes(status.code),
   );
 
   return (
@@ -87,6 +90,23 @@ export function SubstationCreatePage() {
             {referenceData.regions.map((region) => (
               <option key={region.region_id} value={region.region_id}>
                 {region.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="gm-zone">GM Zone</label>
+          <br />
+          <select
+            id="gm-zone"
+            value={gmZoneId}
+            onChange={(e) => setGmZoneId(e.target.value)}
+            required
+          >
+            <option value="">Select...</option>
+            {referenceData.gmZones.map((zone) => (
+              <option key={zone.gm_zone_id} value={zone.gm_zone_id}>
+                {zone.label}
               </option>
             ))}
           </select>

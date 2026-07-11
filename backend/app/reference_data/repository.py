@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.reference_data.models import (
+    GmZone,
     GridOwner,
     LineType,
     OperationalStatus,
@@ -49,6 +50,9 @@ class ReferenceDataRepository:
     def list_states(self) -> list[State]:
         return list(self.db.execute(select(State).order_by(State.label)).scalars().all())
 
+    def list_gm_zones(self) -> list[GmZone]:
+        return list(self.db.execute(select(GmZone).order_by(GmZone.label)).scalars().all())
+
     def list_grid_owners(self) -> list[GridOwner]:
         return list(self.db.execute(select(GridOwner).order_by(GridOwner.label)).scalars().all())
 
@@ -79,6 +83,11 @@ class ReferenceDataRepository:
         if not _in_smallint_range(region_id):
             return None
         return self.db.get(Region, region_id)
+
+    def get_gm_zone(self, gm_zone_id: int) -> GmZone | None:
+        if not _in_smallint_range(gm_zone_id):
+            return None
+        return self.db.get(GmZone, gm_zone_id)
 
     def get_state(self, state_id: int) -> State | None:
         if not _in_smallint_range(state_id):

@@ -39,14 +39,20 @@ def _create(
     mnemonic: str = "SUB1",
     official_name: str = "Substation One",
     status_code: str = "ACTIVE",
+    gm_zone_id: int | None = None,
     psse_bus_number: int | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
 ):
+    # gm_zone_id is unconditionally required (like region_id/state_id/
+    # grid_owner_id) — defaults to `ref.gm_zone_id` unless a caller is
+    # specifically exercising an unknown/invalid id.
+    resolved_gm_zone_id = ref.gm_zone_id if gm_zone_id is None else gm_zone_id
     return service.create_substation(
         mnemonic=mnemonic,
         official_name=official_name,
         region_id=ref.region_id,
+        gm_zone_id=resolved_gm_zone_id,
         state_id=ref.state_id,
         grid_owner_id=ref.grid_owner_id,
         operational_status_id=ref.status_id_by_code[status_code],
@@ -401,6 +407,7 @@ class TestReferenceDataValidation:
                 mnemonic="SUB1",
                 official_name="Substation One",
                 region_id=99999,
+                gm_zone_id=reference_ids.gm_zone_id,
                 state_id=reference_ids.state_id,
                 grid_owner_id=reference_ids.grid_owner_id,
                 operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
@@ -423,15 +430,316 @@ class TestReferenceDataValidation:
             not in inspect.signature(SubstationService.create_substation).parameters
         )
 
-
-# --- Status transition legality (closed allow-list per ADR-005) -----------------------
-class TestStatusTransitionLegality:
-    def test_create_may_start_as_planned(
+    def test_unknown_gm_zone_id_raises(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
-        assert substation.operational_status_id == reference_ids.status_id_by_code["PLANNED"]
+        with pytest.raises(ReferenceDataNotFoundError):
+            _create(service, reference_ids, actor_user_id, gm_zone_id=99999)
+
+    def test_unknown_region_id_raises_on_update(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        with pytest.raises(ReferenceDataNotFoundError):
+            service.update_substation(
+                substation.substation_id, region_id=99999, actor_user_id=actor_user_id
+            )
+
+    def test_unknown_state_id_raises_on_update(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        with pytest.raises(ReferenceDataNotFoundError):
+            service.update_substation(
+                substation.substation_id, state_id=99999, actor_user_id=actor_user_id
+            )
+
+    def test_unknown_grid_owner_id_raises_on_update(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        with pytest.raises(ReferenceDataNotFoundError):
+            service.update_substation(
+                substation.substation_id, grid_owner_id=99999, actor_user_id=actor_user_id
+            )
+
+    def test_unknown_gm_zone_id_raises_on_update(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        with pytest.raises(ReferenceDataNotFoundError):
+            service.update_substation(
+                substation.substation_id, gm_zone_id=99999, actor_user_id=actor_user_id
+            )
+
+
+# --- GM Zone (organizational metadata, independent of Region) -------------------------
+class TestGmZoneIndependenceAndEditing:
+    """GM Zone is unconditionally required on every Substation, exactly
+    like region_id/state_id/grid_owner_id (see migration 0016_gm_zone —
+    the temporary nullable/Active-conditional design was tightened once
+    every pre-existing Substation had a valid GM Zone assigned). This
+    class covers the behaviour that remains distinct from that baseline
+    requirement: independence from Region, and editability with audit.
+    Requiredness itself is covered by `TestReferenceDataValidation
+    .test_unknown_gm_zone_id_raises` and the reference-data existence
+    checks shared with region_id/state_id/grid_owner_id."""
+
+    def test_create_with_gm_zone_succeeds(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
+        assert substation.gm_zone_id == reference_ids.gm_zone_id
+
+    def test_region_and_gm_zone_are_independently_assigned(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """No coupling of any kind between region_id and gm_zone_id — a
+        substation may hold any combination of the two (Project Owner:
+        "Region and GM Zone represent different engineering metadata and
+        must remain separate"). Changing one must never affect the other."""
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+        assert substation.region_id == reference_ids.region_id
+        assert substation.gm_zone_id == reference_ids.gm_zone_id
+
+        from app.reference_data.models import Region
+
+        other_region = (
+            db_session.query(Region).filter(Region.region_id != reference_ids.region_id).first()
+        )
+        assert other_region is not None
+        updated = service.update_substation(
+            substation.substation_id, region_id=other_region.region_id, actor_user_id=actor_user_id
+        )
+        assert updated.region_id == other_region.region_id
+        # gm_zone_id is untouched by a region_id-only update.
+        assert updated.gm_zone_id == reference_ids.gm_zone_id
+
+    def test_gm_zone_is_editable_and_audited(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        from app.reference_data.models import GmZone
+        from app.reference_data.repository import ReferenceDataRepository
+
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        other_zone = (
+            db_session.query(GmZone).filter(GmZone.gm_zone_id != reference_ids.gm_zone_id).first()
+        )
+        assert other_zone is not None
+        assert ReferenceDataRepository(db_session).get_gm_zone(other_zone.gm_zone_id) is not None
+
+        service.update_substation(
+            substation.substation_id, gm_zone_id=other_zone.gm_zone_id, actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        updated = service.get_substation(substation.substation_id)
+        assert updated is not None
+        assert updated.gm_zone_id == other_zone.gm_zone_id
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 1
+        assert entries[0].field_name == "gm_zone_id"
+        assert entries[0].old_value == str(reference_ids.gm_zone_id)
+        assert entries[0].new_value == str(other_zone.gm_zone_id)
+
+    def test_update_without_gm_zone_argument_leaves_it_unchanged(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """`None` means "not supplied, leave unchanged" for gm_zone_id now
+        — mirrors region_id/state_id/grid_owner_id's own plain-`None`
+        convention, since gm_zone_id can no longer be legally cleared."""
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id, official_name="Renamed", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        updated = service.get_substation(substation.substation_id)
+        assert updated is not None
+        assert updated.gm_zone_id == reference_ids.gm_zone_id
+        assert updated.official_name == "Renamed"
+
+
+# --- Region / State / Grid Owner editing (UAT: previously frontend-only gap) ----------
+class TestOrganizationalMetadataEditing:
+    """Region, State, and Grid Owner were already fully editable at the
+    service layer (identical shape to gm_zone_id — validated, audited,
+    no-op-safe) — only the frontend's Edit form omitted the controls. This
+    class adds the coverage that previously existed only incidentally (via
+    `test_region_and_gm_zone_are_independently_assigned`)."""
+
+    def test_editing_state_succeeds_and_audited(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        from app.reference_data.models import State
+
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        other_state = (
+            db_session.query(State).filter(State.state_id != reference_ids.state_id).first()
+        )
+        assert other_state is not None
+
+        service.update_substation(
+            substation.substation_id, state_id=other_state.state_id, actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        updated = service.get_substation(substation.substation_id)
+        assert updated is not None
+        assert updated.state_id == other_state.state_id
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 1
+        assert entries[0].field_name == "state_id"
+        assert entries[0].old_value == str(reference_ids.state_id)
+        assert entries[0].new_value == str(other_state.state_id)
+
+    def test_editing_grid_owner_succeeds_and_audited(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        from app.reference_data.models import GridOwner
+
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        other_owner = (
+            db_session.query(GridOwner)
+            .filter(GridOwner.grid_owner_id != reference_ids.grid_owner_id)
+            .first()
+        )
+        assert other_owner is not None
+
+        service.update_substation(
+            substation.substation_id,
+            grid_owner_id=other_owner.grid_owner_id,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        updated = service.get_substation(substation.substation_id)
+        assert updated is not None
+        assert updated.grid_owner_id == other_owner.grid_owner_id
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 1
+        assert entries[0].field_name == "grid_owner_id"
+        assert entries[0].old_value == str(reference_ids.grid_owner_id)
+        assert entries[0].new_value == str(other_owner.grid_owner_id)
+
+    def test_editing_region_state_grid_owner_and_gm_zone_in_one_request(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """All four organizational fields change independently in a single
+        request — one audit row per changed field, no cross-field
+        derivation or coupling of any kind."""
+        from app.reference_data.models import GmZone, GridOwner, Region, State
+
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        other_region = (
+            db_session.query(Region).filter(Region.region_id != reference_ids.region_id).first()
+        )
+        other_zone = (
+            db_session.query(GmZone).filter(GmZone.gm_zone_id != reference_ids.gm_zone_id).first()
+        )
+        other_state = (
+            db_session.query(State).filter(State.state_id != reference_ids.state_id).first()
+        )
+        other_owner = (
+            db_session.query(GridOwner)
+            .filter(GridOwner.grid_owner_id != reference_ids.grid_owner_id)
+            .first()
+        )
+        assert other_region is not None
+        assert other_zone is not None
+        assert other_state is not None
+        assert other_owner is not None
+
+        service.update_substation(
+            substation.substation_id,
+            region_id=other_region.region_id,
+            gm_zone_id=other_zone.gm_zone_id,
+            state_id=other_state.state_id,
+            grid_owner_id=other_owner.grid_owner_id,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        updated = service.get_substation(substation.substation_id)
+        assert updated is not None
+        assert updated.region_id == other_region.region_id
+        assert updated.gm_zone_id == other_zone.gm_zone_id
+        assert updated.state_id == other_state.state_id
+        assert updated.grid_owner_id == other_owner.grid_owner_id
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 4
+        field_names = {e.field_name for e in entries}
+        assert field_names == {"region_id", "gm_zone_id", "state_id", "grid_owner_id"}
+
+    def test_no_op_update_to_same_organizational_values_writes_no_audit_rows(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id,
+            region_id=reference_ids.region_id,
+            gm_zone_id=reference_ids.gm_zone_id,
+            state_id=reference_ids.state_id,
+            grid_owner_id=reference_ids.grid_owner_id,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 0
+
+
+# --- Status transition legality (closed allow-list per ADR-005, revised by ADR-014) ---
+class TestStatusTransitionLegality:
+    def test_create_may_start_as_under_construction(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(
+            service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION"
+        )
+        assert (
+            substation.operational_status_id
+            == reference_ids.status_id_by_code["UNDER_CONSTRUCTION"]
+        )
 
     def test_create_may_start_as_active(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
@@ -440,21 +748,38 @@ class TestStatusTransitionLegality:
         substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
         assert substation.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
 
-    def test_create_may_not_start_as_mothballed(
+    def test_create_may_not_start_as_decommissioned(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
         with pytest.raises(InvalidStatusTransitionError):
-            _create(service, reference_ids, actor_user_id, status_code="MOTHBALLED")
+            _create(service, reference_ids, actor_user_id, status_code="DECOMMISSIONED")
 
-    def test_create_may_not_start_as_under_construction(
+    def test_create_may_not_start_as_entered_in_error(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
-        """§10's creation exception is unchanged by ADR-005 — still Planned
-        or Active only, never Under Construction."""
         service = SubstationService(db_session)
         with pytest.raises(InvalidStatusTransitionError):
-            _create(service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION")
+            _create(service, reference_ids, actor_user_id, status_code="ENTERED_IN_ERROR")
+
+    def test_create_may_not_start_as_a_removed_lifecycle_state(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """Planned, Mothballed, and Retired are no longer part of the
+        Substation lifecycle (ADR-014) — the underlying `operational_status`
+        reference rows still exist (Equipment Registry's Circuit/Transformer
+        independently use Planned/Mothballed/Retired for its own status
+        model), but they are no longer legal for a Substation."""
+        service = SubstationService(db_session)
+        for code in ("PLANNED", "MOTHBALLED", "RETIRED"):
+            with pytest.raises(InvalidStatusTransitionError):
+                _create(
+                    service,
+                    reference_ids,
+                    actor_user_id,
+                    mnemonic=f"X{code[:3]}",
+                    status_code=code,
+                )
 
     @staticmethod
     def _advance(
@@ -473,29 +798,15 @@ class TestStatusTransitionLegality:
         service.db.commit()
         return result
 
-    # --- The seven legal edges (ADR-005) --------------------------------------------
-    def test_planned_to_under_construction_is_legal(
-        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
-    ) -> None:
-        service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
-        db_session.commit()
-
-        result = service.change_status(
-            substation.substation_id,
-            operational_status_id=reference_ids.status_id_by_code["UNDER_CONSTRUCTION"],
-            change_reason="Construction started",
-            actor_user_id=actor_user_id,
-        )
-        assert result.operational_status_id == reference_ids.status_id_by_code["UNDER_CONSTRUCTION"]
-
+    # --- The three legal edges (ADR-014) ---------------------------------------------
     def test_under_construction_to_active_is_legal(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
+        substation = _create(
+            service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION"
+        )
         db_session.commit()
-        self._advance(service, substation, reference_ids, "UNDER_CONSTRUCTION", actor_user_id)
 
         result = service.change_status(
             substation.substation_id,
@@ -505,33 +816,9 @@ class TestStatusTransitionLegality:
         )
         assert result.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
 
-    def test_active_to_mothballed_and_back_is_legal(
+    def test_active_to_decommissioned_is_legal(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
-        service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
-        db_session.commit()
-
-        service.change_status(
-            substation.substation_id,
-            operational_status_id=reference_ids.status_id_by_code["MOTHBALLED"],
-            change_reason=None,
-            actor_user_id=actor_user_id,
-        )
-        db_session.commit()
-        result = service.change_status(
-            substation.substation_id,
-            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
-            change_reason=None,
-            actor_user_id=actor_user_id,
-        )
-        assert result.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
-
-    def test_active_to_decommissioned_directly_is_legal(
-        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
-    ) -> None:
-        """ADR-005: a substation may be decommissioned directly from Active
-        — mothballing is not a mandatory precondition."""
         service = SubstationService(db_session)
         substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
         db_session.commit()
@@ -544,88 +831,57 @@ class TestStatusTransitionLegality:
         )
         assert result.operational_status_id == reference_ids.status_id_by_code["DECOMMISSIONED"]
 
-    def test_mothballed_to_decommissioned_is_legal(
+    def test_under_construction_to_entered_in_error_is_legal(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(
+            service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION"
+        )
+        db_session.commit()
+
+        result = service.change_status(
+            substation.substation_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Duplicate record",
+            actor_user_id=actor_user_id,
+        )
+        assert result.operational_status_id == reference_ids.status_id_by_code["ENTERED_IN_ERROR"]
+
+    def test_active_to_entered_in_error_is_legal(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
         substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
         db_session.commit()
-        self._advance(service, substation, reference_ids, "MOTHBALLED", actor_user_id)
 
         result = service.change_status(
             substation.substation_id,
-            operational_status_id=reference_ids.status_id_by_code["DECOMMISSIONED"],
-            change_reason=None,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Should never have been created",
             actor_user_id=actor_user_id,
         )
-        assert result.operational_status_id == reference_ids.status_id_by_code["DECOMMISSIONED"]
+        assert result.operational_status_id == reference_ids.status_id_by_code["ENTERED_IN_ERROR"]
 
-    def test_decommissioned_to_retired_is_legal(
+    def test_full_under_construction_to_decommissioned_lifecycle(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
+        """Exercises the full Under Construction -> Active -> Decommissioned
+        path in a single, realistic end-to-end sequence (ADR-014)."""
         service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
-        db_session.commit()
-        self._advance(service, substation, reference_ids, "DECOMMISSIONED", actor_user_id)
-
-        result = service.change_status(
-            substation.substation_id,
-            operational_status_id=reference_ids.status_id_by_code["RETIRED"],
-            change_reason="Administrative closure",
-            actor_user_id=actor_user_id,
+        substation = _create(
+            service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION"
         )
-        assert result.operational_status_id == reference_ids.status_id_by_code["RETIRED"]
-
-    def test_full_planned_to_retired_lifecycle_via_mothballed(
-        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
-    ) -> None:
-        """Exercises every edge in ADR-005's graph in a single, realistic
-        end-to-end sequence."""
-        service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
         db_session.commit()
 
-        for code in ("UNDER_CONSTRUCTION", "ACTIVE", "MOTHBALLED", "DECOMMISSIONED", "RETIRED"):
+        for code in ("ACTIVE", "DECOMMISSIONED"):
             self._advance(service, substation, reference_ids, code, actor_user_id)
 
         reloaded = service.repo.get_by_id(substation.substation_id)
         assert reloaded is not None
-        assert reloaded.operational_status_id == reference_ids.status_id_by_code["RETIRED"]
+        assert reloaded.operational_status_id == reference_ids.status_id_by_code["DECOMMISSIONED"]
 
     # --- Rejected transitions --------------------------------------------------------
-    def test_planned_to_active_directly_is_rejected(
-        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
-    ) -> None:
-        """ADR-005: Planned must pass through Under Construction — direct
-        Planned -> Active is no longer legal (a behavioural change from
-        Phase 2's original interim implementation)."""
-        service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
-        db_session.commit()
-
-        with pytest.raises(InvalidStatusTransitionError):
-            service.change_status(
-                substation.substation_id,
-                operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
-                change_reason=None,
-                actor_user_id=actor_user_id,
-            )
-
-    def test_planned_to_decommissioned_directly_is_rejected(
-        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
-    ) -> None:
-        service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
-        db_session.commit()
-
-        with pytest.raises(InvalidStatusTransitionError):
-            service.change_status(
-                substation.substation_id,
-                operational_status_id=reference_ids.status_id_by_code["DECOMMISSIONED"],
-                change_reason=None,
-                actor_user_id=actor_user_id,
-            )
-
     def test_active_to_under_construction_is_rejected(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
@@ -641,52 +897,48 @@ class TestStatusTransitionLegality:
                 actor_user_id=actor_user_id,
             )
 
-    def test_under_construction_to_planned_is_rejected(
+    def test_under_construction_to_decommissioned_directly_is_rejected(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
+        """ADR-014: Under Construction may only reach Active or Entered in
+        Error — Decommissioned is only reachable from Active."""
         service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
+        substation = _create(
+            service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION"
+        )
         db_session.commit()
-        self._advance(service, substation, reference_ids, "UNDER_CONSTRUCTION", actor_user_id)
 
         with pytest.raises(InvalidStatusTransitionError):
             service.change_status(
                 substation.substation_id,
-                operational_status_id=reference_ids.status_id_by_code["PLANNED"],
+                operational_status_id=reference_ids.status_id_by_code["DECOMMISSIONED"],
                 change_reason=None,
                 actor_user_id=actor_user_id,
             )
 
-    def test_under_construction_to_mothballed_is_rejected(
-        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
-    ) -> None:
-        service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
-        db_session.commit()
-        self._advance(service, substation, reference_ids, "UNDER_CONSTRUCTION", actor_user_id)
-
-        with pytest.raises(InvalidStatusTransitionError):
-            service.change_status(
-                substation.substation_id,
-                operational_status_id=reference_ids.status_id_by_code["MOTHBALLED"],
-                change_reason=None,
-                actor_user_id=actor_user_id,
-            )
-
-    def test_retired_is_terminal(
+    def test_decommissioned_is_terminal(
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
         substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
         db_session.commit()
-        for code in ("MOTHBALLED", "DECOMMISSIONED", "RETIRED"):
+        self._advance(service, substation, reference_ids, "DECOMMISSIONED", actor_user_id)
+
+        with pytest.raises(InvalidStatusTransitionError):
             service.change_status(
                 substation.substation_id,
-                operational_status_id=reference_ids.status_id_by_code[code],
+                operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
                 change_reason=None,
                 actor_user_id=actor_user_id,
             )
-            db_session.commit()
+
+    def test_entered_in_error_is_terminal(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
+        db_session.commit()
+        self._advance(service, substation, reference_ids, "ENTERED_IN_ERROR", actor_user_id)
 
         with pytest.raises(InvalidStatusTransitionError):
             service.change_status(
@@ -753,13 +1005,15 @@ class TestAuditLogging:
         self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
     ) -> None:
         service = SubstationService(db_session)
-        substation = _create(service, reference_ids, actor_user_id, status_code="PLANNED")
+        substation = _create(
+            service, reference_ids, actor_user_id, status_code="UNDER_CONSTRUCTION"
+        )
         db_session.commit()
 
         service.change_status(
             substation.substation_id,
-            operational_status_id=reference_ids.status_id_by_code["UNDER_CONSTRUCTION"],
-            change_reason="Construction started ahead of schedule",
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+            change_reason="Commissioned ahead of schedule",
             actor_user_id=actor_user_id,
         )
         db_session.commit()
@@ -767,9 +1021,9 @@ class TestAuditLogging:
         entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
         assert total == 1
         assert entries[0].field_name == "operational_status_id"
-        assert entries[0].old_value == "PLANNED"
-        assert entries[0].new_value == "UNDER_CONSTRUCTION"
-        assert entries[0].change_reason == "Construction started ahead of schedule"
+        assert entries[0].old_value == "UNDER_CONSTRUCTION"
+        assert entries[0].new_value == "ACTIVE"
+        assert entries[0].change_reason == "Commissioned ahead of schedule"
 
 
 # --- Soft-delete-only enforcement (mandated) ------------------------------------------
@@ -798,7 +1052,7 @@ class TestSoftDeleteOnlyEnforcement:
         substation = _create(service, reference_ids, actor_user_id, status_code="ACTIVE")
         db_session.commit()
 
-        for code in ("MOTHBALLED", "DECOMMISSIONED", "RETIRED"):
+        for code in ("DECOMMISSIONED",):
             service.change_status(
                 substation.substation_id,
                 operational_status_id=reference_ids.status_id_by_code[code],

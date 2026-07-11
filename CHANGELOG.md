@@ -11,6 +11,168 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Substation Registry Fix — Editable Region, State, and Grid Owner Metadata
+
+**Scope:** UAT finding: Region, State, and Grid Owner could not be edited on an existing Substation
+after creation, unlike GM Zone. Investigation found this was a **frontend-only gap, not an
+architectural decision** — `SubstationService.update_substation()`, `SubstationUpdate` (schema),
+and the `PATCH /api/v1/substations/{id}` router have supported all three fields (validated against
+reference data, audited, no-op-safe) since Phase 2/the GM Zone enhancement; the Edit form in
+`SubstationDetailPage.tsx` simply never rendered the corresponding controls.
+
+**Backend:** No changes — already correct. Added the test coverage that previously existed only
+incidentally: editing State, editing Grid Owner, editing Region/State/Grid Owner/GM Zone together
+in one request (one audit row per changed field, no coupling), a no-op update writing zero audit
+rows, unknown-reference-id rejection on update (mirroring the existing create-time checks), and
+write-permission enforcement on the update endpoint.
+
+**Frontend:** Added Region, State, and Grid Owner `<select>` fields to the Substation Detail page's
+Edit form, mirroring GM Zone's existing pattern exactly (preloaded from the current record,
+independently changeable, backend validation errors displayed the same way as every other field).
+No layout change beyond the three new fields.
+
+**Documentation:** `docs/architecture/substation-registry.md` §10 updated in place to state that
+`region_id`/`state_id`/`grid_owner_id`/`gm_zone_id` are independently editable, and to record that
+this was a frontend omission rather than a restriction.
+
+**Confirmed:** no reference table involved (`Region`/`State`/`GridOwner`/`GmZone`) has an
+`is_active` concept, so no "active/inactive" enforcement was needed. No field is derived from or
+coupled to another. Substation identity (`substation_id`, `mnemonic`-as-identity) is unaffected —
+only organizational/location metadata is now editable, exactly as it already was for GM Zone.
+
+---
+
+## Substation Registry Enhancement — Lifecycle Simplification
+
+**Scope:** Project Owner-directed simplification of the Substation lifecycle
+([ADR-014](docs/adr/ADR-014-substation-lifecycle-simplification.md), superseding
+[ADR-005](docs/adr/ADR-005-substation-operational-status-lifecycle.md)) from six states/seven
+transitions down to four states/four transitions: `Under Construction`, `Active`,
+`Decommissioned`, `Entered in Error`. `Planned`, `Mothballed`, and `Retired` are removed from the
+Substation lifecycle.
+
+**Backend**
+
+- `SubstationService`'s closed allow-list (`_STATUS_TRANSITIONS`, `_ALLOWED_INITIAL_STATUS_CODES`)
+  rewritten to the four ADR-014 edges (`Under Construction → Active`,
+  `Under Construction → Entered in Error`, `Active → Decommissioned`, `Active → Entered in Error`);
+  creation-time initial status is now `Under Construction` or `Active` (`Under Construction`
+  replaces the removed `Planned` as the "newly registered" entry point).
+- **No schema or migration change.** `operational_status` is shared Core Platform reference data —
+  Equipment Registry's own service layer (Circuit, Transformer, SubstationVoltageYard)
+  independently uses `Planned`/`Mothballed`/`Retired` for its own, unrelated status model, so the
+  seeded reference rows are left untouched (`app/reference_data/seed.py` unchanged); the closed
+  allow-list above simply no longer includes them as legal for a *Substation*. No pre-existing
+  Substation row's `operational_status_id` was reassigned — a row already at a removed status
+  (verified: one development-database row, `TEST`, at `Retired`) is left as-is and becomes
+  permanently terminal under the new allow-list, per this project's "do not invent or silently
+  alter real data" discipline.
+
+**Frontend**
+
+- Create Substation's "Initial status" options and Substation Detail's "Change status" and List
+  page's status filter options are now filtered to the four ADR-014 codes (mirroring the existing
+  filtered-options pattern already used for Create's initial-status list); the Detail page's status
+  *display* (and the List page's own status column) remain unfiltered, since either can still show
+  a legacy row's actual, previously-assigned status.
+
+**Documentation:** [ADR-014](docs/adr/ADR-014-substation-lifecycle-simplification.md) added;
+[`docs/architecture/substation-registry.md`](docs/architecture/substation-registry.md) §8 rule 7,
+§10 (CRUD Lifecycle diagram/table, now v3) updated in place, consistent with how §10 was already
+updated in place from v1 to v2 for ADR-005. ADR-005 itself is left unmodified as the historical
+record of the lifecycle's prior form.
+
+**Tests:** `TestStatusTransitionLegality` in Substation Registry's service-layer tests rewritten
+for the four-edge model (creation-time codes, the four legal edges, terminal-state and
+rejected-transition coverage); the API contract test for transition legality rewritten to exercise
+`Under Construction → Active` and the now-illegal `Active → Under Construction`/
+`Under Construction → Decommissioned` edges.
+
+**Confirmed:** no other module's business rules were changed — Equipment Registry's own,
+independent use of `Planned`/`Mothballed`/`Retired` for Circuit/Transformer/SubstationVoltageYard
+is untouched, confirmed by an explicit database check before implementation (only
+`Active`/`Entered in Error` are actually in use by those tables in the development database).
+
+---
+
+## Substation Registry Enhancement — GM Zone Metadata
+
+**Scope:** Project Owner-approved enhancement to the Substation Registry. Each `Substation` gains
+a new attribute, **GM Zone (Grid Maintenance Zone)** — the organizational maintenance zone
+responsible for maintaining the substation. Purely organizational, not electrical, and
+**independent of `Region`** (a grid-planning grouping) — the two are never coupled by any FK,
+constraint, or derivation. Implemented following the exact architectural and implementation
+pattern already established for `Region`: a Core Platform reference/lookup table
+(`app/reference_data/`), not a table owned by the Substation Registry module itself, mirroring the
+already-established precedent that domain-adjacent simple lookup tables (e.g. `line_type`) live
+alongside the other shared reference data rather than duplicating that pattern per module. See
+[`docs/architecture/substation-registry.md`](docs/architecture/substation-registry.md)'s own
+"Status update (GM Zone metadata enhancement)" callout for the full architectural rationale.
+
+**Backend**
+
+- New Core Platform reference table `gm_zone` (`gm_zone_id`, `code`, `label`) — twelve seeded
+  values (Alor Setar, Butterworth, Ipoh, Selangor, Kuala Lumpur, Seremban, Ayer Keroh, Kluang,
+  Johor Bahru, Kuantan, Dungun, Kota Bharu), seeded via `app/reference_data/seed.py` exactly like
+  every other reference table — never hardcoded into application logic. Exposed read-only via
+  `GET /api/v1/reference-data/gm-zones`, mirroring every other reference-data endpoint (no
+  permission gate beyond authentication).
+- New `substation.gm_zone_id` FK column (migration `0016_gm_zone`) — `NOT NULL`, exactly like
+  `region_id`/`state_id`/`grid_owner_id`. The column was briefly nullable during initial rollout
+  (avoiding an invented default to backfill pre-existing substation rows against); once the
+  Project Owner manually assigned a valid GM Zone to every existing Substation in the development
+  database, the migration was tightened to `NOT NULL` in place (never having been merged) and the
+  now-obsolete service-layer "required only when Active" conditional logic
+  (`GmZoneRequiredForActiveSubstationError`) was removed — GM Zone is now unconditionally required,
+  exactly like the three fields it mirrors.
+- `gm_zone_id` is independently editable via `PATCH /api/v1/substations/{id}` (unlike
+  `region_id`/`state_id`/`grid_owner_id`, which the service layer has always supported changing
+  but the frontend's edit form does not yet expose) — every change is audited via the existing
+  `substation_audit_log`, one row per change, exactly like every other tracked field.
+- `GET /api/v1/substations` gains a `gm_zone_id` filter, alongside the existing `region_id`
+  filter — the two are independent, composable filters, never coupled.
+
+**Frontend**
+
+- GM Zone added everywhere Region already appears: the Substation List (new column and filter),
+  Create Substation (new field, unconditionally `required`), Substation Detail (displayed) and its
+  Edit form (a new editable field — Region itself is not yet editable in this form; GM Zone's own
+  editability is a deliberate, explicit addition per this enhancement, not a byproduct of mirroring
+  Region). Display label: **"GM Zone"**, not abbreviated further.
+- `useReferenceData()` (the shared Core Platform reference-data hook) gains `gmZones`/
+  `gmZonesById`, following the exact pattern already used for `regions`/`regionsById`.
+
+**Dashboard:** No GM Zone summary was added — the existing Substation Registry list/filter surface
+already answers "how many substations are in GM Zone X" via the new filter; no dedicated dashboard
+concept exists for Region either, so none was introduced for GM Zone by analogy (consistent with
+the instruction not to invent new dashboard concepts).
+
+**Tests**
+
+- Backend: new reference-data seed/backfill/API tests for `gm_zone`, mirroring `line_type`'s own
+  established test pattern exactly (`test_seed_backfills_gm_zones`, etc.).
+  `TestGmZoneIndependenceAndEditing` test class in Substation Registry's own service-layer tests
+  (independent of Region, editable and audited) — the Active-conditional/Planned-optional test
+  cases from the initial rollout were removed once GM Zone became unconditionally required,
+  mirroring how region_id/state_id/grid_owner_id are tested. GM Zone API contract tests
+  (create-without-GM-Zone returns 422, list filter, edit-and-audit, `null` in an update payload
+  treated as not-supplied). **Every other module's test fixtures that create an Active substation
+  directly through `SubstationService`** (Automatic Load Shedding Functionality Registry, Equipment
+  Registry, Network Model, PSS/E Integration, Sensitive Customer Registry, and the corresponding
+  `backend/tests/test_*_api.py` files) already supplied `gm_zone_id` from the initial rollout and
+  needed no further change.
+- Frontend: GM Zone reference-data stubs and assertions in all three Substation Registry page test
+  suites; the Create/Detail page tests' conditional-requiredness cases were simplified to
+  unconditional-requiredness once the backend invariant was tightened.
+
+**Confirmed:** Region's own behavior is unchanged (no test, schema, or business-rule modification
+to `region_id` itself). GM Zone is implemented as fully independent organizational metadata — no
+FK, constraint, derivation, or shared vocabulary ties it to Region. No unrelated registry's own
+business logic was modified — only test fixtures that construct an Active `Substation` (Substation
+Registry's own upstream entity) were updated to supply the newly-required field.
+
+---
+
 ## Phase 3.7 — Sensitive Customer Registry
 
 **Scope:** A new, dedicated Engineering Registry module answering, per Transformer Terminal,

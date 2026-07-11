@@ -18,6 +18,15 @@ export interface RegionSummary {
   label: string;
 }
 
+/** Grid Maintenance Zone — the organizational maintenance zone
+ * responsible for a substation. Independent of `RegionSummary` (a
+ * grid-planning grouping) — the two are never coupled. */
+export interface GmZoneSummary {
+  gm_zone_id: number;
+  code: string;
+  label: string;
+}
+
 export interface StateSummary {
   state_id: number;
   code: string;

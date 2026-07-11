@@ -20,7 +20,14 @@ from app.modules.sensitive_customer_registry.bootstrap import run_bootstrap as b
 from app.modules.sensitive_customer_registry.seed import run_seed as seed_scr_reference_data
 from app.modules.substation_registry.bootstrap import run_bootstrap as bootstrap_substations
 from app.modules.substation_registry.service import SubstationService
-from app.reference_data.models import GridOwner, OperationalStatus, Region, State, VoltageLevel
+from app.reference_data.models import (
+    GmZone,
+    GridOwner,
+    OperationalStatus,
+    Region,
+    State,
+    VoltageLevel,
+)
 from app.reference_data.seed import run_seed
 
 
@@ -47,6 +54,7 @@ def _seed_reference_data(db_session: Session) -> dict[str, int]:
         .one()
         .operational_status_id,
         "region_id": db_session.query(Region).filter_by(code="NORTH").one().region_id,
+        "gm_zone_id": db_session.query(GmZone).filter_by(code="ALOR_SETAR").one().gm_zone_id,
         "state_id": db_session.query(State).filter_by(code="SEL").one().state_id,
         "grid_owner_id": db_session.query(GridOwner).filter_by(code="TNB").one().grid_owner_id,
     }
@@ -92,6 +100,7 @@ def _create_transformer_terminal(
         mnemonic="PKLG",
         official_name="Pekan Lama Substation",
         region_id=ref["region_id"],
+        gm_zone_id=ref["gm_zone_id"],
         state_id=ref["state_id"],
         grid_owner_id=ref["grid_owner_id"],
         operational_status_id=ref["operational_status_id"],
@@ -618,6 +627,7 @@ def test_facility_may_be_created_with_multiple_terminals_via_api(
         mnemonic="SGBK",
         official_name="Sungai Buloh Substation",
         region_id=ref["region_id"],
+        gm_zone_id=ref["gm_zone_id"],
         state_id=ref["state_id"],
         grid_owner_id=ref["grid_owner_id"],
         operational_status_id=ref["operational_status_id"],

@@ -726,6 +726,7 @@ def test_ambiguous_discrepancy_visible_through_the_equipment_map_api(
     from app.modules.equipment_registry.service import EquipmentRegistryService, TerminalInput
     from app.modules.substation_registry.service import SubstationService
     from app.reference_data.models import (
+        GmZone,
         GridOwner,
         LineType,
         OperationalStatus,
@@ -747,6 +748,7 @@ def test_ambiguous_discrepancy_visible_through_the_equipment_map_api(
     voltage_level = db_session.query(VoltageLevel).filter_by(label="500kV").one()
     line_type = db_session.query(LineType).filter_by(code="OVERHEAD").one()
     region = db_session.query(Region).filter_by(code="NORTH").one()
+    gm_zone = db_session.query(GmZone).filter_by(code="ALOR_SETAR").one()
     state = db_session.query(State).filter_by(code="SEL").one()
     grid_owner = db_session.query(GridOwner).filter_by(code="TNB").one()
     active_status_id = (
@@ -759,6 +761,7 @@ def test_ambiguous_discrepancy_visible_through_the_equipment_map_api(
         mnemonic="PKLG",
         official_name="PKLG Substation",
         region_id=region.region_id,
+        gm_zone_id=gm_zone.gm_zone_id,
         state_id=state.state_id,
         grid_owner_id=grid_owner.grid_owner_id,
         operational_status_id=active_status_id,
@@ -773,6 +776,7 @@ def test_ambiguous_discrepancy_visible_through_the_equipment_map_api(
         mnemonic="IGBK",
         official_name="IGBK Substation",
         region_id=region.region_id,
+        gm_zone_id=gm_zone.gm_zone_id,
         state_id=state.state_id,
         grid_owner_id=grid_owner.grid_owner_id,
         operational_status_id=active_status_id,

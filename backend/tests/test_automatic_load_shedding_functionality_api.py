@@ -22,6 +22,7 @@ from app.modules.iam.service import IAMService
 from app.modules.substation_registry.bootstrap import run_bootstrap as bootstrap_substations
 from app.modules.substation_registry.service import SubstationService
 from app.reference_data.models import (
+    GmZone,
     GridOwner,
     LineType,
     OperationalStatus,
@@ -52,6 +53,7 @@ def _seed_reference_data(db_session: Session) -> dict[str, int]:
         .one()
         .operational_status_id,
         "region_id": db_session.query(Region).filter_by(code="NORTH").one().region_id,
+        "gm_zone_id": db_session.query(GmZone).filter_by(code="ALOR_SETAR").one().gm_zone_id,
         "state_id": db_session.query(State).filter_by(code="SEL").one().state_id,
         "grid_owner_id": db_session.query(GridOwner).filter_by(code="TNB").one().grid_owner_id,
     }
@@ -82,6 +84,7 @@ def _create_two_terminal_circuit(
             mnemonic=mnemonic,
             official_name=f"{mnemonic} Substation",
             region_id=ref["region_id"],
+            gm_zone_id=ref["gm_zone_id"],
             state_id=ref["state_id"],
             grid_owner_id=ref["grid_owner_id"],
             operational_status_id=ref["operational_status_id"],

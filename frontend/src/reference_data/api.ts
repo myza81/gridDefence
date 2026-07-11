@@ -1,5 +1,6 @@
 import { apiClient } from "../api/client";
 import type {
+  GmZoneSummary,
   GridOwnerSummary,
   LineTypeSummary,
   OperationalStatusSummary,
@@ -14,6 +15,7 @@ export const referenceDataApi = {
   listVoltageLevels: () =>
     apiClient.get<VoltageLevelSummary[]>("/api/v1/reference-data/voltage-levels"),
   listRegions: () => apiClient.get<RegionSummary[]>("/api/v1/reference-data/regions"),
+  listGmZones: () => apiClient.get<GmZoneSummary[]>("/api/v1/reference-data/gm-zones"),
   listStates: () => apiClient.get<StateSummary[]>("/api/v1/reference-data/states"),
   listGridOwners: () => apiClient.get<GridOwnerSummary[]>("/api/v1/reference-data/grid-owners"),
   listOperationalStatuses: () =>

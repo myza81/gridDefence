@@ -12,7 +12,14 @@ from app.core.config import get_settings
 from app.modules.iam.bootstrap import run_bootstrap as bootstrap_iam
 from app.modules.iam.service import IAMService
 from app.modules.substation_registry.bootstrap import run_bootstrap as bootstrap_registry
-from app.reference_data.models import GridOwner, OperationalStatus, Region, State, VoltageLevel
+from app.reference_data.models import (
+    GmZone,
+    GridOwner,
+    OperationalStatus,
+    Region,
+    State,
+    VoltageLevel,
+)
 from app.reference_data.seed import run_seed
 
 
@@ -31,6 +38,7 @@ def _seed_reference_data(db_session: Session) -> dict[str, int]:
         .one()
         .voltage_level_id,
         "region_id": db_session.query(Region).filter_by(code="NORTH").one().region_id,
+        "gm_zone_id": db_session.query(GmZone).filter_by(code="ALOR_SETAR").one().gm_zone_id,
         "state_id": db_session.query(State).filter_by(code="SEL").one().state_id,
         "grid_owner_id": db_session.query(GridOwner).filter_by(code="TNB").one().grid_owner_id,
         "operational_status_id": db_session.query(OperationalStatus)
@@ -236,16 +244,14 @@ def test_get_unknown_substation_returns_404(client: TestClient, db_session: Sess
 def test_status_change_endpoint_enforces_transition_legality(
     client: TestClient, db_session: Session
 ) -> None:
-    """Per ADR-005: Planned -> Decommissioned directly, and Planned ->
-    Active directly (must pass through Under Construction), are both
-    illegal; Planned -> Under Construction is the only legal first step."""
+    """Per ADR-014: a Substation may only start as Under Construction or
+    Active; Under Construction -> Decommissioned directly, and Active ->
+    Under Construction, are both illegal; Under Construction -> Active is
+    a legal transition."""
     ref = _seed_reference_data(db_session)
     token = _admin_token(client, db_session)
     headers = {"Authorization": f"Bearer {token}"}
 
-    planned_status_id = (
-        db_session.query(OperationalStatus).filter_by(code="PLANNED").one().operational_status_id
-    )
     decommissioned_status_id = (
         db_session.query(OperationalStatus)
         .filter_by(code="DECOMMISSIONED")
@@ -266,7 +272,7 @@ def test_status_change_endpoint_enforces_transition_legality(
         json={
             "mnemonic": "SUB2",
             "official_name": "Substation Two",
-            **{**ref, "operational_status_id": planned_status_id},
+            **{**ref, "operational_status_id": under_construction_status_id},
         },
     )
     assert create_response.status_code == 201
@@ -279,31 +285,20 @@ def test_status_change_endpoint_enforces_transition_legality(
     )
     assert illegal_decommission_response.status_code == 400
 
-    illegal_direct_active_response = client.post(
-        f"/api/v1/substations/{substation_id}/status",
-        headers=headers,
-        json={"operational_status_id": active_status_id},
-    )
-    assert illegal_direct_active_response.status_code == 400
-
     legal_response = client.post(
-        f"/api/v1/substations/{substation_id}/status",
-        headers=headers,
-        json={
-            "operational_status_id": under_construction_status_id,
-            "change_reason": "Construction started",
-        },
-    )
-    assert legal_response.status_code == 200
-    assert legal_response.json()["operational_status_id"] == under_construction_status_id
-
-    commission_response = client.post(
         f"/api/v1/substations/{substation_id}/status",
         headers=headers,
         json={"operational_status_id": active_status_id, "change_reason": "Commissioned"},
     )
-    assert commission_response.status_code == 200
-    assert commission_response.json()["operational_status_id"] == active_status_id
+    assert legal_response.status_code == 200
+    assert legal_response.json()["operational_status_id"] == active_status_id
+
+    illegal_return_to_under_construction_response = client.post(
+        f"/api/v1/substations/{substation_id}/status",
+        headers=headers,
+        json={"operational_status_id": under_construction_status_id},
+    )
+    assert illegal_return_to_under_construction_response.status_code == 400
 
 
 def test_no_delete_endpoint_exists(client: TestClient, db_session: Session) -> None:
@@ -320,3 +315,285 @@ def test_no_delete_endpoint_exists(client: TestClient, db_session: Session) -> N
 
     response = client.delete(f"/api/v1/substations/{substation_id}", headers=headers)
     assert response.status_code == 405
+
+
+# --- GM Zone (organizational metadata, independent of Region) -------------------------
+
+
+def test_create_substation_without_gm_zone_returns_400(
+    client: TestClient, db_session: Session
+) -> None:
+    """GM Zone is unconditionally required, exactly like region_id/
+    state_id/grid_owner_id — a request missing it is rejected regardless
+    of the target operational status."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {"mnemonic": "GMZ1", "official_name": "GM Zone Test One", **ref}
+    del payload["gm_zone_id"]
+    response = client.post("/api/v1/substations", headers=headers, json=payload)
+    assert response.status_code == 422
+
+
+def test_list_substations_filters_by_gm_zone(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    other_gm_zone_id = (
+        db_session.query(GmZone).filter(GmZone.gm_zone_id != ref["gm_zone_id"]).first().gm_zone_id
+    )
+
+    client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "GMZ3", "official_name": "GM Zone Test Three", **ref},
+    )
+    client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={
+            "mnemonic": "GMZ4",
+            "official_name": "GM Zone Test Four",
+            **{**ref, "gm_zone_id": other_gm_zone_id},
+        },
+    )
+
+    response = client.get(f"/api/v1/substations?gm_zone_id={ref['gm_zone_id']}", headers=headers)
+    assert response.status_code == 200
+    mnemonics = {item["mnemonic"] for item in response.json()["items"]}
+    assert "GMZ3" in mnemonics
+    assert "GMZ4" not in mnemonics
+
+
+def test_gm_zone_is_editable_via_update_and_audited(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    other_gm_zone_id = (
+        db_session.query(GmZone).filter(GmZone.gm_zone_id != ref["gm_zone_id"]).first().gm_zone_id
+    )
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "GMZ5", "official_name": "GM Zone Test Five", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    update_response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers=headers,
+        json={"gm_zone_id": other_gm_zone_id},
+    )
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["gm_zone_id"] == other_gm_zone_id
+
+    audit_response = client.get(f"/api/v1/substations/{substation_id}/audit-log", headers=headers)
+    assert audit_response.status_code == 200
+    entries = audit_response.json()["items"]
+    assert any(e["field_name"] == "gm_zone_id" for e in entries)
+
+
+def test_gm_zone_id_null_in_update_is_treated_as_not_supplied(
+    client: TestClient, db_session: Session
+) -> None:
+    """gm_zone_id can no longer be legally cleared — `null` in an update
+    payload is treated exactly like an omitted field (leaves the current
+    value unchanged), mirroring region_id/state_id/grid_owner_id's own
+    long-standing behaviour for the same reason."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "GMZ6", "official_name": "GM Zone Test Six", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    response = client.patch(
+        f"/api/v1/substations/{substation_id}", headers=headers, json={"gm_zone_id": None}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["gm_zone_id"] == ref["gm_zone_id"]
+
+
+# --- Region / State / Grid Owner editing (UAT: previously frontend-only gap) ----------
+
+
+def test_region_is_editable_via_update_and_audited(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    other_region_id = (
+        db_session.query(Region).filter(Region.region_id != ref["region_id"]).first().region_id
+    )
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "ORG1", "official_name": "Organizational Metadata Test One", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    update_response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers=headers,
+        json={"region_id": other_region_id},
+    )
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["region_id"] == other_region_id
+
+    audit_response = client.get(f"/api/v1/substations/{substation_id}/audit-log", headers=headers)
+    entries = audit_response.json()["items"]
+    assert any(e["field_name"] == "region_id" for e in entries)
+
+
+def test_state_is_editable_via_update_and_audited(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    other_state_id = (
+        db_session.query(State).filter(State.state_id != ref["state_id"]).first().state_id
+    )
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "ORG2", "official_name": "Organizational Metadata Test Two", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    update_response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers=headers,
+        json={"state_id": other_state_id},
+    )
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["state_id"] == other_state_id
+
+    audit_response = client.get(f"/api/v1/substations/{substation_id}/audit-log", headers=headers)
+    entries = audit_response.json()["items"]
+    assert any(e["field_name"] == "state_id" for e in entries)
+
+
+def test_grid_owner_is_editable_via_update_and_audited(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    other_grid_owner_id = (
+        db_session.query(GridOwner)
+        .filter(GridOwner.grid_owner_id != ref["grid_owner_id"])
+        .first()
+        .grid_owner_id
+    )
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "ORG3", "official_name": "Organizational Metadata Test Three", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    update_response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers=headers,
+        json={"grid_owner_id": other_grid_owner_id},
+    )
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["grid_owner_id"] == other_grid_owner_id
+
+    audit_response = client.get(f"/api/v1/substations/{substation_id}/audit-log", headers=headers)
+    entries = audit_response.json()["items"]
+    assert any(e["field_name"] == "grid_owner_id" for e in entries)
+
+
+def test_region_state_grid_owner_and_gm_zone_are_independently_editable_via_api(
+    client: TestClient, db_session: Session
+) -> None:
+    """All four organizational fields may change in one request, each
+    audited separately — no derivation or coupling between them."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    other_region_id = (
+        db_session.query(Region).filter(Region.region_id != ref["region_id"]).first().region_id
+    )
+    other_gm_zone_id = (
+        db_session.query(GmZone).filter(GmZone.gm_zone_id != ref["gm_zone_id"]).first().gm_zone_id
+    )
+    other_state_id = (
+        db_session.query(State).filter(State.state_id != ref["state_id"]).first().state_id
+    )
+    other_grid_owner_id = (
+        db_session.query(GridOwner)
+        .filter(GridOwner.grid_owner_id != ref["grid_owner_id"])
+        .first()
+        .grid_owner_id
+    )
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "ORG4", "official_name": "Organizational Metadata Test Four", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    update_response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers=headers,
+        json={
+            "region_id": other_region_id,
+            "gm_zone_id": other_gm_zone_id,
+            "state_id": other_state_id,
+            "grid_owner_id": other_grid_owner_id,
+        },
+    )
+    assert update_response.status_code == 200, update_response.text
+    body = update_response.json()
+    assert body["region_id"] == other_region_id
+    assert body["gm_zone_id"] == other_gm_zone_id
+    assert body["state_id"] == other_state_id
+    assert body["grid_owner_id"] == other_grid_owner_id
+
+    audit_response = client.get(f"/api/v1/substations/{substation_id}/audit-log", headers=headers)
+    field_names = {e["field_name"] for e in audit_response.json()["items"]}
+    assert field_names == {"region_id", "gm_zone_id", "state_id", "grid_owner_id"}
+
+
+def test_update_without_substation_registry_write_is_forbidden(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "ORG5", "official_name": "Organizational Metadata Test Five", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    iam = IAMService(db_session)
+    iam.create_user(
+        username="viewer_only_2",
+        display_name="Viewer Only Two",
+        email=None,
+        password="correct-horse-battery",
+        actor_user_id=None,
+    )
+    db_session.commit()
+    viewer_token = _login(client, "viewer_only_2", "correct-horse-battery")
+
+    response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+        json={"region_id": ref["region_id"]},
+    )
+    assert response.status_code == 403

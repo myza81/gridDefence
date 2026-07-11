@@ -29,6 +29,14 @@ const REFERENCE_DATA_HANDLERS = [
   },
   {
     method: "GET",
+    pattern: /\/reference-data\/gm-zones$/,
+    respond: () => ({
+      status: 200,
+      body: [{ gm_zone_id: 1, code: "ALOR_SETAR", label: "Alor Setar" }],
+    }),
+  },
+  {
+    method: "GET",
     pattern: /\/reference-data\/states$/,
     respond: () => ({ status: 200, body: [{ state_id: 1, code: "SEL", label: "Selangor" }] }),
   },
@@ -92,6 +100,7 @@ function stubSession(myPermissions: string[]) {
               mnemonic: "SUB1",
               official_name: "Substation One",
               region_id: 1,
+              gm_zone_id: 1,
               state_id: 1,
               grid_owner_id: 1,
               operational_status_id: 1,
@@ -187,6 +196,7 @@ describe("SubstationListPage", () => {
                 mnemonic: "PKLG",
                 official_name: "Pekan Lama",
                 region_id: 1,
+                gm_zone_id: 1,
                 state_id: 1,
                 grid_owner_id: 1,
                 operational_status_id: 1,

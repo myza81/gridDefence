@@ -41,6 +41,14 @@ function stubSession() {
     },
     {
       method: "GET",
+      pattern: /\/reference-data\/gm-zones$/,
+      respond: () => ({
+        status: 200,
+        body: [{ gm_zone_id: 1, code: "ALOR_SETAR", label: "Alor Setar" }],
+      }),
+    },
+    {
+      method: "GET",
       pattern: /\/reference-data\/states$/,
       respond: () => ({ status: 200, body: [{ state_id: 1, code: "SEL", label: "Selangor" }] }),
     },
@@ -59,7 +67,12 @@ function stubSession() {
         status: 200,
         body: [
           { operational_status_id: 1, code: "ACTIVE", label: "Active", is_terminal: false },
-          { operational_status_id: 2, code: "PLANNED", label: "Planned", is_terminal: false },
+          {
+            operational_status_id: 2,
+            code: "UNDER_CONSTRUCTION",
+            label: "Under Construction",
+            is_terminal: false,
+          },
           {
             operational_status_id: 3,
             code: "MOTHBALLED",
@@ -78,7 +91,7 @@ describe("SubstationCreatePage", () => {
     window.localStorage.clear();
   });
 
-  it("only offers Planned/Active as the initial status, per substation-registry.md §10", async () => {
+  it("only offers Under Construction/Active as the initial status, per substation-registry.md §10", async () => {
     authStorage.setToken("token");
     stubSession();
 
@@ -91,8 +104,18 @@ describe("SubstationCreatePage", () => {
     const optionLabels = Array.from(statusSelect.querySelectorAll("option")).map((o) =>
       o.textContent?.trim(),
     );
-    expect(optionLabels).toEqual(["Select...", "Active", "Planned"]);
+    expect(optionLabels).toEqual(["Select...", "Active", "Under Construction"]);
     expect(optionLabels).not.toContain("Mothballed");
+  });
+
+  it("GM Zone is always required", async () => {
+    authStorage.setToken("token");
+    stubSession();
+
+    renderWithProviders(<SubstationCreatePage />, { route: "/substations/new" });
+
+    const gmZoneSelect = await screen.findByLabelText("GM Zone");
+    expect(gmZoneSelect).toBeRequired();
   });
 
   it("submits the form and navigates to the new substation's detail page", async () => {
@@ -121,6 +144,14 @@ describe("SubstationCreatePage", () => {
         method: "GET",
         pattern: /\/reference-data\/regions$/,
         respond: () => ({ status: 200, body: [{ region_id: 1, code: "NORTH", label: "Northern" }] }),
+      },
+      {
+        method: "GET",
+        pattern: /\/reference-data\/gm-zones$/,
+        respond: () => ({
+          status: 200,
+          body: [{ gm_zone_id: 1, code: "ALOR_SETAR", label: "Alor Setar" }],
+        }),
       },
       {
         method: "GET",
@@ -155,6 +186,7 @@ describe("SubstationCreatePage", () => {
               mnemonic: "SUB1",
               official_name: "Substation One",
               region_id: 1,
+              gm_zone_id: 1,
               state_id: 1,
               grid_owner_id: 1,
               operational_status_id: 1,
@@ -179,6 +211,7 @@ describe("SubstationCreatePage", () => {
     await user.type(await screen.findByLabelText("Mnemonic"), "SUB1");
     await user.type(screen.getByLabelText("Official name"), "Substation One");
     await user.selectOptions(screen.getByLabelText("Region"), "1");
+    await user.selectOptions(screen.getByLabelText("GM Zone"), "1");
     await user.selectOptions(screen.getByLabelText("State"), "1");
     await user.selectOptions(screen.getByLabelText("Grid owner"), "1");
     await user.selectOptions(screen.getByLabelText("Initial status"), "1");
@@ -189,6 +222,7 @@ describe("SubstationCreatePage", () => {
         mnemonic: "SUB1",
         official_name: "Substation One",
         region_id: 1,
+        gm_zone_id: 1,
         state_id: 1,
         grid_owner_id: 1,
         operational_status_id: 1,

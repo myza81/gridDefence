@@ -3,13 +3,25 @@ transactions, orchestration, and audit writing live here, and only here
 (CLAUDE.md A1: this module's own tables are written to exclusively by this
 layer).
 
-Status transition legality (substation-registry.md §10, revised by ADR-005)
-is implemented as a closed allow-list containing exactly the seven edges
-ADR-005 defines. ADR-005 replaced Phase 2's original interim allow-list,
-which read the architecture document's then-incomplete lifecycle diagram
-literally (the diagram omitted `UNDER_CONSTRUCTION` entirely and showed no
-direct `ACTIVE -> DECOMMISSIONED` edge) — that gap is now closed; see
-ADR-005 for the full decision and rationale.
+Status transition legality (substation-registry.md §10, revised by ADR-014)
+is implemented as a closed allow-list containing exactly the three edges
+ADR-014 defines: `Under Construction -> Active`, `Active -> Decommissioned`,
+`Under Construction -> Entered in Error`, and `Active -> Entered in Error`.
+ADR-014 simplified the lifecycle to four states (`Under Construction`,
+`Active`, `Decommissioned`, `Entered in Error`), removing `Planned`,
+`Mothballed`, and `Retired` from the Substation lifecycle — see ADR-014
+for the full decision and rationale, and ADR-005 (the decision ADR-014
+supersedes) for the lifecycle's prior, seven-edge form.
+
+`Planned`/`Mothballed`/`Retired` remain seeded `operational_status`
+reference rows — Equipment Registry's own service layer (Circuit,
+Transformer, SubstationVoltageYard) independently uses them for its own,
+unrelated status model (CLAUDE.md module-ownership boundary: this closed
+allow-list governs only what is legal for a *Substation*, and must not
+reach into or constrain another module's business rules). They are simply
+no longer members of `_STATUS_TRANSITIONS`/`_ALLOWED_INITIAL_STATUS_CODES`
+below, so the service layer rejects them for a Substation exactly as it
+would reject any other code outside the closed list.
 """
 
 from __future__ import annotations
@@ -46,22 +58,20 @@ from app.modules.substation_registry.schemas import (
 from app.reference_data.repository import ReferenceDataRepository
 
 # Closed allow-list of legal operational_status transitions, keyed by
-# reference-data `code` — the seven edges ADR-005 defines. No other
-# transition is legal, including PLANNED -> ACTIVE directly (must pass
-# through UNDER_CONSTRUCTION).
+# reference-data `code` — the four edges ADR-014 defines. No other
+# transition is legal.
 _STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "PLANNED": {"UNDER_CONSTRUCTION"},
-    "UNDER_CONSTRUCTION": {"ACTIVE"},
-    "ACTIVE": {"MOTHBALLED", "DECOMMISSIONED"},
-    "MOTHBALLED": {"ACTIVE", "DECOMMISSIONED"},
-    "DECOMMISSIONED": {"RETIRED"},
-    "RETIRED": set(),
+    "UNDER_CONSTRUCTION": {"ACTIVE", "ENTERED_IN_ERROR"},
+    "ACTIVE": {"DECOMMISSIONED", "ENTERED_IN_ERROR"},
+    "DECOMMISSIONED": set(),
+    "ENTERED_IN_ERROR": set(),
 }
 
-# "Create: always starts as Planned or Active (data migration/backfill
-# case)" — substation-registry.md §10. A creation-time exception, not a
-# transition; unchanged by ADR-005 (confirmed explicitly in that decision).
-_ALLOWED_INITIAL_STATUS_CODES = {"PLANNED", "ACTIVE"}
+# "Create: always starts as Under Construction or Active (data migration/
+# backfill case)" — substation-registry.md §10, revised by ADR-014. A
+# creation-time exception, not a transition; `Under Construction` replaces
+# the removed `Planned` as the "newly registered" entry point.
+_ALLOWED_INITIAL_STATUS_CODES = {"UNDER_CONSTRUCTION", "ACTIVE"}
 
 
 class SubstationService:
@@ -104,11 +114,14 @@ class SubstationService:
         self,
         *,
         region_id: int,
+        gm_zone_id: int,
         state_id: int,
         grid_owner_id: int,
     ) -> None:
         if self.reference_data.get_region(region_id) is None:
             raise ReferenceDataNotFoundError("region_id", region_id)
+        if self.reference_data.get_gm_zone(gm_zone_id) is None:
+            raise ReferenceDataNotFoundError("gm_zone_id", gm_zone_id)
         if self.reference_data.get_state(state_id) is None:
             raise ReferenceDataNotFoundError("state_id", state_id)
         if self.reference_data.get_grid_owner(grid_owner_id) is None:
@@ -180,6 +193,7 @@ class SubstationService:
         mnemonic: str,
         official_name: str,
         region_id: int,
+        gm_zone_id: int,
         state_id: int,
         grid_owner_id: int,
         operational_status_id: int,
@@ -197,6 +211,7 @@ class SubstationService:
         self._check_geolocation_pair(latitude, longitude)
         self._require_reference_data(
             region_id=region_id,
+            gm_zone_id=gm_zone_id,
             state_id=state_id,
             grid_owner_id=grid_owner_id,
         )
@@ -210,6 +225,7 @@ class SubstationService:
                 mnemonic=mnemonic,
                 official_name=official_name,
                 region_id=region_id,
+                gm_zone_id=gm_zone_id,
                 state_id=state_id,
                 grid_owner_id=grid_owner_id,
                 operational_status_id=operational_status_id,
@@ -234,19 +250,24 @@ class SubstationService:
         self,
         substation_id: uuid.UUID,
         *,
-        # mnemonic/official_name/region_id/state_id/grid_owner_id are
-        # never-null business fields: `None` unambiguously means "not
-        # supplied, leave unchanged." psse_bus_number/latitude/longitude/
-        # commissioned_date/remarks are genuinely nullable (clearing them is
-        # a valid request), so they default to the `...` (Ellipsis) sentinel
-        # instead — "not supplied" and "explicitly set to null" must stay
-        # distinguishable for those fields. voltage_level_id is deprecated
-        # (ADR-009) and no longer part of this method's update surface —
-        # SubstationVoltageYard (ADR-008) is the only way to change a
-        # substation's voltage level(s) now.
+        # mnemonic/official_name/region_id/gm_zone_id/state_id/
+        # grid_owner_id are never-null business fields: `None`
+        # unambiguously means "not supplied, leave unchanged." (gm_zone_id
+        # joined this group once migration 0016_gm_zone tightened it to
+        # NOT NULL — it can no longer be legally cleared, mirroring
+        # region_id/state_id/grid_owner_id exactly.) psse_bus_number/
+        # latitude/longitude/commissioned_date/remarks are genuinely
+        # nullable (clearing them is a valid request), so they default to
+        # the `...` (Ellipsis) sentinel instead — "not supplied" and
+        # "explicitly set to null" must stay distinguishable for those
+        # fields. voltage_level_id is deprecated (ADR-009) and no longer
+        # part of this method's update surface — SubstationVoltageYard
+        # (ADR-008) is the only way to change a substation's voltage
+        # level(s) now.
         mnemonic: str | None = None,
         official_name: str | None = None,
         region_id: int | None = None,
+        gm_zone_id: int | None = None,
         state_id: int | None = None,
         grid_owner_id: int | None = None,
         psse_bus_number: int | None = ...,
@@ -298,6 +319,19 @@ class SubstationService:
                 actor_user_id=actor_user_id,
             )
             substation.region_id = region_id
+            changed = True
+
+        if gm_zone_id is not None and gm_zone_id != substation.gm_zone_id:
+            if self.reference_data.get_gm_zone(gm_zone_id) is None:
+                raise ReferenceDataNotFoundError("gm_zone_id", gm_zone_id)
+            self._audit_field_change(
+                substation_id=substation_id,
+                field_name="gm_zone_id",
+                old_value=substation.gm_zone_id,
+                new_value=gm_zone_id,
+                actor_user_id=actor_user_id,
+            )
+            substation.gm_zone_id = gm_zone_id
             changed = True
 
         if state_id is not None and state_id != substation.state_id:
@@ -461,6 +495,7 @@ class SubstationService:
             mnemonic=substation.mnemonic,
             official_name=substation.official_name,
             region_id=substation.region_id,
+            gm_zone_id=substation.gm_zone_id,
             state_id=substation.state_id,
             grid_owner_id=substation.grid_owner_id,
             operational_status_id=substation.operational_status_id,
@@ -481,6 +516,7 @@ class SubstationService:
         page: int,
         page_size: int,
         region_id: int | None = None,
+        gm_zone_id: int | None = None,
         state_id: int | None = None,
         grid_owner_id: int | None = None,
         operational_status_id: int | None = None,
@@ -490,6 +526,7 @@ class SubstationService:
             offset=(page - 1) * page_size,
             limit=page_size,
             region_id=region_id,
+            gm_zone_id=gm_zone_id,
             state_id=state_id,
             grid_owner_id=grid_owner_id,
             operational_status_id=operational_status_id,

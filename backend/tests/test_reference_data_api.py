@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.modules.iam.bootstrap import run_bootstrap as bootstrap_iam
 from app.reference_data.seed import (
+    GM_ZONES,
     TRANSFORMER_BREAKER_NUMBERING_CONVENTIONS,
     run_seed,
 )
@@ -64,3 +65,29 @@ def test_transformer_breaker_numbering_conventions_returns_every_seeded_row(
         assert isinstance(row["hv_voltage_level_id"], int)
         assert isinstance(row["lv_voltage_level_id"], int)
         assert row["side"] in ("HV", "LV")
+
+
+def test_gm_zones_requires_authentication(client: TestClient) -> None:
+    response = client.get("/api/v1/reference-data/gm-zones")
+    assert response.status_code == 401
+
+
+def test_gm_zones_returns_every_seeded_row(client: TestClient, db_session: Session) -> None:
+    run_seed(db_session)
+    token = _admin_token(client, db_session)
+
+    response = client.get(
+        "/api/v1/reference-data/gm-zones",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body) == len(GM_ZONES)
+    labels = {row["label"] for row in body}
+    assert "Alor Setar" in labels
+    assert "Kota Bharu" in labels
+    # A GM Zone row carries only its own identity — never a region_id or
+    # any other coupling to `region` (the two are deliberately independent
+    # attributes on Substation, not linked reference tables).
+    for row in body:
+        assert set(row.keys()) == {"gm_zone_id", "code", "label"}

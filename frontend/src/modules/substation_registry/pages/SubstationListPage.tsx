@@ -24,17 +24,19 @@ export function SubstationListPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [regionId, setRegionId] = useState<string>("");
+  const [gmZoneId, setGmZoneId] = useState<string>("");
   const [statusId, setStatusId] = useState<string>("");
   const pageSize = 20;
 
   const substationsQuery = useQuery({
-    queryKey: ["substations", { page, search, regionId, statusId }],
+    queryKey: ["substations", { page, search, regionId, gmZoneId, statusId }],
     queryFn: () =>
       substationRegistryApi.listSubstations({
         page,
         page_size: pageSize,
         search: search || undefined,
         region_id: regionId ? Number(regionId) : undefined,
+        gm_zone_id: gmZoneId ? Number(gmZoneId) : undefined,
         operational_status_id: statusId ? Number(statusId) : undefined,
       }),
   });
@@ -48,6 +50,15 @@ export function SubstationListPage() {
     queryKey: ["voltage-yards"],
     queryFn: () => equipmentRegistryApi.listVoltageYards(),
   });
+  // Substation lifecycle statuses (substation-registry.md §10, ADR-014) —
+  // Planned/Mothballed/Retired remain seeded `operational_status` rows for
+  // Equipment Registry's own, independent status model and may still
+  // appear on legacy Substation rows created before this filter list was
+  // tightened, but are no longer offered as a *filter* choice going
+  // forward — "All statuses" (no filter) still returns any legacy rows.
+  const substationStatusFilterOptions = referenceData.operationalStatuses.filter((status) =>
+    ["UNDER_CONSTRUCTION", "ACTIVE", "DECOMMISSIONED", "ENTERED_IN_ERROR"].includes(status.code),
+  );
   const voltageYardLabelsBySubstationId = new Map<string, string[]>();
   for (const yard of voltageYardsQuery.data ?? []) {
     const existing = voltageYardLabelsBySubstationId.get(yard.substation_id) ?? [];
@@ -68,6 +79,10 @@ export function SubstationListPage() {
     columnHelper.accessor("region_id", {
       header: "Region",
       cell: (info) => referenceData.regionsById.get(info.getValue())?.label ?? info.getValue(),
+    }),
+    columnHelper.accessor("gm_zone_id", {
+      header: "GM Zone",
+      cell: (info) => referenceData.gmZonesById.get(info.getValue())?.label ?? info.getValue(),
     }),
     columnHelper.accessor("grid_owner_id", {
       header: "Owner",
@@ -121,6 +136,21 @@ export function SubstationListPage() {
           ))}
         </select>
         <select
+          aria-label="Filter by GM Zone"
+          value={gmZoneId}
+          onChange={(e) => {
+            setGmZoneId(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">All GM Zones</option>
+          {referenceData.gmZones.map((zone) => (
+            <option key={zone.gm_zone_id} value={zone.gm_zone_id}>
+              {zone.label}
+            </option>
+          ))}
+        </select>
+        <select
           aria-label="Filter by status"
           value={statusId}
           onChange={(e) => {
@@ -129,7 +159,7 @@ export function SubstationListPage() {
           }}
         >
           <option value="">All statuses</option>
-          {referenceData.operationalStatuses.map((status) => (
+          {substationStatusFilterOptions.map((status) => (
             <option key={status.operational_status_id} value={status.operational_status_id}>
               {status.label}
             </option>

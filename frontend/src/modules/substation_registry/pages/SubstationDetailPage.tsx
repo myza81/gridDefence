@@ -248,6 +248,10 @@ export function SubstationDetailPage() {
 
   const [mnemonic, setMnemonic] = useState("");
   const [officialName, setOfficialName] = useState("");
+  const [regionId, setRegionId] = useState("");
+  const [gmZoneId, setGmZoneId] = useState("");
+  const [stateId, setStateId] = useState("");
+  const [gridOwnerId, setGridOwnerId] = useState("");
   const [remarks, setRemarks] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -255,6 +259,10 @@ export function SubstationDetailPage() {
     if (substationQuery.data) {
       setMnemonic(substationQuery.data.mnemonic);
       setOfficialName(substationQuery.data.official_name);
+      setRegionId(String(substationQuery.data.region_id));
+      setGmZoneId(String(substationQuery.data.gm_zone_id));
+      setStateId(String(substationQuery.data.state_id));
+      setGridOwnerId(String(substationQuery.data.grid_owner_id));
       setRemarks(substationQuery.data.remarks ?? "");
     }
   }, [substationQuery.data]);
@@ -268,6 +276,10 @@ export function SubstationDetailPage() {
       substationRegistryApi.updateSubstation(substationId!, {
         mnemonic,
         official_name: officialName,
+        region_id: Number(regionId),
+        gm_zone_id: Number(gmZoneId),
+        state_id: Number(stateId),
+        grid_owner_id: Number(gridOwnerId),
         remarks: remarks || null,
       }),
     onSuccess: () => {
@@ -357,6 +369,13 @@ export function SubstationDetailPage() {
   // §7.5a), but an unfiltered dropdown lets a user pick an already-used
   // level on their very first attempt with no way to know it will fail
   // (found during Phase 3 UAT).
+  // Substation lifecycle statuses (substation-registry.md §10, ADR-014) —
+  // Planned/Mothballed/Retired remain seeded `operational_status` rows for
+  // Equipment Registry's own, independent status model, but are no longer
+  // legal for a Substation.
+  const substationStatusOptions = referenceData.operationalStatuses.filter((status) =>
+    ["UNDER_CONSTRUCTION", "ACTIVE", "DECOMMISSIONED", "ENTERED_IN_ERROR"].includes(status.code),
+  );
   const usedVoltageLevelIds = new Set((voltageYardsQuery.data ?? []).map((y) => y.voltage_level_id));
   const availableVoltageLevelsForNewYard = referenceData.voltageLevels.filter(
     (level) => !usedVoltageLevelIds.has(level.voltage_level_id),
@@ -370,6 +389,8 @@ export function SubstationDetailPage() {
         <dd>{substation.mnemonic}</dd>
         <dt>Region</dt>
         <dd>{referenceData.regionsById.get(substation.region_id)?.label}</dd>
+        <dt>GM Zone</dt>
+        <dd>{referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? "—"}</dd>
         <dt>State</dt>
         <dd>{referenceData.statesById.get(substation.state_id)?.label}</dd>
         <dt>Grid owner</dt>
@@ -407,6 +428,74 @@ export function SubstationDetailPage() {
               />
             </div>
             <div>
+              <label htmlFor="edit-region">Region</label>
+              <br />
+              <select
+                id="edit-region"
+                value={regionId}
+                onChange={(e) => setRegionId(e.target.value)}
+                required
+              >
+                <option value="">Select...</option>
+                {referenceData.regions.map((region) => (
+                  <option key={region.region_id} value={region.region_id}>
+                    {region.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="edit-gm-zone">GM Zone</label>
+              <br />
+              <select
+                id="edit-gm-zone"
+                value={gmZoneId}
+                onChange={(e) => setGmZoneId(e.target.value)}
+                required
+              >
+                <option value="">Select...</option>
+                {referenceData.gmZones.map((zone) => (
+                  <option key={zone.gm_zone_id} value={zone.gm_zone_id}>
+                    {zone.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="edit-state">State</label>
+              <br />
+              <select
+                id="edit-state"
+                value={stateId}
+                onChange={(e) => setStateId(e.target.value)}
+                required
+              >
+                <option value="">Select...</option>
+                {referenceData.states.map((state) => (
+                  <option key={state.state_id} value={state.state_id}>
+                    {state.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="edit-grid-owner">Grid owner</label>
+              <br />
+              <select
+                id="edit-grid-owner"
+                value={gridOwnerId}
+                onChange={(e) => setGridOwnerId(e.target.value)}
+                required
+              >
+                <option value="">Select...</option>
+                {referenceData.gridOwners.map((owner) => (
+                  <option key={owner.grid_owner_id} value={owner.grid_owner_id}>
+                    {owner.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
               <label htmlFor="edit-remarks">Remarks</label>
               <br />
               <textarea
@@ -430,7 +519,7 @@ export function SubstationDetailPage() {
               required
             >
               <option value="">Select new status...</option>
-              {referenceData.operationalStatuses.map((status) => (
+              {substationStatusOptions.map((status) => (
                 <option key={status.operational_status_id} value={status.operational_status_id}>
                   {status.label}
                 </option>

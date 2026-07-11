@@ -17,7 +17,14 @@ from sqlalchemy.orm import Session
 from app.modules.iam.bootstrap import run_bootstrap as bootstrap_iam
 from app.modules.iam.service import IAMService
 from app.modules.substation_registry.bootstrap import run_bootstrap as bootstrap_permissions
-from app.reference_data.models import GridOwner, OperationalStatus, Region, State, VoltageLevel
+from app.reference_data.models import (
+    GmZone,
+    GridOwner,
+    OperationalStatus,
+    Region,
+    State,
+    VoltageLevel,
+)
 from app.reference_data.seed import run_seed
 
 
@@ -25,6 +32,7 @@ from app.reference_data.seed import run_seed
 class ReferenceIds:
     voltage_level_id: int
     region_id: int
+    gm_zone_id: int
     state_id: int
     grid_owner_id: int
     status_id_by_code: dict[str, int]
@@ -37,6 +45,7 @@ def reference_ids(db_session: Session) -> ReferenceIds:
 
     voltage_level = db_session.query(VoltageLevel).filter_by(label="500kV").one()
     region = db_session.query(Region).filter_by(code="NORTH").one()
+    gm_zone = db_session.query(GmZone).filter_by(code="ALOR_SETAR").one()
     state = db_session.query(State).filter_by(code="SEL").one()
     grid_owner = db_session.query(GridOwner).filter_by(code="TNB").one()
     statuses = {s.code: s.operational_status_id for s in db_session.query(OperationalStatus).all()}
@@ -44,6 +53,7 @@ def reference_ids(db_session: Session) -> ReferenceIds:
     return ReferenceIds(
         voltage_level_id=voltage_level.voltage_level_id,
         region_id=region.region_id,
+        gm_zone_id=gm_zone.gm_zone_id,
         state_id=state.state_id,
         grid_owner_id=grid_owner.grid_owner_id,
         status_id_by_code=statuses,

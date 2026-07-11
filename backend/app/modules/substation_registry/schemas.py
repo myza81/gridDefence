@@ -19,6 +19,11 @@ class SubstationCreate(BaseModel):
     mnemonic: str = Field(min_length=1, max_length=10)
     official_name: str = Field(min_length=1, max_length=150)
     region_id: int
+    # GM Zone — organizational maintenance responsibility, independent of
+    # region_id (substation-registry.md GM Zone status update). Required,
+    # exactly like region_id — every Substation shall reference exactly
+    # one GM Zone.
+    gm_zone_id: int
     state_id: int
     grid_owner_id: int
     operational_status_id: int
@@ -40,6 +45,7 @@ class SubstationUpdate(BaseModel):
     mnemonic: str | None = Field(default=None, min_length=1, max_length=10)
     official_name: str | None = Field(default=None, min_length=1, max_length=150)
     region_id: int | None = None
+    gm_zone_id: int | None = None
     state_id: int | None = None
     grid_owner_id: int | None = None
     psse_bus_number: int | None = None
@@ -63,6 +69,7 @@ class SubstationSummary(BaseModel):
     mnemonic: str
     official_name: str
     region_id: int
+    gm_zone_id: int
     state_id: int
     grid_owner_id: int
     operational_status_id: int
@@ -83,6 +90,7 @@ class SubstationDetail(BaseModel):
     mnemonic: str
     official_name: str
     region_id: int
+    gm_zone_id: int
     state_id: int
     grid_owner_id: int
     operational_status_id: int

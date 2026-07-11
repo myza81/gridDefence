@@ -23,6 +23,7 @@ from app.modules.iam.dependencies import get_current_user
 from app.modules.iam.models import User
 from app.reference_data.repository import ReferenceDataRepository
 from app.reference_data.schemas import (
+    GmZoneSummary,
     GridOwnerSummary,
     LineTypeSummary,
     OperationalStatusSummary,
@@ -47,6 +48,13 @@ def list_regions(
     db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
 ) -> list[RegionSummary]:
     return ReferenceDataRepository(db).list_regions()
+
+
+@router.get("/gm-zones", response_model=list[GmZoneSummary])
+def list_gm_zones(
+    db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> list[GmZoneSummary]:
+    return ReferenceDataRepository(db).list_gm_zones()
 
 
 @router.get("/states", response_model=list[StateSummary])

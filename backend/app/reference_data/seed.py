@@ -9,6 +9,9 @@ Source values:
 - region: the illustrative region groupings named in substation-registry.md
   §6 ("e.g. Northern, Central, Southern, Eastern"), matching the legacy
   MVP's North/Central/South/East grouping (Codebase Discovery Report).
+- gm_zone: the twelve Grid Maintenance Zones named explicitly by the
+  Project Owner for the Substation Registry GM Zone enhancement — purely
+  organizational (maintenance responsibility), independent of `region`.
 - grid_owner: the six ownership classes named explicitly in
   implementation-plan.md §6 ("TNB/DC/LSS/IPP/LPC/Tie-Line").
 - operational_status: the six lifecycle states named in substation-registry.md
@@ -38,6 +41,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.reference_data.models import (
+    GmZone,
     GridOwner,
     LineType,
     OperationalStatus,
@@ -68,6 +72,32 @@ REGIONS: list[dict[str, str]] = [
     {"code": "CENTRAL", "label": "Central"},
     {"code": "SOUTH", "label": "Southern"},
     {"code": "EAST", "label": "Eastern"},
+]
+
+# Added by the Substation Registry GM Zone enhancement (Project Owner-
+# approved) — Grid Maintenance Zone, the organizational maintenance zone
+# responsible for a substation. Independent of `region` (a grid-planning
+# grouping); a `Region` typically contains several GM Zones (the
+# illustrative mapping the Project Owner supplied: Northern -> Alor Setar/
+# Butterworth/Ipoh, Central -> Selangor/Kuala Lumpur, Southern -> Seremban/
+# Ayer Keroh/Kluang/Johor Bahru, East Coast -> Kuantan/Dungun/Kota Bharu).
+# That Region grouping is not enforced by any FK or constraint — GM Zone
+# and Region remain two independently-assigned attributes on Substation,
+# per the Project Owner's explicit instruction that they "must remain
+# separate."
+GM_ZONES: list[dict[str, str]] = [
+    {"code": "ALOR_SETAR", "label": "Alor Setar"},
+    {"code": "BUTTERWORTH", "label": "Butterworth"},
+    {"code": "IPOH", "label": "Ipoh"},
+    {"code": "SELANGOR", "label": "Selangor"},
+    {"code": "KUALA_LUMPUR", "label": "Kuala Lumpur"},
+    {"code": "SEREMBAN", "label": "Seremban"},
+    {"code": "AYER_KEROH", "label": "Ayer Keroh"},
+    {"code": "KLUANG", "label": "Kluang"},
+    {"code": "JOHOR_BAHRU", "label": "Johor Bahru"},
+    {"code": "KUANTAN", "label": "Kuantan"},
+    {"code": "DUNGUN", "label": "Dungun"},
+    {"code": "KOTA_BHARU", "label": "Kota Bharu"},
 ]
 
 # Assumption (see module docstring) — the 11 Peninsular Malaysia states plus
@@ -236,6 +266,17 @@ def _seed_regions(db: Session) -> int:
     return created
 
 
+def _seed_gm_zones(db: Session) -> int:
+    existing = {z.code for z in db.query(GmZone).all()}
+    created = 0
+    for row in GM_ZONES:
+        if row["code"] in existing:
+            continue
+        db.add(GmZone(**row))
+        created += 1
+    return created
+
+
 def _seed_states(db: Session) -> int:
     existing = {s.code for s in db.query(State).all()}
     created = 0
@@ -334,6 +375,7 @@ def run_seed(db: Session) -> dict[str, int]:
     counts = {
         "voltage_level": voltage_level_count,
         "region": _seed_regions(db),
+        "gm_zone": _seed_gm_zones(db),
         "state": _seed_states(db),
         "grid_owner": _seed_grid_owners(db),
         "operational_status": _seed_operational_statuses(db),
