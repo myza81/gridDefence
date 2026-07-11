@@ -1,6 +1,6 @@
 # EDR-008: The Sensitive Customer Registry Maintains Facility Engineering Knowledge, Not Scheme Decisions or Customer Relationships
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented (Phase 3.7)
 - **Governing document:** [01-engineering-philosophy.md](../01-engineering-philosophy.md) §5 (Step 4 — Sensitive Customer Review); [02-engineering-concepts.md](../02-engineering-concepts.md) — Sensitive Customer, Sensitive Customer Review
 - **Related:** [EDR-003](EDR-003-relay-registry-scope.md) (the parallel scope-discipline precedent for the registry now realized as the Automatic Load Shedding Functionality Registry); [03-system-workflow.md](../03-system-workflow.md); `docs/architecture/critical-infrastructure-module.md`; `docs/architecture/sensitive-customer-registry-module.md` (companion document); [ADR-012](../../adr/ADR-012-sensitive-customer-registry-architecture.md) (the architecture decision this EDR's scope feeds)
 

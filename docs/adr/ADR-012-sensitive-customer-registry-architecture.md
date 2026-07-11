@@ -1,6 +1,6 @@
 # ADR-012: Sensitive Customer Registry — Independent Bounded Context, Designed for Multi-Application Reuse
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented (Phase 3.7)
 - **Date:** 2026-07-10
 - **Governing standard:** [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) v1.1 (§5.1, §6, §7, §8, §11.3, §11.5, §11.6, §20, §21, A1, A2, A5, A7, A8, F6)
 - **Depends on:** [ADR-000](ADR-000-architecture-principles.md), [ADR-001](ADR-001-modular-monolith-and-module-communication.md), [ADR-007](ADR-007-canonical-engineering-reference-object.md) (Transformer Terminal as the canonical Bay-level reference target), [ADR-011](ADR-011-automatic-load-shedding-functionality-registry.md) (the immediately preceding Engineering Registry addition — the closest structural precedent, including its Future Integration Contract seam pattern)

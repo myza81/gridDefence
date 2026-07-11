@@ -32,6 +32,7 @@ from app.modules.equipment_registry.schemas import (
     TransformerCreate,
     TransformerDetail,
     TransformerPage,
+    TransformerTerminalIdentity,
     TransformerUpdate,
     VoltageYardAuditLogPage,
     VoltageYardCreate,
@@ -45,6 +46,9 @@ from app.modules.iam.models import User
 router = APIRouter(prefix="/circuits", tags=["equipment-registry"])
 voltage_yard_router = APIRouter(prefix="/voltage-yards", tags=["equipment-registry"])
 transformer_router = APIRouter(prefix="/transformers", tags=["equipment-registry"])
+transformer_terminal_router = APIRouter(
+    prefix="/transformer-terminals", tags=["equipment-registry"]
+)
 
 
 def _error_response(exc: AppError) -> HTTPException:
@@ -393,6 +397,28 @@ def list_transformer_audit_log(
         transformer_id, page=page, page_size=page_size
     )
     return TransformerAuditLogPage(items=items, page=page, page_size=page_size, total=total)
+
+
+# --- Transformer Terminal (Phase 3.7 UAT refinement) ---------------------------------
+#
+# Exposed as its own top-level resource, `/transformer-terminals`, not nested under
+# `/transformers/{id}/terminals` — mirroring `voltage_yard_router`'s own established
+# precedent (`/voltage-yards`, not `/substations/{id}/voltage-yards`): both
+# `VoltageYard` and `TransformerTerminal` are entities a caller needs to browse or
+# filter *across* their parent, not only within the context of one already-selected
+# parent. This is different in kind from `CircuitTerminal`
+# (`/circuits/{circuit_id}/terminals`), which stays path-nested because a Circuit
+# Terminal is only ever meaningful, added, or edited in the context of one specific
+# Circuit already being viewed. The engineering resource here is "Transformer
+# Terminal" itself, not "a Transformer's terminals" — the URL now says so directly.
+
+
+@transformer_terminal_router.get("", response_model=list[TransformerTerminalIdentity])
+def list_transformer_terminal_identities(
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    _current_user: User = Depends(get_current_user),
+) -> list[TransformerTerminalIdentity]:
+    return service.list_transformer_terminal_identities()
 
 
 @voltage_yard_router.patch("/{voltage_yard_id}", response_model=VoltageYardSummary)

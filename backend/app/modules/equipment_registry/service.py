@@ -1407,6 +1407,56 @@ class EquipmentRegistryService:
             voltage_level_label=terminal_summary.voltage_level_label,
         )
 
+    def list_transformer_terminal_identities(self) -> list[TransformerTerminalIdentity]:
+        """Every Transformer Terminal across every substation, with full
+        composed identity — for cross-module pickers (e.g. the Sensitive
+        Customer Registry's multi-select, ADR-013) that must not require a
+        substation/transformer to be chosen first. Unpaginated (see
+        `list_all_transformer_terminals`'s own docstring). Ordered by
+        substation, voltage level, transformer short name, then side, so a
+        picker presents terminals grouped in the order an engineer
+        expects, without needing to re-sort itself."""
+        terminals = self.repo.list_all_transformer_terminals()
+        terminal_summaries = {
+            s.transformer_terminal_id: s for s in self._transformer_terminal_summaries(terminals)
+        }
+        transformer_details: dict[uuid.UUID, TransformerDetail] = {}
+        for transformer_id in {t.transformer_id for t in terminals}:
+            detail = self.get_transformer(transformer_id)
+            if detail is not None:
+                transformer_details[transformer_id] = detail
+
+        identities: list[TransformerTerminalIdentity] = []
+        for terminal in terminals:
+            summary = terminal_summaries.get(terminal.transformer_terminal_id)
+            transformer_detail = transformer_details.get(terminal.transformer_id)
+            if summary is None or transformer_detail is None:
+                continue
+            identities.append(
+                TransformerTerminalIdentity(
+                    transformer_terminal_id=terminal.transformer_terminal_id,
+                    transformer_id=terminal.transformer_id,
+                    generated_short_name=transformer_detail.generated_short_name,
+                    transformer_number=transformer_detail.transformer_number,
+                    side=summary.side,
+                    breaker_number=summary.breaker_number,
+                    substation_id=summary.substation_id,
+                    substation_mnemonic=summary.substation_mnemonic,
+                    substation_official_name=summary.substation_official_name,
+                    voltage_level_id=summary.voltage_level_id,
+                    voltage_level_label=summary.voltage_level_label,
+                )
+            )
+        identities.sort(
+            key=lambda i: (
+                i.substation_mnemonic,
+                i.voltage_level_label,
+                i.generated_short_name,
+                i.side,
+            )
+        )
+        return identities
+
     def get_transformer(self, transformer_id: uuid.UUID) -> TransformerDetail | None:
         transformer = self.repo.get_transformer_by_id(transformer_id)
         if transformer is None:

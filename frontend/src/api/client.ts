@@ -132,6 +132,8 @@ export const apiClient = {
     request<TResponse>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <TResponse>(path: string, body?: unknown) =>
     request<TResponse>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
+  put: <TResponse>(path: string, body?: unknown) =>
+    request<TResponse>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <TResponse>(path: string) => request<TResponse>(path, { method: "DELETE" }),
   postForm: <TResponse>(path: string, formData: FormData) => requestForm<TResponse>(path, formData),
 };

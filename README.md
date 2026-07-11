@@ -148,7 +148,11 @@ python -m app.modules.equipment_registry.bootstrap     # registers equipment_reg
 python -m app.modules.psse_integration.bootstrap       # registers psse_integration.read/.import/.activate, grants to baseline roles
 python -m app.modules.network_model.bootstrap          # registers network_model.read, grants to baseline roles
 python -m app.modules.automatic_load_shedding_functionality.bootstrap  # registers automatic_load_shedding_functionality.read/.write, grants to baseline roles
+python -m app.modules.sensitive_customer_registry.seed                # facility_sector, sensitivity_classification (module-owned reference data)
+python -m app.modules.sensitive_customer_registry.bootstrap           # registers sensitive_customer_registry.read/.write/.manage_reference_data, grants to baseline roles
 ```
+
+**Sensitive Customer Registry needs both a seed step and a bootstrap step, in that order** — unlike every other module above, its `facility_sector`/`sensitivity_classification` reference data is module-owned, not part of `app/reference_data/seed.py` (ADR-012 decision 3). Skipping the seed step does not fail silently: the first attempt to create a Sensitive Facility record raises a `ReferenceDataNotSeededError` naming the exact command to run (sensitive-customer-registry-implementation-spec.md §13).
 
 Every business module added in a future phase gets its own `bootstrap.py` following this same pattern — add its command to this list when that phase ships. **This list itself has previously fallen out of date** (see the incident notes below) — when in doubt, run every `bootstrap.py` under `app/modules/*/bootstrap.py`, not just the ones listed here; all are idempotent. All commands are idempotent (safe to re-run against an already-bootstrapped database) and order-tolerant except that `iam.bootstrap` must run before a business module's own bootstrap can actually grant its permissions to a role (a module's bootstrap run before IAM's own will register the permission but skip the role grants, logging a warning — re-running it afterward completes the grants, per each `bootstrap.py`'s own docstring).
 

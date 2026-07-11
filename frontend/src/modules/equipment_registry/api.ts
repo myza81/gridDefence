@@ -13,6 +13,7 @@ import type {
   TransformerCreate,
   TransformerDetail,
   TransformerPage,
+  TransformerTerminalIdentity,
   TransformerUpdate,
   VoltageYardAuditLogPage,
   VoltageYardCreate,
@@ -106,4 +107,6 @@ export const equipmentRegistryApi = {
     apiClient.get<TransformerAuditLogPage>(
       `/api/v1/transformers/${transformerId}/audit-log?page=${page}&page_size=${pageSize}`,
     ),
+  listTransformerTerminalIdentities: () =>
+    apiClient.get<TransformerTerminalIdentity[]>("/api/v1/transformer-terminals"),
 };

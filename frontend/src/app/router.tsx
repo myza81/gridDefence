@@ -30,6 +30,11 @@ import { PsseEquipmentTopologyMapPage } from "../modules/psse_integration/pages/
 import { PsseImportHistoryPage } from "../modules/psse_integration/pages/PsseImportHistoryPage";
 import { PsseImportUploadPage } from "../modules/psse_integration/pages/PsseImportUploadPage";
 import { PsseOperationalContextInspectorPage } from "../modules/psse_integration/pages/PsseOperationalContextInspectorPage";
+import { FacilityCreatePage } from "../modules/sensitive_customer_registry/pages/FacilityCreatePage";
+import { FacilityDetailPage } from "../modules/sensitive_customer_registry/pages/FacilityDetailPage";
+import { FacilityListPage } from "../modules/sensitive_customer_registry/pages/FacilityListPage";
+import { FacilitySectorAdminPage } from "../modules/sensitive_customer_registry/pages/FacilitySectorAdminPage";
+import { SensitivityClassificationAdminPage } from "../modules/sensitive_customer_registry/pages/SensitivityClassificationAdminPage";
 import { SubstationCreatePage } from "../modules/substation_registry/pages/SubstationCreatePage";
 import { SubstationDetailPage } from "../modules/substation_registry/pages/SubstationDetailPage";
 import { SubstationListPage } from "../modules/substation_registry/pages/SubstationListPage";
@@ -188,6 +193,56 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <FunctionalityDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/sensitive-customer-registry",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FacilityListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/sensitive-customer-registry/new",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FacilityCreatePage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/sensitive-customer-registry/reference-data/facility-sectors",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FacilitySectorAdminPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/sensitive-customer-registry/reference-data/sensitivity-classifications",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <SensitivityClassificationAdminPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/sensitive-customer-registry/:facilityId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <FacilityDetailPage />
         </ProtectedRoute>
       </AppShell>
     ),

@@ -492,6 +492,18 @@ class EquipmentRegistryRepository:
         )
         return list(self.db.execute(stmt).scalars().all())
 
+    def list_all_transformer_terminals(self) -> list[TransformerTerminal]:
+        """Every Transformer Terminal across every substation, unfiltered
+        and unpaginated — for cross-module pickers that need full identity
+        without requiring a substation/transformer to be chosen first
+        (e.g. the Sensitive Customer Registry's multi-select, ADR-013).
+        Acceptable unpaginated for a modestly-sized, manually-maintained
+        equipment registry (CLAUDE.md §21), mirroring this module's own
+        `list_facility_sectors`-style "list all" precedent elsewhere in
+        this codebase."""
+        stmt = select(TransformerTerminal).order_by(TransformerTerminal.transformer_id)
+        return list(self.db.execute(stmt).scalars().all())
+
     def list_transformer_terminals_for_transformers(
         self, transformer_ids: set[uuid.UUID]
     ) -> dict[uuid.UUID, list[TransformerTerminal]]:

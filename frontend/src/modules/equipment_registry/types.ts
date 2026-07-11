@@ -223,6 +223,27 @@ export interface TransformerTerminalSummary {
   breaker_number: string;
 }
 
+/** Full composed identity of one Transformer Terminal, across every
+ * substation — used by cross-module pickers (e.g. the Sensitive Customer
+ * Registry's multi-select, ADR-013) that must not require a substation or
+ * transformer to be chosen first. Returned unpaginated by
+ * `GET /transformer-terminals` — exposed as its own top-level resource,
+ * mirroring `VoltageYard`'s own `/voltage-yards` precedent, not nested
+ * under `/transformers/{id}/terminals` (Phase 3.7 UAT refinement). */
+export interface TransformerTerminalIdentity {
+  transformer_terminal_id: string;
+  transformer_id: string;
+  generated_short_name: string;
+  transformer_number: string;
+  side: "HV" | "LV";
+  breaker_number: string;
+  substation_id: string;
+  substation_mnemonic: string;
+  substation_official_name: string;
+  voltage_level_id: number;
+  voltage_level_label: string;
+}
+
 export interface TransformerSummary {
   transformer_id: string;
   substation_id: string;

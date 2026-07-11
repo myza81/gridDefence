@@ -11,6 +11,208 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Phase 3.7 — Sensitive Customer Registry
+
+**Scope:** A new, dedicated Engineering Registry module answering, per Transformer Terminal,
+"would operating this bay affect a facility that deserves special engineering consideration, and
+how sensitive is it?" —
+[`docs/architecture/sensitive-customer-registry-module.md`](docs/architecture/sensitive-customer-registry-module.md),
+[ADR-012](docs/adr/ADR-012-sensitive-customer-registry-architecture.md),
+[EDR-008](docs/engineering/edr/EDR-008-sensitive-customer-registry-scope.md). Unlike every other
+module in this series, this registry is explicitly designed from inception to remain reusable by
+future engineering applications that have never heard of GridDefence, UFLS, UVLS, or EMLS —
+no scheme-specific vocabulary appears anywhere in its owned entities or service interface.
+
+**Backend**
+
+- New module `app/modules/sensitive_customer_registry/`: `models.py` (`SensitiveFacility`,
+  `FacilitySector`, `SensitivityClassification`, `SensitiveCustomerRegistryAuditLog`),
+  `schemas.py`, `service.py`, `repository.py`, `router.py`, `bootstrap.py`, `seed.py`,
+  `exceptions.py`, `dependencies.py`.
+- **One record per physical facility** (`SensitiveFacility`), referencing at most one *current*
+  Transformer Terminal by ID (nullable — a facility may be registered before its supply point is
+  confirmed), never Equipment Registry's attributes directly (CLAUDE.md A1). **No uniqueness
+  constraint on the terminal reference** — the deliberate inverse of ALSF's own per-terminal
+  uniqueness rule: many facilities may legitimately share one bay.
+- **`FacilitySector` and `SensitivityClassification` as module-owned, admin-editable reference
+  data** — the first implemented precedent of this pattern in this codebase (Critical
+  Infrastructure's parallel `CriticalityLevel` remains unimplemented). Seeded with the eight
+  approved sectors and three approved classifications
+  (`python -m app.modules.sensitive_customer_registry.seed`); `code` is immutable after creation,
+  `label`/`sort_order`/`description`/`is_active` are editable; no `DELETE` endpoint exists for
+  either table — deactivation is the only retirement path.
+- **Lifecycle: `Active ⇄ Archived → Entered in Error`** — deliberately not ALSF's
+  `DECOMMISSIONED` vocabulary. `Active → Archived` is reversible (unlike ALSF's terminal
+  decommission); `Entered in Error` is terminal, reachable from either prior state, no exceptions.
+  Every transition requires a non-empty, audited reason.
+- **A `transformer_terminal_resolution` field (`NOT_ASSIGNED`/`RESOLVED`/`UNRESOLVED`) is reported
+  independently of `lifecycle_status` on every read** — a facility is never omitted from
+  `list_facilities`/`get_facility_detail`/any lookup merely because its Transformer Terminal
+  cannot currently be resolved through Equipment Registry; the condition is surfaced as
+  information instead of hidden.
+- **Reassigning a facility's Transformer Terminal association requires a mandatory, non-empty
+  reason** — stricter than ALSF's optional-reason-on-metadata-edit convention, producing one
+  audit row containing the previous terminal ID, new terminal ID, reason, actor, and timestamp.
+- **Batch and single-terminal lookup service interfaces**
+  (`get_sensitive_facilities_for_transformer_terminal(s)`, `has_sensitive_facility`) for future
+  UFLS/UVLS/EMLS Sensitive Customer Review consumption — the batch contract resolves entirely
+  against this module's own table (no cross-module call on the read path), so every requested
+  terminal ID always receives a result, with no partial-failure mode.
+- **Permissions — Administrator-only mutation**, a deliberate departure from ALSF's own
+  Administrator+Engineer `.write` precedent: this registry is global authoritative engineering
+  knowledge that scheme engineers consume but do not own. `sensitive_customer_registry.read`
+  (Administrator + Engineer — gated, not open to every authenticated user, unlike ALSF's own
+  read permission), `.write` (Administrator only — create/edit/reassign/lifecycle actions),
+  `.manage_reference_data` (Administrator only — sector/classification administration). No new
+  role introduced.
+- New endpoints under `/api/v1/sensitive-customer-registry`: facility list/create/detail/update,
+  `/archive`, `/reactivate`, `/entered-in-error`, `/audit-log`, `/facilities/summary`,
+  `/facilities/batch-lookup`, `/facilities/by-transformer-terminal/{id}`, plus
+  `/reference-data/facility-sectors` and `/reference-data/sensitivity-classifications`
+  (list/create/update).
+- Migration `0015_sensitive_customer_registry` — hand-written, manually reviewed, verified
+  `upgrade → downgrade → upgrade` against real PostgreSQL.
+
+**Frontend**
+
+- New module `frontend/src/modules/sensitive_customer_registry/` (`types.ts`, `api.ts`,
+  `displayHelpers.ts`) plus 5 pages under `pages/`: `FacilityListPage` (filterable registry list
+  with a lightweight in-module summary strip — active/archived/entered-in-error/unresolved-
+  terminal counts), `FacilityCreatePage`, `FacilityDetailPage` (detail, metadata edit, and all
+  three lifecycle actions), `FacilitySectorAdminPage`, `SensitivityClassificationAdminPage`
+  (reference-data administration, gated by `.manage_reference_data`).
+- **A stale/unresolved Transformer Terminal reference is always rendered as an explicit notice**
+  ("Terminal could not be resolved"), never a blank cell or a silently-omitted row — the frontend
+  counterpart of the backend's `transformer_terminal_resolution` field.
+- Wired into `router.tsx` (`/sensitive-customer-registry`, `/new`, `/:facilityId`,
+  `/reference-data/facility-sectors`, `/reference-data/sensitivity-classifications`) and
+  `AppShell.tsx`'s nav ("Sensitive Customer Registry").
+
+**Tests**
+
+- Backend: 36 service-layer tests (`test_service.py` — creation/validation, reference-data
+  administration, the multi-facility-per-terminal regression test, mandatory-reason reassignment
+  auditing, all four lifecycle transitions plus the `Entered in Error` terminal-state prohibition,
+  stale-terminal-never-omitted behaviour, deterministic audit ordering for same-timestamp rows,
+  the seed-vs-service actor-nullability boundary, batch-lookup completeness, the no-cross-module-
+  import architectural test), 7 bootstrap tests, and 20 API contract tests
+  (`backend/tests/test_sensitive_customer_registry_api.py` — auth/RBAC including the
+  Administrator-only mutation regression test explicitly covering every lifecycle action, full
+  create→lifecycle HTTP flow, reference-data administration, no `DELETE` endpoint confirmed
+  absent, batch-lookup deduplication/bounding/empty-input behaviour). Full backend suite
+  (666 tests) passing; this module's own 63 tests additionally verified against real PostgreSQL.
+- Frontend: 18 tests across the 3 core pages plus `displayHelpers`, reusing the existing
+  `frontend/tests/testUtils.tsx` harness exactly as every other module's tests do — no new test
+  infrastructure introduced. Full frontend suite (209 tests) passing; lint/typecheck/build clean
+  for every file this phase added.
+
+**Known limitations**
+
+- Sensitive Customer Review (03-system-workflow.md) is not yet an end-to-end workflow step — this
+  module provides every interface UFLS/UVLS/EMLS need, but none of those scheme modules exist yet
+  to call them. See `docs/architecture/implementation-plan.md` Phase 6/7/8 for the recorded
+  dependency; Phase 3.7 is required to precede Phase 6, mirroring ALSF (Phase 3.6)'s own
+  precedent.
+- This module was built and merged outside the original 14-phase numbered sequence, following the
+  precedent already set by Phase 3.5 (Transformer Registry) and Phase 3.6 (ALSF); labeled
+  **Phase 3.7** in `implementation-plan.md`.
+- **The repository-standard `npm run build` gate does not pass** — it fails on a pre-existing
+  TypeScript project-check error in `frontend/tests/components/ui/DataTable.test.tsx`
+  (a `@tanstack/react-table` generic-inference incompatibility), confirmed via `git diff` against
+  this phase's own commit to predate it entirely — no file this phase added or modified is
+  implicated, and this module's own TypeScript surface typechecks cleanly in isolation. The actual
+  Vite production bundle (`vite build`) succeeds. Recommend fixing `DataTable.test.tsx` in its own
+  follow-up task, since it blocks the standard build command for every module, not just this one.
+
+---
+
+## Phase 3.7 — UAT Change Request: Multiple Transformer Terminal Association
+
+**Scope:** During manual UAT of Phase 3.7 above, the Project Owner approved an engineering
+refinement: **`SensitiveFacility` now associates with zero, one, or many currently active
+Transformer Terminals**, replacing the single nullable `transformer_terminal_id` reference.
+Recorded in [ADR-013](docs/adr/ADR-013-sensitive-facility-multiple-transformer-terminals.md),
+which amends [ADR-012](docs/adr/ADR-012-sensitive-customer-registry-architecture.md) decision 2.
+This is **not** alternate-supply modelling (no primary/backup priority) and **not**
+supply-history modelling (no validity window) — it is the authoritative record of every
+currently active supply point, exactly as the module document's own §7 design note anticipated
+might one day be needed.
+
+**Backend**
+
+- New association table `sensitive_facility_transformer_terminal(facility_id,
+  transformer_terminal_id, added_at, added_by_user_id)` — composite primary key, current-state
+  only, mirroring IAM's own `RolePermission` grant pattern (not `UserRole`'s historical-retention
+  `revoked_at` pattern). `transformer_terminal_id` is removed from `sensitive_facility`.
+- Migration `0015_sensitive_customer_registry.py` edited in place (never merged prior to this
+  change, so per this project's own established convention for pre-merge migrations, it is
+  corrected directly rather than superseded by a new migration).
+- `SensitiveFacilityCreate.transformer_terminal_ids: list[UUID]` replaces the singular field;
+  duplicate IDs in a request are silently deduped, not rejected.
+- New endpoint `PUT /facilities/{id}/terminals` (`SensitiveFacilityTerminalsUpdate`) replaces the
+  full association set in one call; the service layer diffs the requested set against the current
+  set and writes one audit row per actual addition or removal (never one opaque bulk event) — a
+  mandatory, non-empty `change_reason` is required whenever the set actually changes, continuing
+  Correction 5's reassignment-reason discipline. `SensitiveFacilityUpdate` (`PATCH`) no longer
+  carries a terminal field at all.
+- `transformer_terminal_resolution` becomes per-association (`RESOLVED`/`UNRESOLVED`); a
+  facility-level aggregate is retained for list filtering (`NOT_ASSIGNED`/`RESOLVED`/`UNRESOLVED`
+  per ADR-013 decision 4), but full per-association detail is always exposed in list/detail
+  responses — `SensitiveFacilitySummary`/`SensitiveFacilityDetail` gain
+  `transformer_terminals: list[SensitiveFacilityTerminalAssociation]`.
+- Batch/single lookup (`get_sensitive_facilities_for_transformer_terminal(s)`,
+  `has_sensitive_facility`) now match on "any associated terminal matches" — a facility with
+  terminals A and B appears under both A's and B's key in a batch-lookup response. The
+  `BatchLookupRequest`/`BatchLookupResponse` contract shape itself is unchanged.
+- New Equipment Registry endpoint `GET /transformer-terminals`
+  (`list_transformer_terminal_identities`) — every Transformer Terminal across every substation,
+  with full composed identity, unpaginated. Exposed as its own top-level resource (final UAT
+  naming refinement — initially added as `/transformers/terminals`, renamed to match
+  `VoltageYard`'s own `/voltage-yards` precedent: a subordinate engineering entity that must be
+  browsed/filtered across its parent, not only within one already-selected parent's context).
+  Added to support the frontend's flat multi-select (no existing endpoint provided this without
+  requiring a substation/transformer to already be selected); a general-purpose,
+  module-boundary-respecting addition to the module that already owns Transformer Terminal
+  identity, not specific to the Sensitive Customer Registry.
+
+**Frontend**
+
+- Removed the cascading Substation → Transformer → Transformer Terminal picker from
+  `FacilityCreatePage` entirely.
+- New `TerminalMultiSelect` component (`frontend/src/modules/sensitive_customer_registry/
+  components/`) — a searchable, flat multi-select sourced from every Transformer Terminal across
+  every substation, each option labelled with full engineering context (e.g. "SARA | 33kV |
+  Transformer T1 (LV)"), used by both `FacilityCreatePage` and a new, separate "Transformer
+  Terminal(s)" section on `FacilityDetailPage`. Selected terminals are shown in a compact
+  Substation / Voltage / Transformer / Terminal table.
+- `FacilityDetailPage`'s Transformer Terminal association editing is now a separate section and
+  mutation (`PUT .../terminals`) from the metadata edit form (name/sector/classification/
+  remarks) — the Save button is disabled until the set actually changes and a reason is entered.
+- `FacilityListPage`'s "Supply Point(s)" column now lists every currently associated terminal
+  (or the resolution explanation, per facility, if none are associated).
+- New `apiClient.put` method (previously absent — only `get`/`post`/`patch`/`delete` existed).
+
+**Tests**
+
+- Backend: `test_service.py` and `test_sensitive_customer_registry_api.py` updated for the
+  collection-based shape; new tests cover multiple terminals on one facility, deduplication of
+  duplicate terminal IDs, add-and-remove-in-one-call association diffing and per-change audit
+  rows, no-op calls requiring no reason, per-association resolution with a correctly-aggregated
+  facility-level status, and batch lookup matching a facility under every associated terminal's
+  key. Full backend suite (678 tests, 1 pre-existing Windows-only subprocess-flake deselected)
+  passing.
+- Frontend: `TerminalMultiSelect` exercised through `FacilityCreatePage`/`FacilityDetailPage`
+  tests (search-and-select without a Transformer step, compact selected-terminal table, the
+  `PUT .../terminals` reason-required-when-changed flow); `displayHelpers.test.ts` covers the new
+  `side`-aware identity formatting and `formatTerminalPickerLabel`. Full frontend suite (212
+  tests) passing; `tsc --noEmit` clean.
+
+**No unrelated functionality was changed.** Module boundaries, permission model, lifecycle model,
+reference-data conventions, and the polymorphic audit log's shape are all unaffected — only the
+cardinality of the Transformer Terminal association changed, exactly as ADR-013 scopes it.
+
+---
+
 ## Phase 3.6 — Automatic Load Shedding Functionality Registry
 
 **Scope:** A new, dedicated Engineering Registry module answering, per Bay Terminal, "can this

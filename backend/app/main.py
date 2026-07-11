@@ -6,7 +6,9 @@ versioned /api/v1 router that every business module's own router attaches to
 Phase 2 adds Substation Registry's router and the shared, read-only Core
 Platform reference-data router; Phase 3 adds Equipment Registry's
 Circuit/CircuitTerminal router; Phase 4 adds PSS/E Integration's router;
-Phase 5 adds the static Network Model's router.
+Phase 5 adds the static Network Model's router; Phase 3.6 adds the
+Automatic Load Shedding Functionality Registry's router; Phase 3.7 adds
+the Sensitive Customer Registry's router.
 """
 
 from fastapi import APIRouter, FastAPI
@@ -18,10 +20,17 @@ from app.modules.automatic_load_shedding_functionality.router import (
     router as automatic_load_shedding_functionality_router,
 )
 from app.modules.equipment_registry.router import router as equipment_registry_router
-from app.modules.equipment_registry.router import transformer_router, voltage_yard_router
+from app.modules.equipment_registry.router import (
+    transformer_router,
+    transformer_terminal_router,
+    voltage_yard_router,
+)
 from app.modules.iam.router import router as iam_router
 from app.modules.network_model.router import router as network_model_router
 from app.modules.psse_integration.router import router as psse_integration_router
+from app.modules.sensitive_customer_registry.router import (
+    router as sensitive_customer_registry_router,
+)
 from app.modules.substation_registry.router import router as substation_registry_router
 from app.reference_data.router import router as reference_data_router
 
@@ -51,9 +60,11 @@ api_v1_router.include_router(substation_registry_router)
 api_v1_router.include_router(equipment_registry_router)
 api_v1_router.include_router(voltage_yard_router)
 api_v1_router.include_router(transformer_router)
+api_v1_router.include_router(transformer_terminal_router)
 api_v1_router.include_router(psse_integration_router)
 api_v1_router.include_router(network_model_router)
 api_v1_router.include_router(automatic_load_shedding_functionality_router)
+api_v1_router.include_router(sensitive_customer_registry_router)
 app.include_router(api_v1_router)
 
 
