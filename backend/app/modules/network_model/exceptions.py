@@ -7,6 +7,7 @@ from app.shared.exceptions import AppError, NotFoundError, ValidationAppError
 __all__ = [
     "AppError",
     "NotFoundError",
+    "CircuitTerminalNotFoundError",
     "NoCurrentTopologyVersionError",
     "SubstationNotFoundError",
     "TopologyVersionNotFoundError",
@@ -63,3 +64,17 @@ class NoCurrentTopologyVersionError(ValidationAppError):
             "No Current TopologyVersion exists to traverse. Import and activate a PSS/E RAW "
             "file first, or specify an explicit topology_version_id."
         )
+
+
+class CircuitTerminalNotFoundError(NotFoundError):
+    """Foundation Hardening Sprint A — `evaluateBoundary`'s opening-point
+    set named a `circuit_terminal_id` that does not exist in Equipment
+    Registry. Distinct from the existing "uncorrelated terminal excludes
+    nothing" tolerance (boundary-pocket-architecture.md §6): a terminal
+    that exists but has no `EquipmentTopologyMap` entry for this
+    TopologyVersion is a valid, tolerated input; a terminal id that does
+    not exist at all is a genuine request error, since it can never be a
+    real engineering opening point."""
+
+    def __init__(self, circuit_terminal_id: object) -> None:
+        super().__init__(f"CircuitTerminal {circuit_terminal_id} not found")

@@ -124,6 +124,26 @@ export interface CircuitTerminalSummary {
   updated_at: string;
 }
 
+/** Full composed identity of one Circuit Terminal, across every substation —
+ * mirrors `TransformerTerminalIdentity` exactly (below), added for the same
+ * cross-network-picker reason (Foundation Hardening Sprint A.1's Boundary
+ * Pocket diagnostic evaluator). Returned unpaginated by
+ * `GET /circuit-terminals` — exposed as its own top-level resource,
+ * alongside the existing path-nested `/circuits/{id}/terminals`
+ * (`CircuitTerminalSummary`, above), which remains unchanged. */
+export interface CircuitTerminalIdentity {
+  circuit_terminal_id: string;
+  circuit_id: string;
+  circuit_name: string;
+  bay_number: string;
+  breaker_number: string;
+  substation_id: string;
+  substation_mnemonic: string;
+  substation_official_name: string;
+  voltage_level_id: number;
+  voltage_level_label: string;
+}
+
 export interface CircuitSummary {
   circuit_id: string;
   bay_number: string;

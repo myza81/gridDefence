@@ -974,3 +974,54 @@ def test_entered_in_error_circuit_hidden_from_default_list_and_reachable_via_fla
     # audit/history view (deletion/correction policy).
     detail_response = client.get(f"/api/v1/circuits/{circuit_id}", headers=headers)
     assert detail_response.status_code == 200
+
+
+# --- Circuit Terminal identities (Foundation Hardening Sprint A.1) -----------------
+#
+# Cross-network, top-level `/circuit-terminals` — mirrors the existing
+# `/transformer-terminals` precedent, added for the Boundary Pocket
+# diagnostic evaluator's opening-point picker.
+
+
+def test_list_circuit_terminal_identities_requires_authentication(client: TestClient) -> None:
+    response = client.get("/api/v1/circuit-terminals")
+    assert response.status_code == 401
+
+
+def test_list_circuit_terminal_identities_returns_full_engineering_identity(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+
+    create_response = client.post(
+        "/api/v1/circuits", headers=headers, json=_circuit_payload(ref, voltage_yard_ids)
+    )
+    assert create_response.status_code == 201
+    circuit_id = create_response.json()["circuit_id"]
+
+    response = client.get("/api/v1/circuit-terminals", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert {item["circuit_id"] for item in body} == {circuit_id}
+    assert {item["substation_mnemonic"] for item in body} == {"PKLG", "IGBK"}
+    assert {item["breaker_number"] for item in body} == {"L25", "805"}
+    for item in body:
+        assert item["circuit_name"]
+        assert item["voltage_level_label"]
+        assert item["circuit_terminal_id"]
+
+
+def test_list_circuit_terminal_identities_empty_registry_returns_empty_list(
+    client: TestClient, db_session: Session
+) -> None:
+    _seed_reference_data(db_session)
+    token, _admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.get("/api/v1/circuit-terminals", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == []

@@ -360,3 +360,332 @@ def operational_topology_with_correlated_circuits(
         pklg_igbk_circuit_id=pklg_igbk.circuit_id,
         igbk_nkst_circuit_id=igbk_nkst.circuit_id,
     )
+
+
+@dataclass
+class OperationalTeeOffCorrelation:
+    """Foundation Hardening Sprint A — one three-terminal tee-off Circuit
+    (PKLG/IGBK/NKST, mirroring `circuit_ids.tee_off_circuit_id`'s own
+    registry-only shape) correlated against `operational_topology_version_id`'s
+    Branch 100-200 (ckt_id '1') / Branch 200-300 (ckt_id '2') chain — the
+    fixture `test_traversal_respects_excluded_circuit_terminal_ids_on_a_tee_off`
+    needs to prove that excluding one specific `CircuitTerminal` (a single
+    leg) excludes only that leg's own correlated Branch, never the other
+    leg's, unlike whole-`Circuit` exclusion (which excludes both, since
+    every terminal on the Circuit resolves to *some* correlated element —
+    see `matching.compute_matches`'s own "one candidate per terminal,
+    scoped to sibling terminals on the same Circuit" algorithm)."""
+
+    topology_version_id: uuid.UUID
+    tee_off_circuit_id: uuid.UUID
+    pklg_terminal_id: uuid.UUID
+    igbk_terminal_id: uuid.UUID
+    nkst_terminal_id: uuid.UUID
+
+
+@pytest.fixture()
+def operational_topology_with_correlated_tee_off_circuit(
+    db_session: Session,
+    operational_topology_version_id: uuid.UUID,
+    reference_ids: ReferenceIds,
+    voltage_yard_ids: dict[str, uuid.UUID],
+    actor_user_id: uuid.UUID,
+) -> OperationalTeeOffCorrelation:
+    """A single tee-off Circuit spanning PKLG/IGBK/NKST — deliberately the
+    *only* Circuit registered against this snapshot (unlike
+    `operational_topology_with_correlated_circuits`'s two separate ordinary
+    Circuits), so each terminal's own correlation is unambiguous:
+    - PKLG's terminal's only candidate element is Branch 100-200 (its only
+      "another terminal of this Circuit's substation" neighbour is IGBK).
+    - NKST's terminal's only candidate element is Branch 200-300.
+    - IGBK's terminal (the tee's own hub) has *two* candidates (both
+      Branches connect IGBK to another leg's substation) and no `ckt_id`
+      match against this Circuit's own `bay_number` — genuinely ambiguous,
+      so it resolves to no correlation at all, exactly as
+      `matching.compute_matches` documents.
+    """
+    from app.modules.psse_integration.service import PsseIntegrationService
+
+    eq_service = EquipmentRegistryService(db_session)
+    tee_off = eq_service.create_circuit(
+        bay_number="Tee 1",
+        voltage_level_id=reference_ids.voltage_level_id,
+        line_type_id=reference_ids.line_type_id,
+        operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+        is_interconnector=False,
+        remarks=None,
+        terminals=[
+            TerminalInput(voltage_yard_id=voltage_yard_ids["PKLG"], breaker_number="T1"),
+            TerminalInput(voltage_yard_id=voltage_yard_ids["IGBK"], breaker_number="T2"),
+            TerminalInput(voltage_yard_id=voltage_yard_ids["NKST"], breaker_number="T3"),
+        ],
+        actor_user_id=actor_user_id,
+    )
+    db_session.commit()
+
+    psse_service = PsseIntegrationService(db_session)
+    psse_service.recompute_matching(operational_topology_version_id, actor_user_id=actor_user_id)
+    db_session.commit()
+
+    terminals_by_yard = {
+        t.voltage_yard_id: t for t in eq_service.repo.list_terminals(tee_off.circuit_id)
+    }
+    return OperationalTeeOffCorrelation(
+        topology_version_id=operational_topology_version_id,
+        tee_off_circuit_id=tee_off.circuit_id,
+        pklg_terminal_id=terminals_by_yard[voltage_yard_ids["PKLG"]].circuit_terminal_id,
+        igbk_terminal_id=terminals_by_yard[voltage_yard_ids["IGBK"]].circuit_terminal_id,
+        nkst_terminal_id=terminals_by_yard[voltage_yard_ids["NKST"]].circuit_terminal_id,
+    )
+
+
+# --- Foundation Hardening Sprint C — connected-component discovery fixtures ------
+#
+# Self-contained: each fixture below registers its own fresh Substations and
+# commits its own fresh Operational Snapshot, deliberately independent of
+# `substation_ids`/`operational_topology_version_id` above, so a real
+# parallel-circuit or disconnected-secondary-cluster topology can be built
+# without affecting any existing traversal/tee-off test's own PKLG-IGBK-
+# NKST-ABBA fixture.
+
+
+def _create_test_substations(
+    db_session: Session,
+    reference_ids: ReferenceIds,
+    actor_user_id: uuid.UUID,
+    mnemonics: list[str],
+) -> dict[str, uuid.UUID]:
+    substation_service = SubstationService(db_session)
+    ids: dict[str, uuid.UUID] = {}
+    for mnemonic in mnemonics:
+        substation = substation_service.create_substation(
+            mnemonic=mnemonic,
+            official_name=f"{mnemonic} Substation",
+            region_id=reference_ids.region_id,
+            gm_zone_id=reference_ids.gm_zone_id,
+            state_id=reference_ids.state_id,
+            grid_owner_id=reference_ids.grid_owner_id,
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+            psse_bus_number=None,
+            latitude=None,
+            longitude=None,
+            commissioned_date=None,
+            remarks=None,
+            actor_user_id=actor_user_id,
+        )
+        ids[mnemonic] = substation.substation_id
+    db_session.commit()
+    return ids
+
+
+def _branch_line(from_bus: int, to_bus: int, ckt_id: str, *, in_service: bool = True) -> str:
+    """Builds a PSS/E RAW branch data line with an explicit `ST` (status)
+    field at index 24 — `raw_parser.py`'s own `ParsedBranch.status` field
+    position — so a deliberately out-of-service parallel circuit can be
+    constructed directly via import, exactly as a real RAW case would
+    encode it, rather than writing to `LoadSnapshotElementState` by hand."""
+    fields = [str(from_bus), str(to_bus), f"'{ckt_id}'", "0.001", "0.01", "0.0002"]
+    fields += [""] * (24 - len(fields))
+    fields.append("1" if in_service else "0")
+    return ",".join(fields)
+
+
+@dataclass
+class ParallelCircuitFixture:
+    """PKLG(bus 100)-IGBK(bus 200), joined by two parallel registry
+    Circuits (bay `1`/breaker `C1x`, bay `2`/breaker `C2x`), each
+    correlated to its own Operational Branch — mirroring the real
+    two-parallel-132kV-line configuration this pack's own UAT
+    investigation found in practice (Foundation Hardening Sprint A.1)."""
+
+    topology_version_id: uuid.UUID
+    substation_ids: dict[str, uuid.UUID]
+    circuit_1_pklg_terminal_id: uuid.UUID
+    circuit_2_pklg_terminal_id: uuid.UUID
+
+
+def _build_parallel_circuit_fixture(
+    db_session: Session,
+    reference_ids: ReferenceIds,
+    actor_user_id: uuid.UUID,
+    *,
+    second_branch_in_service: bool,
+) -> ParallelCircuitFixture:
+    from app.modules.psse_integration.service import PsseIntegrationService
+
+    substation_ids = _create_test_substations(
+        db_session, reference_ids, actor_user_id, ["PKLG", "IGBK"]
+    )
+
+    raw = (
+        "0,100.0,34,0,1,50.0\n"
+        "0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA\n"
+        "100,'PKLG132',132.0,1,1,1,1,1.0,0.0\n"
+        "200,'IGBK132',132.0,1,1,1,1,1.0,0.0\n"
+        "0 / END OF BUS DATA, BEGIN LOAD DATA\n"
+        "0 / END OF LOAD DATA, BEGIN GENERATOR DATA\n"
+        "0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n"
+        f"{_branch_line(100, 200, '1', in_service=True)}\n"
+        f"{_branch_line(100, 200, '2', in_service=second_branch_in_service)}\n"
+        "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n"
+        "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n"
+        "Q\n"
+    )
+
+    psse_service = PsseIntegrationService(db_session)
+    batch = psse_service.commit(raw, "network-model-parallel-circuit.raw", actor_user_id)
+    db_session.commit()
+    psse_service.activate(
+        batch.batch_id, change_reason="test baseline", actor_user_id=actor_user_id
+    )
+    db_session.commit()
+
+    equipment_service = EquipmentRegistryService(db_session)
+    pklg_yard = equipment_service.create_voltage_yard(
+        substation_id=substation_ids["PKLG"],
+        voltage_level_id=reference_ids.voltage_level_id,
+        actor_user_id=actor_user_id,
+    )
+    igbk_yard = equipment_service.create_voltage_yard(
+        substation_id=substation_ids["IGBK"],
+        voltage_level_id=reference_ids.voltage_level_id,
+        actor_user_id=actor_user_id,
+    )
+    circuit_1 = equipment_service.create_circuit(
+        bay_number="1",
+        voltage_level_id=reference_ids.voltage_level_id,
+        line_type_id=reference_ids.line_type_id,
+        operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+        is_interconnector=False,
+        remarks=None,
+        terminals=[
+            TerminalInput(voltage_yard_id=pklg_yard.voltage_yard_id, breaker_number="C11"),
+            TerminalInput(voltage_yard_id=igbk_yard.voltage_yard_id, breaker_number="C12"),
+        ],
+        actor_user_id=actor_user_id,
+    )
+    circuit_2 = equipment_service.create_circuit(
+        bay_number="2",
+        voltage_level_id=reference_ids.voltage_level_id,
+        line_type_id=reference_ids.line_type_id,
+        operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+        is_interconnector=False,
+        remarks=None,
+        terminals=[
+            TerminalInput(voltage_yard_id=pklg_yard.voltage_yard_id, breaker_number="C21"),
+            TerminalInput(voltage_yard_id=igbk_yard.voltage_yard_id, breaker_number="C22"),
+        ],
+        actor_user_id=actor_user_id,
+    )
+    db_session.commit()
+
+    psse_service.recompute_matching(batch.topology_version_id, actor_user_id=actor_user_id)
+    db_session.commit()
+
+    circuit_1_pklg_terminal = next(
+        t
+        for t in equipment_service.repo.list_terminals(circuit_1.circuit_id)
+        if t.voltage_yard_id == pklg_yard.voltage_yard_id
+    )
+    circuit_2_pklg_terminal = next(
+        t
+        for t in equipment_service.repo.list_terminals(circuit_2.circuit_id)
+        if t.voltage_yard_id == pklg_yard.voltage_yard_id
+    )
+
+    return ParallelCircuitFixture(
+        topology_version_id=batch.topology_version_id,
+        substation_ids=substation_ids,
+        circuit_1_pklg_terminal_id=circuit_1_pklg_terminal.circuit_terminal_id,
+        circuit_2_pklg_terminal_id=circuit_2_pklg_terminal.circuit_terminal_id,
+    )
+
+
+@pytest.fixture()
+def parallel_circuits_both_in_service(
+    db_session: Session,
+    reference_ids: ReferenceIds,
+    actor_user_id: uuid.UUID,
+) -> ParallelCircuitFixture:
+    """Both parallel PKLG-IGBK circuits genuinely in service — excluding
+    only one must not isolate (the other still carries the connection);
+    excluding both must isolate."""
+    return _build_parallel_circuit_fixture(
+        db_session, reference_ids, actor_user_id, second_branch_in_service=True
+    )
+
+
+@pytest.fixture()
+def parallel_circuits_one_already_out_of_service(
+    db_session: Session,
+    reference_ids: ReferenceIds,
+    actor_user_id: uuid.UUID,
+) -> ParallelCircuitFixture:
+    """Circuit `2`'s own Operational Branch is already out of service in
+    the Current `LoadSnapshot` (set directly via the RAW import's own
+    `ST` field, exactly as a real case would encode it) — mirrors the
+    real PKLG-IGBK production topology this pack's own UAT investigation
+    found (Foundation Hardening Sprint A.1): excluding only Circuit `1`
+    (the one genuinely in-service path) must already isolate, since
+    Circuit `2` was never contributing an edge regardless of any
+    exclusion."""
+    return _build_parallel_circuit_fixture(
+        db_session, reference_ids, actor_user_id, second_branch_in_service=False
+    )
+
+
+@dataclass
+class DisconnectedBaselineFixture:
+    """Main Grid: PKLG(100)-IGBK(200). A genuinely separate, pre-existing
+    secondary cluster: AAAA(500)-BBBB(600) — structurally disconnected
+    from PKLG/IGBK from the very start, before any opening point is ever
+    selected. Used to verify `baseline_has_single_main_grid`/
+    `baseline_component_count` correctly surface this as evidence,
+    without ever calling AAAA/BBBB a "newly isolated island" (they were
+    never part of the baseline Main Grid to begin with)."""
+
+    topology_version_id: uuid.UUID
+    substation_ids: dict[str, uuid.UUID]
+
+
+@pytest.fixture()
+def disconnected_baseline_topology(
+    db_session: Session,
+    reference_ids: ReferenceIds,
+    actor_user_id: uuid.UUID,
+) -> DisconnectedBaselineFixture:
+    from app.modules.psse_integration.service import PsseIntegrationService
+
+    substation_ids = _create_test_substations(
+        db_session, reference_ids, actor_user_id, ["PKLG", "IGBK", "AAAA", "BBBB"]
+    )
+
+    raw = (
+        "0,100.0,34,0,1,50.0\n"
+        "0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA\n"
+        "100,'PKLG132',132.0,1,1,1,1,1.0,0.0\n"
+        "200,'IGBK132',132.0,1,1,1,1,1.0,0.0\n"
+        "500,'AAAA132',132.0,1,1,1,1,1.0,0.0\n"
+        "600,'BBBB132',132.0,1,1,1,1,1.0,0.0\n"
+        "0 / END OF BUS DATA, BEGIN LOAD DATA\n"
+        "0 / END OF LOAD DATA, BEGIN GENERATOR DATA\n"
+        "0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n"
+        "100,200,'1',0.001,0.01,0.0002\n"
+        "500,600,'1',0.001,0.01,0.0002\n"
+        "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n"
+        "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n"
+        "Q\n"
+    )
+
+    psse_service = PsseIntegrationService(db_session)
+    batch = psse_service.commit(raw, "network-model-disconnected-baseline.raw", actor_user_id)
+    db_session.commit()
+    psse_service.activate(
+        batch.batch_id, change_reason="test baseline", actor_user_id=actor_user_id
+    )
+    db_session.commit()
+
+    return DisconnectedBaselineFixture(
+        topology_version_id=batch.topology_version_id,
+        substation_ids=substation_ids,
+    )

@@ -121,6 +121,47 @@ export interface TraversalResult {
   topology_version_id: string;
 }
 
+// --- Foundation Hardening Sprint C — Boundary Pocket evaluation by --------------
+// connected-component discovery (ADR-019, superseding the earlier inside-
+// substation / rest-of-grid mechanism) ------------------------------------------
+//
+// Mirrors backend/app/modules/network_model/schemas.py's
+// `BoundaryPocketEvaluationRequest`/`BoundaryPocketEvaluation`
+// (docs/architecture/boundary-pocket-architecture.md §7, as corrected by
+// ADR-019). The engineer selects only Circuit Terminal opening points —
+// never an "inside substation" or a "rest of grid" reference; the Main
+// Grid and every isolated island are discovered from the topology itself.
+// The frontend never reinterprets these results (CLAUDE.md A12) —
+// `is_boundary_effective`, `isolated_islands`, and `reason` are presented
+// exactly as the backend returns them.
+
+export interface BoundaryPocketEvaluationRequest {
+  circuit_terminal_ids: string[];
+  topology_version_id?: string | null;
+}
+
+export interface IslandSubstation {
+  substation_id: string;
+  substation_mnemonic: string;
+}
+
+export interface IsolatedIsland {
+  substations: IslandSubstation[];
+}
+
+export interface BoundaryPocketEvaluation {
+  topology_version_id: string;
+  baseline_component_count: number;
+  baseline_main_grid_substation_count: number;
+  baseline_has_single_main_grid: boolean;
+  post_opening_component_count: number;
+  is_boundary_effective: boolean;
+  isolated_islands: IsolatedIsland[];
+  circuit_terminal_ids: string[];
+  uncorrelated_circuit_terminal_ids: string[];
+  reason: string;
+}
+
 // --- Phase 7F — Operational Snapshot Verification Workspace -----------------------
 //
 // `OperationalBusView`/`OperationalBranchView`/`OperationalTransformerView`

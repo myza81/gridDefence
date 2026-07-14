@@ -878,6 +878,55 @@ class EquipmentRegistryService:
             voltage_level_label=terminal_summary.voltage_level_label,
         )
 
+    def list_circuit_terminal_identities(self) -> list[CircuitTerminalIdentity]:
+        """Every Circuit Terminal across every substation, with full
+        composed identity — mirrors `list_transformer_terminal_identities`
+        exactly, for the same cross-module-picker reason (Foundation
+        Hardening Sprint A.1: the Boundary Pocket diagnostic evaluator
+        needs to browse/search opening points across the whole network,
+        not within one already-selected Circuit). Unpaginated (see
+        `list_all_circuit_terminals`'s own docstring). Ordered by
+        substation, voltage level, circuit name, then breaker number, so a
+        picker presents terminals grouped in the order an engineer
+        expects, without needing to re-sort itself."""
+        terminals = self.repo.list_all_circuit_terminals()
+        terminal_summaries = {s.circuit_terminal_id: s for s in self._terminal_summaries(terminals)}
+        circuit_details: dict[uuid.UUID, CircuitDetail] = {}
+        for circuit_id in {t.circuit_id for t in terminals}:
+            detail = self.get_circuit(circuit_id)
+            if detail is not None:
+                circuit_details[circuit_id] = detail
+
+        identities: list[CircuitTerminalIdentity] = []
+        for terminal in terminals:
+            summary = terminal_summaries.get(terminal.circuit_terminal_id)
+            circuit_detail = circuit_details.get(terminal.circuit_id)
+            if summary is None or circuit_detail is None:
+                continue
+            identities.append(
+                CircuitTerminalIdentity(
+                    circuit_terminal_id=terminal.circuit_terminal_id,
+                    circuit_id=terminal.circuit_id,
+                    circuit_name=circuit_detail.circuit_name,
+                    bay_number=circuit_detail.bay_number,
+                    breaker_number=summary.breaker_number,
+                    substation_id=summary.substation_id,
+                    substation_mnemonic=summary.substation_mnemonic,
+                    substation_official_name=summary.substation_official_name,
+                    voltage_level_id=summary.voltage_level_id,
+                    voltage_level_label=summary.voltage_level_label,
+                )
+            )
+        identities.sort(
+            key=lambda i: (
+                i.substation_mnemonic,
+                i.voltage_level_label,
+                i.circuit_name,
+                i.breaker_number,
+            )
+        )
+        return identities
+
     def get_circuit(self, circuit_id: uuid.UUID) -> CircuitDetail | None:
         circuit = self.repo.get_circuit_by_id(circuit_id)
         if circuit is None:

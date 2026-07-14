@@ -392,6 +392,91 @@ def test_verify_path_from_unregistered_substation_is_404(
     assert response.status_code == 404
 
 
+# --- Foundation Hardening Sprint A: Boundary Pocket foundation ----------------------
+
+
+def test_boundary_pocket_evaluation_requires_authentication(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/network-model/boundary-pocket-evaluations",
+        json={"circuit_terminal_ids": []},
+    )
+    assert response.status_code == 401
+
+
+def test_boundary_pocket_evaluation_full_flow(client: TestClient, db_session: Session) -> None:
+    """Excluding PKLG's own `CircuitTerminal` on the PKLG-IGBK circuit
+    splits IGBK off from the baseline Main Grid — one isolated island,
+    {IGBK} — end to end through the real HTTP router. No inside
+    substation, no rest-of-grid override (ADR-019): the Main Grid and
+    every isolated island are discovered from the topology itself."""
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, circuit_id = _create_two_terminal_network(db_session, ref, admin_id)
+    topology_version_id = _commit_matching_operational_snapshot(db_session, admin_id)
+
+    equipment_service = EquipmentRegistryService(db_session)
+    pklg_terminal_id = next(
+        t.circuit_terminal_id
+        for t in equipment_service.repo.list_terminals(circuit_id)
+        if equipment_service.repo.get_voltage_yard_by_id(t.voltage_yard_id).substation_id
+        == substation_ids["PKLG"]
+    )
+
+    response = client.post(
+        "/api/v1/network-model/boundary-pocket-evaluations",
+        headers=headers,
+        json={"circuit_terminal_ids": [str(pklg_terminal_id)]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_boundary_effective"] is True
+    assert len(body["isolated_islands"]) == 1
+    island_mnemonics = {
+        s["substation_mnemonic"] for s in body["isolated_islands"][0]["substations"]
+    }
+    assert island_mnemonics == {"IGBK"}
+    assert body["topology_version_id"] == str(topology_version_id)
+    assert body["baseline_has_single_main_grid"] is True
+
+
+def test_boundary_pocket_evaluation_no_opening_points_is_ineffective(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _create_two_terminal_network(db_session, ref, admin_id)
+    _commit_matching_operational_snapshot(db_session, admin_id)
+
+    response = client.post(
+        "/api/v1/network-model/boundary-pocket-evaluations",
+        headers=headers,
+        json={"circuit_terminal_ids": []},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_boundary_effective"] is False
+    assert body["isolated_islands"] == []
+
+
+def test_boundary_pocket_evaluation_unknown_circuit_terminal_is_404(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _create_two_terminal_network(db_session, ref, admin_id)
+    _commit_matching_operational_snapshot(db_session, admin_id)
+
+    response = client.post(
+        "/api/v1/network-model/boundary-pocket-evaluations",
+        headers=headers,
+        json={"circuit_terminal_ids": [str(uuid.uuid4())]},
+    )
+    assert response.status_code == 404
+
+
 def test_verify_path_with_unknown_voltage_yard_is_404(
     client: TestClient, db_session: Session
 ) -> None:

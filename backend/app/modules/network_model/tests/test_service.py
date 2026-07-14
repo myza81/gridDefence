@@ -12,15 +12,19 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.modules.network_model.exceptions import (
+    CircuitTerminalNotFoundError,
     NoCurrentTopologyVersionError,
     SubstationNotFoundError,
     TopologyVersionNotFoundError,
 )
-from app.modules.network_model.schemas import TraversalRequest
+from app.modules.network_model.schemas import BoundaryPocketEvaluationRequest, TraversalRequest
 from app.modules.network_model.service import NetworkModelService
 from app.modules.network_model.tests.conftest import (
     CircuitIds,
+    DisconnectedBaselineFixture,
     OperationalCircuitCorrelation,
+    OperationalTeeOffCorrelation,
+    ParallelCircuitFixture,
     ReferenceIds,
 )
 
@@ -377,6 +381,381 @@ def test_traversal_start_substation_with_no_correlated_bus_still_reaches_itself(
     reached = {r.substation_mnemonic for r in result.reachable_substations}
     assert reached == {"ZZZZ"}
     assert result.reachable_substations[0].depth == 0
+
+
+# --- Foundation Hardening Sprint A — Circuit Terminal opening points -------------
+#
+# `operational_topology_with_correlated_tee_off_circuit` correlates one
+# three-terminal tee-off Circuit (PKLG/IGBK/NKST) against the same Branch
+# 100-200 ('1') / Branch 200-300 ('2') chain `operational_topology_version_id`
+# already provides. PKLG's own terminal resolves to Branch 100-200; NKST's own
+# terminal resolves to Branch 200-300; IGBK's own (hub) terminal resolves to
+# no correlation at all (two candidates, neither confirmed by `ckt_id`) — see
+# `matching.compute_matches` and the fixture's own docstring for why.
+
+
+def test_traversal_respects_excluded_circuit_terminal_ids_on_a_tee_off(
+    db_session: Session,
+    substation_ids: dict[str, uuid.UUID],
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    """Excluding only NKST's own `CircuitTerminal` (one leg of the tee-off)
+    must exclude only Branch 200-300 — PKLG-IGBK (Branch 100-200) must
+    remain traversable. This is the capability whole-Circuit exclusion
+    cannot express (see the next test) — ADR-017's own tee-off subset
+    gap, network-model-module.md §9 rule 11."""
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    result = service.traverse(
+        TraversalRequest(
+            start_substation_id=substation_ids["PKLG"],
+            excluded_circuit_terminal_ids=[fixture.nkst_terminal_id],
+        )
+    )
+    reached = {r.substation_mnemonic for r in result.reachable_substations}
+    assert reached == {"PKLG", "IGBK"}
+    assert result.excluded_circuit_terminal_ids == [fixture.nkst_terminal_id]
+
+
+def test_traversal_excluding_the_whole_tee_off_circuit_cuts_both_legs(
+    db_session: Session,
+    substation_ids: dict[str, uuid.UUID],
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    """Contrast with the test above: excluding the whole `Circuit` (the
+    pre-existing `excluded_circuit_ids` parameter) resolves *every*
+    terminal on it, including both PKLG's and NKST's own correlated
+    Branches — over-broad for a tee-off, exactly the gap Circuit Terminal
+    opening points (above) exist to close."""
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    result = service.traverse(
+        TraversalRequest(
+            start_substation_id=substation_ids["PKLG"],
+            excluded_circuit_ids=[fixture.tee_off_circuit_id],
+        )
+    )
+    reached = {r.substation_mnemonic for r in result.reachable_substations}
+    assert reached == {"PKLG"}
+
+
+def test_traversal_excluding_an_uncorrelated_circuit_terminal_excludes_nothing(
+    db_session: Session,
+    substation_ids: dict[str, uuid.UUID],
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    """IGBK's own terminal on the tee-off has no correlation at all
+    (ambiguous — two candidate Branches, no `ckt_id` match). Excluding it
+    must gracefully exclude nothing, mirroring `excluded_circuit_ids`'s
+    own "uncorrelated Circuit excludes nothing" tolerance exactly."""
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    result = service.traverse(
+        TraversalRequest(
+            start_substation_id=substation_ids["PKLG"],
+            excluded_circuit_terminal_ids=[fixture.igbk_terminal_id],
+        )
+    )
+    reached = {r.substation_mnemonic for r in result.reachable_substations}
+    assert reached == {"PKLG", "IGBK", "NKST"}
+
+
+def test_traversal_excluding_a_nonexistent_circuit_terminal_excludes_nothing(
+    db_session: Session,
+    substation_ids: dict[str, uuid.UUID],
+    operational_topology_version_id: uuid.UUID,
+) -> None:
+    """A `circuit_terminal_id` with no `EquipmentTopologyMap` entry at all
+    (never registered, or registered but never matched against this
+    snapshot) is tolerated exactly like an uncorrelated one — `traverse()`
+    never validates Circuit Terminal existence (unlike `evaluateBoundary`,
+    below), matching the tolerant precedent already established for
+    `excluded_circuit_ids`."""
+    service = NetworkModelService(db_session)
+    result = service.traverse(
+        TraversalRequest(
+            start_substation_id=substation_ids["PKLG"],
+            excluded_circuit_terminal_ids=[uuid.uuid4()],
+        )
+    )
+    reached = {r.substation_mnemonic for r in result.reachable_substations}
+    assert reached == {"PKLG", "IGBK", "NKST"}
+
+
+# --- Foundation Hardening Sprint C — evaluateBoundary by connected-component ----
+# discovery (ADR-019, superseding ADR-017's own two-seed reachability
+# mechanism) — no inside substation, no rest-of-grid override: the Main Grid
+# and every isolated island are discovered from the topology itself.
+
+
+def test_evaluate_boundary_baseline_topology_has_one_connected_main_grid(
+    db_session: Session,
+    operational_topology_version_id: uuid.UUID,
+) -> None:
+    """PKLG-IGBK-NKST form one connected baseline Main Grid; ABBA sits in
+    its own trivial, single-substation component with no Circuit at all —
+    ordinary registry noise, not an abnormal multi-component condition."""
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(BoundaryPocketEvaluationRequest(circuit_terminal_ids=[]))
+    assert evaluation.baseline_has_single_main_grid is True
+    assert evaluation.baseline_main_grid_substation_count == 3
+    assert evaluation.baseline_component_count == 2
+    assert evaluation.topology_version_id == operational_topology_version_id
+
+
+def test_evaluate_boundary_no_opening_points_is_ineffective(
+    db_session: Session,
+    operational_topology_version_id: uuid.UUID,
+) -> None:
+    """No opening points at all: nothing new can possibly be isolated —
+    incomplete/ineffective, reported (never silently rejected)."""
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(BoundaryPocketEvaluationRequest(circuit_terminal_ids=[]))
+    assert evaluation.is_boundary_effective is False
+    assert evaluation.isolated_islands == []
+    assert evaluation.post_opening_component_count == evaluation.baseline_component_count
+    assert evaluation.reason
+
+
+def test_evaluate_boundary_opening_one_leg_of_a_tee_off_isolates_one_island(
+    db_session: Session,
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    """Opening NKST's own leg splits NKST off from the Main Grid — one
+    isolated island, {NKST}."""
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=[fixture.nkst_terminal_id])
+    )
+    assert evaluation.is_boundary_effective is True
+    assert len(evaluation.isolated_islands) == 1
+    assert {s.substation_mnemonic for s in evaluation.isolated_islands[0].substations} == {"NKST"}
+    assert evaluation.uncorrelated_circuit_terminal_ids == []
+    assert evaluation.topology_version_id == fixture.topology_version_id
+
+
+def test_evaluate_boundary_opening_two_separate_circuits_isolates_two_islands(
+    db_session: Session,
+    voltage_yard_ids: dict[str, uuid.UUID],
+    operational_topology_with_correlated_circuits: OperationalCircuitCorrelation,
+) -> None:
+    """Cutting both PKLG-IGBK and IGBK-NKST leaves PKLG (bus 100, the
+    baseline Main Grid's anchor) as the surviving Main Grid, and IGBK and
+    NKST each split off as their own separate isolated island — the exact
+    multi-island case the superseded two-seed reachability mechanism
+    could never report (it could only ever confirm or deny one nominated
+    "inside" substation)."""
+    from app.modules.equipment_registry.service import EquipmentRegistryService
+
+    fixture = operational_topology_with_correlated_circuits
+    eq_service = EquipmentRegistryService(db_session)
+    pklg_igbk_terminal = next(
+        t
+        for t in eq_service.repo.list_terminals(fixture.pklg_igbk_circuit_id)
+        if t.voltage_yard_id == voltage_yard_ids["PKLG"]
+    )
+    igbk_nkst_terminal = next(
+        t
+        for t in eq_service.repo.list_terminals(fixture.igbk_nkst_circuit_id)
+        if t.voltage_yard_id == voltage_yard_ids["NKST"]
+    )
+
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(
+            circuit_terminal_ids=[
+                pklg_igbk_terminal.circuit_terminal_id,
+                igbk_nkst_terminal.circuit_terminal_id,
+            ]
+        )
+    )
+
+    assert evaluation.is_boundary_effective is True
+    assert len(evaluation.isolated_islands) == 2
+    island_mnemonics = {
+        frozenset(s.substation_mnemonic for s in island.substations)
+        for island in evaluation.isolated_islands
+    }
+    assert island_mnemonics == {frozenset({"IGBK"}), frozenset({"NKST"})}
+
+
+def test_evaluate_boundary_excluding_one_of_two_parallel_circuits_does_not_isolate(
+    db_session: Session,
+    parallel_circuits_both_in_service: ParallelCircuitFixture,
+) -> None:
+    """Both PKLG-IGBK circuits are genuinely in service: excluding only
+    one leaves the other still carrying the connection — no isolation."""
+    fixture = parallel_circuits_both_in_service
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=[fixture.circuit_1_pklg_terminal_id])
+    )
+    assert evaluation.is_boundary_effective is False
+    assert evaluation.isolated_islands == []
+
+
+def test_evaluate_boundary_excluding_both_parallel_circuits_isolates(
+    db_session: Session,
+    parallel_circuits_both_in_service: ParallelCircuitFixture,
+) -> None:
+    """Excluding the final remaining in-service path isolates IGBK."""
+    fixture = parallel_circuits_both_in_service
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(
+            circuit_terminal_ids=[
+                fixture.circuit_1_pklg_terminal_id,
+                fixture.circuit_2_pklg_terminal_id,
+            ]
+        )
+    )
+    assert evaluation.is_boundary_effective is True
+    assert len(evaluation.isolated_islands) == 1
+    assert {s.substation_mnemonic for s in evaluation.isolated_islands[0].substations} == {"IGBK"}
+
+
+def test_evaluate_boundary_excluding_the_only_in_service_parallel_circuit_isolates(
+    db_session: Session,
+    parallel_circuits_one_already_out_of_service: ParallelCircuitFixture,
+) -> None:
+    """Circuit `2`'s own Operational Branch is already out of service in
+    the Current snapshot (mirrors the real PKLG-IGBK production case this
+    pack's own UAT investigation found) — excluding only Circuit `1` (the
+    one genuinely in-service path) must already isolate IGBK, since
+    Circuit `2` was never contributing an edge regardless of any
+    exclusion. The already-out-of-service path is respected from the
+    active snapshot, not re-derived."""
+    fixture = parallel_circuits_one_already_out_of_service
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=[fixture.circuit_1_pklg_terminal_id])
+    )
+    assert evaluation.is_boundary_effective is True
+    assert len(evaluation.isolated_islands) == 1
+    assert {s.substation_mnemonic for s in evaluation.isolated_islands[0].substations} == {"IGBK"}
+
+
+def test_evaluate_boundary_redundant_opening_point_does_not_change_isolated_island(
+    db_session: Session,
+    voltage_yard_ids: dict[str, uuid.UUID],
+    operational_topology_with_correlated_circuits: OperationalCircuitCorrelation,
+) -> None:
+    """Selecting both terminals of the same ordinary two-terminal Circuit
+    — both resolve to the same single correlated Branch — is a redundant
+    opening point, not a rejected request; the isolated-island result is
+    identical to selecting just one (ADR-019's "Redundant opening
+    points" — a future finding, never an automatic rejection here)."""
+    from app.modules.equipment_registry.service import EquipmentRegistryService
+
+    fixture = operational_topology_with_correlated_circuits
+    eq_service = EquipmentRegistryService(db_session)
+    both_terminal_ids = [
+        t.circuit_terminal_id for t in eq_service.repo.list_terminals(fixture.pklg_igbk_circuit_id)
+    ]
+
+    service = NetworkModelService(db_session)
+    single = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=[both_terminal_ids[0]])
+    )
+    redundant = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=both_terminal_ids)
+    )
+
+    assert redundant.is_boundary_effective == single.is_boundary_effective
+    single_islands = {
+        frozenset(s.substation_mnemonic for s in island.substations)
+        for island in single.isolated_islands
+    }
+    redundant_islands = {
+        frozenset(s.substation_mnemonic for s in island.substations)
+        for island in redundant.isolated_islands
+    }
+    assert redundant_islands == single_islands
+
+
+def test_evaluate_boundary_uncorrelated_circuit_terminal_is_reported_not_excluded(
+    db_session: Session,
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    """IGBK's own terminal on the tee-off has no correlation at all
+    (ambiguous — two candidate Branches, no `ckt_id` match). It is
+    reported in `uncorrelated_circuit_terminal_ids`, deterministically,
+    and excludes nothing."""
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=[fixture.igbk_terminal_id])
+    )
+    assert evaluation.uncorrelated_circuit_terminal_ids == [fixture.igbk_terminal_id]
+    assert evaluation.is_boundary_effective is False
+    assert evaluation.isolated_islands == []
+
+
+def test_evaluate_boundary_nonexistent_circuit_terminal_raises(
+    db_session: Session,
+    operational_topology_version_id: uuid.UUID,
+) -> None:
+    """Unlike `traverse()`'s own tolerant `excluded_circuit_terminal_ids`,
+    `evaluateBoundary`'s opening points are an engineer's explicit,
+    named selection from Equipment Registry's own candidate list — a
+    `circuit_terminal_id` that does not exist at all is a genuine request
+    error, never silently ignored."""
+    service = NetworkModelService(db_session)
+    with pytest.raises(CircuitTerminalNotFoundError):
+        service.evaluate_boundary(
+            BoundaryPocketEvaluationRequest(circuit_terminal_ids=[uuid.uuid4()])
+        )
+
+
+def test_evaluate_boundary_pre_existing_disconnected_baseline_is_flagged_abnormal(
+    db_session: Session,
+    disconnected_baseline_topology: DisconnectedBaselineFixture,
+) -> None:
+    """PKLG-IGBK and AAAA-BBBB are two genuinely separate baseline
+    clusters, before any opening point is ever selected — an abnormal,
+    pre-existing multi-component condition, surfaced as evidence, never
+    conflated with a "newly isolated island"."""
+    fixture = disconnected_baseline_topology
+    service = NetworkModelService(db_session)
+    evaluation = service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(
+            circuit_terminal_ids=[], topology_version_id=fixture.topology_version_id
+        )
+    )
+    assert evaluation.baseline_has_single_main_grid is False
+    assert evaluation.baseline_component_count == 2
+    assert evaluation.baseline_main_grid_substation_count == 2
+    assert evaluation.isolated_islands == []
+    assert evaluation.is_boundary_effective is False
+
+
+def test_evaluate_boundary_is_deterministic_across_repeated_calls(
+    db_session: Session,
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    request = BoundaryPocketEvaluationRequest(circuit_terminal_ids=[fixture.nkst_terminal_id])
+    first = service.evaluate_boundary(request)
+    second = service.evaluate_boundary(request)
+    assert first.model_dump() == second.model_dump()
+
+
+def test_evaluate_boundary_does_not_persist_anything(
+    db_session: Session,
+    operational_topology_with_correlated_tee_off_circuit: OperationalTeeOffCorrelation,
+) -> None:
+    """Stateless and read-only — boundary-pocket-architecture.md §3/§5;
+    no Boundary Pocket entity, no derived island state, is ever written."""
+    fixture = operational_topology_with_correlated_tee_off_circuit
+    service = NetworkModelService(db_session)
+    service.evaluate_boundary(
+        BoundaryPocketEvaluationRequest(circuit_terminal_ids=[fixture.nkst_terminal_id])
+    )
+    assert not db_session.new
+    assert not db_session.dirty
+    assert not db_session.deleted
 
 
 # --- Entered-in-error exclusion --------------------------------------------------

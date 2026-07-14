@@ -253,3 +253,42 @@ class NetworkModelRepository:
             EquipmentTopologyMap.topology_version_id == topology_version_id
         )
         return list(self.db.execute(stmt).scalars().all())
+
+    def get_circuit_terminal_by_id(self, circuit_terminal_id: uuid.UUID) -> CircuitTerminal | None:
+        return self.db.get(CircuitTerminal, circuit_terminal_id)
+
+    def list_circuit_terminals_by_ids(
+        self, circuit_terminal_ids: list[uuid.UUID]
+    ) -> list[CircuitTerminal]:
+        """Foundation Hardening Sprint A — Circuit Terminal opening-point
+        existence validation (boundary-pocket-architecture.md §10):
+        `evaluateBoundary`'s caller-supplied opening points must each name
+        a real `CircuitTerminal`, independent of whether it happens to
+        correlate to an Operational element for the snapshot being
+        evaluated (correlation is separately optional — §6)."""
+        if not circuit_terminal_ids:
+            return []
+        stmt = select(CircuitTerminal).where(
+            CircuitTerminal.circuit_terminal_id.in_(circuit_terminal_ids)
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_map_entries_for_terminals(
+        self, circuit_terminal_ids: list[uuid.UUID], topology_version_id: uuid.UUID
+    ) -> list[EquipmentTopologyMap]:
+        """Per-`CircuitTerminal` correlation resolution (Foundation
+        Hardening Sprint A; boundary-pocket-architecture.md §6) — the
+        direct analogue of `list_map_entries_for_topology_version`, scoped
+        to exactly the terminals named as opening points, rather than
+        every terminal of a whole `Circuit`. `EquipmentTopologyMap` is
+        already keyed one row per `(topology_version_id,
+        circuit_terminal_id)` (psse_integration.models.EquipmentTopologyMap),
+        so this granularity required no new correlation mechanism — only a
+        query that filters by the individual terminal ids supplied."""
+        if not circuit_terminal_ids:
+            return []
+        stmt = select(EquipmentTopologyMap).where(
+            EquipmentTopologyMap.topology_version_id == topology_version_id,
+            EquipmentTopologyMap.circuit_terminal_id.in_(circuit_terminal_ids),
+        )
+        return list(self.db.execute(stmt).scalars().all())

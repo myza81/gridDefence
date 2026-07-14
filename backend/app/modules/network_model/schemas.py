@@ -157,10 +157,31 @@ class TraversalRequest(BaseModel):
     Circuit currently correlates to (via `EquipmentTopologyMap`) for the
     `TopologyVersion` being traversed — a Circuit with no correlation for
     that snapshot simply excludes nothing (Operational Correlation is
-    optional enrichment only; traversal itself never depends on it)."""
+    optional enrichment only; traversal itself never depends on it).
+
+    `excluded_circuit_terminal_ids` (Foundation Hardening Sprint A;
+    docs/architecture/boundary-pocket-architecture.md §6-§7, ADR-017) models
+    an engineering opening point at `CircuitTerminal` granularity — a
+    specific leg of a `Circuit`, rather than the whole `Circuit` — required
+    for Boundary Pocket construction on a tee-off `Circuit`, where opening
+    only one leg must never exclude the other legs' own correlated
+    elements (network-model-module.md §9 rule 11's own tee-off subset gap).
+    Combined, additively, with `excluded_circuit_ids`'s own resolved
+    elements — supplying both together excludes the union of what each
+    would exclude alone. Each terminal is resolved independently, via the
+    same `EquipmentTopologyMap` correlation, at that terminal's own row
+    (never by resolving its whole `Circuit`); an uncorrelated terminal
+    excludes nothing, gracefully, mirroring `excluded_circuit_ids`'s own
+    tolerance exactly. This parameter existed only inside `evaluateBoundary`
+    at first; it is exposed here too, on the general traversal primitive
+    itself, since it answers the same "which lines are excluded" question
+    `excluded_circuit_ids` already does — just at finer granularity — and a
+    future boundary/load-pocket capability should not need a second,
+    parallel traversal entry point to use it."""
 
     start_substation_id: uuid.UUID
     excluded_circuit_ids: list[uuid.UUID] = []
+    excluded_circuit_terminal_ids: list[uuid.UUID] = []
     max_depth: int | None = None
     topology_version_id: uuid.UUID | None = None
 
@@ -174,11 +195,102 @@ class ReachableSubstation(BaseModel):
 class TraversalResult(BaseModel):
     start_substation_id: uuid.UUID
     excluded_circuit_ids: list[uuid.UUID]
+    # Foundation Hardening Sprint A — echoed back exactly as
+    # `excluded_circuit_ids` already is, for the same request-fidelity
+    # reason (never silently dropped or renamed in the response).
+    excluded_circuit_terminal_ids: list[uuid.UUID]
     reachable_substations: list[ReachableSubstation]
     # Phase 7E — the Operational Snapshot actually traversed, always
     # resolved and reported explicitly (never silently mixed across
     # snapshots, per Snapshot Awareness).
     topology_version_id: uuid.UUID
+
+
+# --- Foundation Hardening Sprint C — Boundary Pocket evaluation by --------------
+# connected-component discovery (ADR-019, superseding ADR-017's own
+# "Derivation and completeness" two-seed-reachability mechanism) ----------------
+#
+# Realizes docs/architecture/boundary-pocket-architecture.md §7/§10/§11 as
+# corrected: Network Model orchestration only, composing `traverse`'s own
+# graph-construction primitive (`_build_bus_adjacency_map`, unmodified) with a
+# whole-graph connected-component partition (`_compute_bus_components`, new) —
+# never a second graph. This introduces no Boundary Pocket *entity* — the
+# response below is a transient, stateless evaluation result, never
+# persisted here, exactly as that document's §3/§5 requires. There is no
+# "inside substation" or "rest of grid" input — per EDR-010's own engineering
+# concept (never mentions either) and ADR-019's own correction, the engineer
+# supplies only the selected opening points; the Main Grid and every isolated
+# island are discovered from the topology itself, never nominated.
+
+
+class BoundaryPocketEvaluationRequest(BaseModel):
+    """boundary-pocket-architecture.md §7 input: a candidate opening-point
+    set (Circuit Terminal ids — never Circuit ids, per EDR-010), and an
+    optional explicit `topology_version_id` (Snapshot Awareness, defaulting
+    to Current, mirroring `TraversalRequest`'s own convention). No inside
+    substation, no rest-of-grid override — ADR-019 removes both; the Main
+    Grid is discovered from the baseline topology itself (§ below)."""
+
+    circuit_terminal_ids: list[uuid.UUID] = []
+    topology_version_id: uuid.UUID | None = None
+
+
+class IslandSubstation(BaseModel):
+    """One Substation within an isolated island. No `depth` field — unlike
+    `ReachableSubstation`, there is no longer a single nominated seed to
+    measure hop-distance from once "inside substation" is removed (ADR-019);
+    island membership, not distance from an arbitrary point, is the
+    engineering fact that matters here."""
+
+    substation_id: uuid.UUID
+    substation_mnemonic: str
+
+
+class IsolatedIsland(BaseModel):
+    """One connected group of Substations that split off from the Main Grid
+    as a direct result of the selected opening points (ADR-019 §"Evaluation
+    model" steps 6-8) — never a component that was already separate in the
+    baseline topology before any opening was applied (§9 rule — see
+    `baseline_has_single_main_grid`/`baseline_component_count` for that,
+    separate, pre-existing-condition signal)."""
+
+    substations: list[IslandSubstation]
+
+
+class BoundaryPocketEvaluation(BaseModel):
+    """boundary-pocket-architecture.md §7 output, corrected per ADR-019.
+    Answers "which new electrical islands are created when these selected
+    Circuit Terminals are opened, relative to the active Main Grid" — not
+    "can one nominated substation be separated from one nominated
+    reference." `is_boundary_effective` is `True` iff at least one entry
+    exists in `isolated_islands`; an empty `isolated_islands` list with
+    `is_boundary_effective = False` means the selected opening points do
+    not disconnect any part of the Main Grid (incomplete/ineffective
+    boundary, per ADR-019's "Boundary completeness" section) — this is
+    reported, with `reason`, never silently rejected without explanation."""
+
+    topology_version_id: uuid.UUID
+
+    # --- Baseline (pre-opening) topology status — evidence, not a pass/fail
+    # gate. A real transmission network's baseline is expected to have
+    # exactly one substantial Main Grid; `baseline_component_count` and
+    # `baseline_has_single_main_grid` surface an abnormal pre-existing
+    # condition (ADR-019 §"Main Grid identification") as context for the
+    # engineer, independent of whatever opening points were selected.
+    baseline_component_count: int
+    baseline_main_grid_substation_count: int
+    baseline_has_single_main_grid: bool
+
+    # --- Post-opening topology status
+    post_opening_component_count: int
+    is_boundary_effective: bool
+    isolated_islands: list[IsolatedIsland]
+
+    # --- Request fidelity and correlation evidence
+    circuit_terminal_ids: list[uuid.UUID]
+    uncorrelated_circuit_terminal_ids: list[uuid.UUID]
+
+    reason: str
 
 
 # --- Phase 7F — Operational Snapshot Verification Workspace ------------------------

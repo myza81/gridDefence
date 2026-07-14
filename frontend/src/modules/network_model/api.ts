@@ -1,5 +1,7 @@
 import { apiClient } from "../../api/client";
 import type {
+  BoundaryPocketEvaluation,
+  BoundaryPocketEvaluationRequest,
   ElectricalNeighbour,
   NetworkOverview,
   PathVerificationRequest,
@@ -34,6 +36,14 @@ export const networkModelApi = {
   verifyPath: (payload: PathVerificationRequest) =>
     apiClient.post<TraversalVerificationResult>(
       "/api/v1/network-model/verification/traverse",
+      payload,
+    ),
+  // Foundation Hardening Sprint A — Boundary Pocket foundation
+  // (docs/architecture/boundary-pocket-architecture.md §7, §10). Transient,
+  // stateless — no persistence endpoint exists or is intended.
+  evaluateBoundary: (payload: BoundaryPocketEvaluationRequest) =>
+    apiClient.post<BoundaryPocketEvaluation>(
+      "/api/v1/network-model/boundary-pocket-evaluations",
       payload,
     ),
 };

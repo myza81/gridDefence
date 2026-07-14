@@ -185,6 +185,18 @@ class EquipmentRegistryRepository:
         )
         return list(self.db.execute(stmt).scalars().all())
 
+    def list_all_circuit_terminals(self) -> list[CircuitTerminal]:
+        """Every Circuit Terminal across every substation, unfiltered and
+        unpaginated — mirrors `list_all_transformer_terminals` exactly, for
+        the same cross-module-picker reason (Foundation Hardening Sprint
+        A.1's Boundary Pocket diagnostic evaluator: opening points are
+        selected *across* circuits/substations, not within one
+        already-selected Circuit, unlike `list_terminals` above). Acceptable
+        unpaginated for a modestly-sized, manually-maintained equipment
+        registry (CLAUDE.md §21)."""
+        stmt = select(CircuitTerminal).order_by(CircuitTerminal.circuit_id)
+        return list(self.db.execute(stmt).scalars().all())
+
     def list_terminals_for_circuits(
         self, circuit_ids: set[uuid.UUID]
     ) -> dict[uuid.UUID, list[CircuitTerminal]]:

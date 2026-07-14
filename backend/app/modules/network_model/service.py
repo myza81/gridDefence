@@ -34,6 +34,7 @@ from collections import deque
 from sqlalchemy.orm import Session
 
 from app.modules.network_model.exceptions import (
+    CircuitTerminalNotFoundError,
     NoCurrentTopologyVersionError,
     SubstationNotFoundError,
     TopologyVersionNotFoundError,
@@ -42,11 +43,15 @@ from app.modules.network_model.exceptions import (
 )
 from app.modules.network_model.repository import NetworkModelRepository
 from app.modules.network_model.schemas import (
+    BoundaryPocketEvaluation,
+    BoundaryPocketEvaluationRequest,
     BusProjectionEntry,
     ConnectingLine,
     CorrelationCounts,
     CorrelationSummary,
     ElectricalNeighbour,
+    IslandSubstation,
+    IsolatedIsland,
     LineBay,
     NeighbourSubstation,
     NetworkOverview,
@@ -85,6 +90,16 @@ _TRANSFORMER_SHORT_NAME_PREFIX_BY_NOMINAL_KV: dict[int, str] = {
     22: "T",
     11: "T",
 }
+
+# ADR-019 §"Main Grid identification" — a single unconnected/uncorrelated
+# Substation (or Bus) sitting in its own trivial baseline component is
+# ordinary registry noise (an unmigrated substation, a not-yet-imported
+# spur, a Fictitious/Blank-named Bus), not an abnormal grid-split
+# condition. A baseline component reaching this many correlated
+# Substations, besides the Main Grid itself, is treated as a genuine,
+# worth-flagging pre-existing multi-component condition
+# (`baseline_has_single_main_grid`).
+_MEANINGFUL_COMPONENT_MIN_SUBSTATIONS = 2
 
 
 class NetworkModelService:
@@ -448,6 +463,221 @@ class NetworkModelService:
                 excluded_transformer_ids.add(entry.topology_transformer_id)
         return excluded_branch_ids, excluded_transformer_ids
 
+    def _resolve_excluded_operational_edges_by_terminals(
+        self, circuit_terminal_ids: set[uuid.UUID], topology_version_id: uuid.UUID
+    ) -> tuple[set[int], set[int]]:
+        """Circuit Terminal opening-point translation (Foundation
+        Hardening Sprint A; boundary-pocket-architecture.md §6) — the
+        direct, per-terminal analogue of
+        `_resolve_excluded_operational_edges`, which only ever resolves a
+        *whole* Circuit's terminals. Boundary Pocket construction opens
+        specific Circuit Terminals — engineering switching points — not
+        necessarily every terminal on their Circuit: on a tee-off Circuit,
+        opening only one leg must exclude only that leg's own correlated
+        element, never the other legs' (network-model-module.md §9 rule
+        11's own tee-off subset gap; boundary-pocket-architecture.md §6).
+        `EquipmentTopologyMap` is already keyed one row per
+        `(topology_version_id, circuit_terminal_id)`, so no new
+        correlation mechanism was required — only a query scoped to the
+        individual terminals supplied, rather than every terminal of their
+        shared Circuit. An uncorrelated terminal excludes nothing,
+        gracefully, mirroring every other correlation-optional tolerance
+        this module already establishes."""
+        if not circuit_terminal_ids:
+            return set(), set()
+
+        excluded_branch_ids: set[int] = set()
+        excluded_transformer_ids: set[int] = set()
+        for entry in self.repo.list_map_entries_for_terminals(
+            list(circuit_terminal_ids), topology_version_id
+        ):
+            if entry.topology_branch_id is not None:
+                excluded_branch_ids.add(entry.topology_branch_id)
+            if entry.topology_transformer_id is not None:
+                excluded_transformer_ids.add(entry.topology_transformer_id)
+        return excluded_branch_ids, excluded_transformer_ids
+
+    def _validate_circuit_terminals_exist(self, circuit_terminal_ids: list[uuid.UUID]) -> None:
+        """Foundation Hardening Sprint A — a caller-supplied opening point
+        must name a real `CircuitTerminal`. This is a genuine request
+        error (`CircuitTerminalNotFoundError`), distinct from the
+        "uncorrelated terminal excludes nothing" tolerance a terminal that
+        exists but has no `EquipmentTopologyMap` entry for this snapshot
+        receives — that terminal is real, just not yet correlated;
+        a terminal id that does not exist at all can never be a real
+        engineering opening point and is rejected outright."""
+        if not circuit_terminal_ids:
+            return
+        found_ids = {
+            t.circuit_terminal_id
+            for t in self.repo.list_circuit_terminals_by_ids(circuit_terminal_ids)
+        }
+        for circuit_terminal_id in circuit_terminal_ids:
+            if circuit_terminal_id not in found_ids:
+                raise CircuitTerminalNotFoundError(circuit_terminal_id)
+
+    def _resolve_boundary_exclusions(
+        self, circuit_terminal_ids: list[uuid.UUID], topology_version_id: uuid.UUID
+    ) -> tuple[set[int], set[int], list[uuid.UUID]]:
+        """ADR-019 — resolves the selected opening points to their
+        correlated Operational Branch/Transformer elements (per-terminal,
+        via `EquipmentTopologyMap` — Foundation Hardening Sprint A's own
+        correlation mechanism, unmodified), and additionally reports
+        which selected terminals produced no correlation at all. This is
+        evidence surfaced to the engineer (`uncorrelated_circuit_terminal_ids`),
+        never a silent gap and never a request error — a terminal that
+        exists but is not yet correlated for this snapshot is a valid,
+        tolerated input (`CircuitTerminalNotFoundError`, raised by
+        `_validate_circuit_terminals_exist` separately, is reserved for a
+        terminal that does not exist at all)."""
+        if not circuit_terminal_ids:
+            return set(), set(), []
+
+        correlated_terminal_ids: set[uuid.UUID] = set()
+        excluded_branch_ids: set[int] = set()
+        excluded_transformer_ids: set[int] = set()
+        for entry in self.repo.list_map_entries_for_terminals(
+            list(set(circuit_terminal_ids)), topology_version_id
+        ):
+            if entry.topology_branch_id is None and entry.topology_transformer_id is None:
+                continue
+            correlated_terminal_ids.add(entry.circuit_terminal_id)
+            if entry.topology_branch_id is not None:
+                excluded_branch_ids.add(entry.topology_branch_id)
+            if entry.topology_transformer_id is not None:
+                excluded_transformer_ids.add(entry.topology_transformer_id)
+
+        uncorrelated = [
+            terminal_id
+            for terminal_id in circuit_terminal_ids
+            if terminal_id not in correlated_terminal_ids
+        ]
+        return excluded_branch_ids, excluded_transformer_ids, uncorrelated
+
+    @staticmethod
+    def _compute_bus_components(
+        buses: list[TopologyBus], adjacency: dict[int, set[int]]
+    ) -> list[set[int]]:
+        """ADR-019 — partitions every Bus Number in `buses` into its
+        connected component via BFS: whole-graph component discovery,
+        not two independently-seeded reachability traversals (the
+        ADR-017 mechanism this supersedes). A Bus with no in-service,
+        non-excluded edge at all is still its own single-Bus component,
+        never omitted — every Bus in `buses` appears in exactly one
+        returned component, satisfying EDR-007's "never skip a Bus"
+        tolerance exactly as `_build_bus_adjacency_map` already does.
+        Components are returned in a fully deterministic order — sorted
+        by descending size, then by ascending minimum Bus Number — the
+        same ordering `evaluate_boundary` relies on to identify the Main
+        Grid deterministically (see `_identify_main_grid`)."""
+        all_bus_numbers = {bus.bus_number for bus in buses}
+        visited: set[int] = set()
+        components: list[set[int]] = []
+        for start in sorted(all_bus_numbers):
+            if start in visited:
+                continue
+            component: set[int] = set()
+            queue: deque[int] = deque([start])
+            visited.add(start)
+            while queue:
+                current = queue.popleft()
+                component.add(current)
+                for neighbour in adjacency.get(current, ()):
+                    if neighbour not in visited:
+                        visited.add(neighbour)
+                        queue.append(neighbour)
+            components.append(component)
+        components.sort(key=lambda component: (-len(component), min(component)))
+        return components
+
+    @staticmethod
+    def _identify_main_grid(components: list[set[int]]) -> tuple[set[int], list[set[int]]]:
+        """ADR-019 §"Main Grid identification": the Main Grid is defined,
+        deterministically, as the **largest** connected component of the
+        baseline (pre-opening) topology graph, by Bus count — the
+        standard power-system convention for identifying the dominant
+        synchronous system among whatever else the current snapshot
+        happens to contain (unmigrated spurs, de-energised fragments,
+        genuinely separate pre-existing islands). `components` is already
+        sorted largest-first by `_compute_bus_components`, so the Main
+        Grid is simply the first entry; every other entry is baseline
+        evidence only (see `baseline_has_single_main_grid`) — never
+        itself reported as a "newly isolated island," a term reserved for
+        components created by the selected opening points."""
+        if not components:
+            return set(), []
+        return components[0], components[1:]
+
+    def _bus_numbers_to_substation_ids(
+        self, bus_numbers: set[int], bus_by_number: dict[int, TopologyBus]
+    ) -> set[uuid.UUID]:
+        return {
+            bus_by_number[number].substation_id
+            for number in bus_numbers
+            if number in bus_by_number and bus_by_number[number].substation_id is not None
+        }
+
+    def _bus_numbers_to_island_substations(
+        self, bus_numbers: set[int], bus_by_number: dict[int, TopologyBus]
+    ) -> list[IslandSubstation]:
+        substation_ids = self._bus_numbers_to_substation_ids(bus_numbers, bus_by_number)
+        if not substation_ids:
+            return []
+        substations_by_id = {
+            s.substation_id: s for s in self.repo.list_substations_by_ids(list(substation_ids))
+        }
+        result = [
+            IslandSubstation(substation_id=sid, substation_mnemonic=substations_by_id[sid].mnemonic)
+            for sid in substation_ids
+            if sid in substations_by_id
+        ]
+        result.sort(key=lambda item: item.substation_mnemonic.casefold())
+        return result
+
+    def _bfs_substation_depths(
+        self,
+        start_substation_id: uuid.UUID,
+        buses: list[TopologyBus],
+        adjacency: dict[int, set[int]],
+        max_depth: int | None,
+    ) -> dict[uuid.UUID, int]:
+        """Shared bus-level BFS + substation-depth reduction — the exact
+        reachability computation `traverse()` already performs (§19.4,
+        unmodified), factored out so Boundary Pocket completeness
+        evaluation (`evaluate_boundary`, boundary-pocket-architecture.md
+        §7) can run it twice — once from the candidate "inside" substation,
+        once from the "rest of grid" anchor — against one shared adjacency
+        map, without duplicating the algorithm. Multi-source seed and
+        "start substation always present at depth 0" behaviour are
+        unchanged from `traverse()`'s own pre-existing logic."""
+        seed_bus_numbers = [
+            bus.bus_number for bus in buses if bus.substation_id == start_substation_id
+        ]
+
+        depths: dict[int, int] = dict.fromkeys(seed_bus_numbers, 0)
+        queue: deque[int] = deque(seed_bus_numbers)
+
+        while queue:
+            current = queue.popleft()
+            current_depth = depths[current]
+            if max_depth is not None and current_depth >= max_depth:
+                continue
+            for neighbour_bus_number in adjacency.get(current, ()):
+                if neighbour_bus_number not in depths:
+                    depths[neighbour_bus_number] = current_depth + 1
+                    queue.append(neighbour_bus_number)
+
+        bus_by_number = {bus.bus_number: bus for bus in buses}
+        substation_depth: dict[uuid.UUID, int] = {start_substation_id: 0}
+        for bus_number, depth in depths.items():
+            bus = bus_by_number.get(bus_number)
+            if bus is None or bus.substation_id is None:
+                continue
+            existing = substation_depth.get(bus.substation_id)
+            if existing is None or depth < existing:
+                substation_depth[bus.substation_id] = depth
+        return substation_depth
+
     @staticmethod
     def _build_bus_adjacency_map(
         buses: list[TopologyBus],
@@ -528,6 +758,16 @@ class NetworkModelService:
         excluded_branch_ids, excluded_transformer_ids = self._resolve_excluded_operational_edges(
             set(request.excluded_circuit_ids), topology_version_id
         )
+        # Foundation Hardening Sprint A — Circuit Terminal opening points
+        # (finer than whole-Circuit exclusion) combine additively with
+        # `excluded_circuit_ids`'s own resolved elements.
+        term_excluded_branch_ids, term_excluded_transformer_ids = (
+            self._resolve_excluded_operational_edges_by_terminals(
+                set(request.excluded_circuit_terminal_ids), topology_version_id
+            )
+        )
+        excluded_branch_ids |= term_excluded_branch_ids
+        excluded_transformer_ids |= term_excluded_transformer_ids
 
         adjacency = self._build_bus_adjacency_map(
             buses,
@@ -539,46 +779,14 @@ class NetworkModelService:
             excluded_transformer_ids=excluded_transformer_ids,
         )
 
-        # Multi-source seed: every Bus already correlated to the start
-        # Substation starts at depth 0 (a multi-voltage Substation may
-        # correlate to more than one Bus — all of them are "the
-        # Substation itself," per Substation <-> Switchyard <-> Bus,
-        # EDR-007 §4.4). The start Substation is always included in the
-        # output at depth 0 even if it currently correlates to no Bus at
-        # all in this snapshot (an unmigrated/newly-registered substation)
-        # — preserving the pre-migration invariant "a substation is always
-        # reachable from itself."
-        seed_bus_numbers = [
-            bus.bus_number for bus in buses if bus.substation_id == request.start_substation_id
-        ]
-
-        depths: dict[int, int] = dict.fromkeys(seed_bus_numbers, 0)
-        queue: deque[int] = deque(seed_bus_numbers)
-
-        while queue:
-            current = queue.popleft()
-            current_depth = depths[current]
-            if request.max_depth is not None and current_depth >= request.max_depth:
-                continue
-            for neighbour_bus_number in adjacency.get(current, ()):
-                if neighbour_bus_number not in depths:
-                    depths[neighbour_bus_number] = current_depth + 1
-                    queue.append(neighbour_bus_number)
-
-        bus_by_number = {bus.bus_number: bus for bus in buses}
-        substation_depth: dict[uuid.UUID, int] = {request.start_substation_id: 0}
-        for bus_number, depth in depths.items():
-            bus = bus_by_number.get(bus_number)
-            if bus is None or bus.substation_id is None:
-                # Reached electrically (the Bus fully participated in the
-                # graph — Fictitious/Blank-named/unmatched Buses are never
-                # skipped), but there is no correlated Substation to report
-                # at this substation-shaped output layer. Optional
-                # enrichment absent, never a traversal failure.
-                continue
-            existing = substation_depth.get(bus.substation_id)
-            if existing is None or depth < existing:
-                substation_depth[bus.substation_id] = depth
+        # Multi-source seed, "start substation always present at depth 0,"
+        # and bus-to-substation depth reduction are all performed by the
+        # shared `_bfs_substation_depths` helper (also used by
+        # `evaluate_boundary`, Foundation Hardening Sprint A) — identical
+        # behaviour to this method's own pre-existing inline computation.
+        substation_depth = self._bfs_substation_depths(
+            request.start_substation_id, buses, adjacency, request.max_depth
+        )
 
         substations_by_id = {
             s.substation_id: s for s in self.repo.list_substations_by_ids(list(substation_depth))
@@ -605,8 +813,157 @@ class NetworkModelService:
         return TraversalResult(
             start_substation_id=request.start_substation_id,
             excluded_circuit_ids=list(request.excluded_circuit_ids),
+            excluded_circuit_terminal_ids=list(request.excluded_circuit_terminal_ids),
             reachable_substations=reachable,
             topology_version_id=topology_version_id,
+        )
+
+    # --- Foundation Hardening Sprint C — Boundary Pocket evaluation by ---------
+    # connected-component discovery (ADR-019) --------------------------------
+    #
+    # `evaluateBoundary` (boundary-pocket-architecture.md §7, §10, §11, as
+    # corrected by ADR-019) — Network Model orchestration only. It composes
+    # `_resolve_topology_version`, `_resolve_boundary_exclusions`,
+    # `_build_bus_adjacency_map`, `_compute_bus_components`, and
+    # `_identify_main_grid` (all above) to discover every Substation group
+    # that splits off from the baseline Main Grid once the selected opening
+    # points are treated as open — never two independently-nominated
+    # reachability seeds (the ADR-017 mechanism this supersedes). It creates
+    # no Boundary Pocket entity, no Scheme assignment, and no engineering
+    # finding — every one of those remains a future Defence Scheme module's
+    # own concern (boundary-pocket-architecture.md §3, §8).
+
+    def evaluate_boundary(
+        self, request: BoundaryPocketEvaluationRequest
+    ) -> BoundaryPocketEvaluation:
+        """boundary-pocket-architecture.md §7's Completeness Evaluation, per
+        ADR-019. Answers "which new electrical islands are created when
+        these selected Circuit Terminals are opened, relative to the
+        active Main Grid" — never "can one nominated substation be
+        separated from one nominated reference." No inside substation, no
+        rest-of-grid override: the Main Grid is discovered from the
+        baseline (pre-opening) topology itself, and every group of
+        Substations that splits off from it as a direct result of the
+        selected opening points is reported, not only one. Always a live,
+        stateless, synchronous computation — no caching, no async job
+        infrastructure; whole-graph connected-component discovery over a
+        few thousand Buses is cheap enough to re-run on every boundary
+        edit during Draft, exactly mirroring `traverse()`'s own
+        performance characteristics."""
+        topology_version_id = self._resolve_topology_version(request.topology_version_id)
+
+        self._validate_circuit_terminals_exist(request.circuit_terminal_ids)
+
+        excluded_branch_ids, excluded_transformer_ids, uncorrelated_terminal_ids = (
+            self._resolve_boundary_exclusions(request.circuit_terminal_ids, topology_version_id)
+        )
+
+        buses = self.repo.list_topology_buses(topology_version_id)
+        branches = self.repo.list_topology_branches(topology_version_id)
+        transformers = self.repo.list_topology_transformers(topology_version_id)
+        branch_in_service, transformer_in_service = self._in_service_element_ids(
+            topology_version_id
+        )
+        bus_by_number = {bus.bus_number: bus for bus in buses}
+
+        # --- Baseline (no opening points applied) — establishes the Main
+        # Grid this evaluation compares against, and surfaces any
+        # pre-existing, abnormal multi-component condition as evidence,
+        # independent of whatever opening points were selected.
+        baseline_adjacency = self._build_bus_adjacency_map(
+            buses,
+            branches,
+            transformers,
+            branch_in_service=branch_in_service,
+            transformer_in_service=transformer_in_service,
+            excluded_branch_ids=set(),
+            excluded_transformer_ids=set(),
+        )
+        baseline_components = self._compute_bus_components(buses, baseline_adjacency)
+        main_grid_bus_numbers, other_baseline_components = self._identify_main_grid(
+            baseline_components
+        )
+        main_grid_anchor = min(main_grid_bus_numbers) if main_grid_bus_numbers else None
+        baseline_main_grid_substations = self._bus_numbers_to_substation_ids(
+            main_grid_bus_numbers, bus_by_number
+        )
+        baseline_has_single_main_grid = not any(
+            len(self._bus_numbers_to_substation_ids(component, bus_by_number))
+            >= _MEANINGFUL_COMPONENT_MIN_SUBSTATIONS
+            for component in other_baseline_components
+        )
+
+        # --- Post-opening — the same graph, with the selected opening
+        # points' correlated elements additionally excluded.
+        post_opening_adjacency = self._build_bus_adjacency_map(
+            buses,
+            branches,
+            transformers,
+            branch_in_service=branch_in_service,
+            transformer_in_service=transformer_in_service,
+            excluded_branch_ids=excluded_branch_ids,
+            excluded_transformer_ids=excluded_transformer_ids,
+        )
+        post_opening_components = self._compute_bus_components(buses, post_opening_adjacency)
+
+        surviving_main_grid_component: set[int] = next(
+            (
+                component
+                for component in post_opening_components
+                if main_grid_anchor is not None and main_grid_anchor in component
+            ),
+            set(),
+        )
+
+        # Every post-opening component that (a) is not the surviving Main
+        # Grid itself, and (b) actually shares Buses with the *baseline*
+        # Main Grid, is a newly isolated island — a component neither
+        # condition holds for was already separate before any opening was
+        # applied (baseline evidence only, never a "newly isolated" claim).
+        isolated_islands: list[IsolatedIsland] = []
+        for component in post_opening_components:
+            if component == surviving_main_grid_component:
+                continue
+            split_off_bus_numbers = component & main_grid_bus_numbers
+            if not split_off_bus_numbers:
+                continue
+            island_substations = self._bus_numbers_to_island_substations(
+                split_off_bus_numbers, bus_by_number
+            )
+            if island_substations:
+                isolated_islands.append(IsolatedIsland(substations=island_substations))
+
+        isolated_islands.sort(
+            key=lambda island: (
+                -len(island.substations),
+                island.substations[0].substation_mnemonic.casefold(),
+            )
+        )
+
+        is_boundary_effective = len(isolated_islands) > 0
+        if is_boundary_effective:
+            island_word = "island" if len(isolated_islands) == 1 else "islands"
+            reason = (
+                f"{len(isolated_islands)} new isolated {island_word} formed relative to the "
+                "Main Grid."
+            )
+        else:
+            reason = (
+                "No new island was formed — the selected opening points do not disconnect any "
+                "part of the Main Grid under the current snapshot."
+            )
+
+        return BoundaryPocketEvaluation(
+            topology_version_id=topology_version_id,
+            baseline_component_count=len(baseline_components),
+            baseline_main_grid_substation_count=len(baseline_main_grid_substations),
+            baseline_has_single_main_grid=baseline_has_single_main_grid,
+            post_opening_component_count=len(post_opening_components),
+            is_boundary_effective=is_boundary_effective,
+            isolated_islands=isolated_islands,
+            circuit_terminal_ids=list(request.circuit_terminal_ids),
+            uncorrelated_circuit_terminal_ids=uncorrelated_terminal_ids,
+            reason=reason,
         )
 
     # --- Phase 7F — Operational Snapshot Verification Workspace ----------------

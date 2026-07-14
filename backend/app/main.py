@@ -19,12 +19,13 @@ from app.core.logging import configure_logging
 from app.modules.automatic_load_shedding_functionality.router import (
     router as automatic_load_shedding_functionality_router,
 )
-from app.modules.equipment_registry.router import router as equipment_registry_router
 from app.modules.equipment_registry.router import (
+    circuit_terminal_router,
     transformer_router,
     transformer_terminal_router,
     voltage_yard_router,
 )
+from app.modules.equipment_registry.router import router as equipment_registry_router
 from app.modules.iam.router import router as iam_router
 from app.modules.network_model.router import router as network_model_router
 from app.modules.psse_integration.router import router as psse_integration_router
@@ -61,6 +62,7 @@ api_v1_router.include_router(equipment_registry_router)
 api_v1_router.include_router(voltage_yard_router)
 api_v1_router.include_router(transformer_router)
 api_v1_router.include_router(transformer_terminal_router)
+api_v1_router.include_router(circuit_terminal_router)
 api_v1_router.include_router(psse_integration_router)
 api_v1_router.include_router(network_model_router)
 api_v1_router.include_router(automatic_load_shedding_functionality_router)

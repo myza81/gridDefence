@@ -23,6 +23,8 @@ from app.modules.iam.models import User
 from app.modules.network_model.dependencies import get_network_model_service
 from app.modules.network_model.exceptions import AppError, NotFoundError
 from app.modules.network_model.schemas import (
+    BoundaryPocketEvaluation,
+    BoundaryPocketEvaluationRequest,
     ElectricalNeighbour,
     NetworkOverview,
     PathVerificationRequest,
@@ -106,6 +108,27 @@ def traverse(
 ) -> TraversalResult:
     try:
         return service.traverse(request)
+    except AppError as exc:
+        raise _error_response(exc) from exc
+
+
+# --- Foundation Hardening Sprint A — Boundary Pocket foundation -------------------
+#
+# docs/architecture/boundary-pocket-architecture.md §10 — always synchronous, no
+# job/polling shape, no persistence endpoint of its own (this capability never
+# persists a Boundary Pocket; a future Defence Scheme module's own
+# assignment-creation endpoint would call `evaluateBoundary` internally, as a
+# service-layer call, not by proxying through this HTTP endpoint).
+
+
+@router.post("/boundary-pocket-evaluations", response_model=BoundaryPocketEvaluation)
+def evaluate_boundary(
+    request: BoundaryPocketEvaluationRequest,
+    service: NetworkModelService = Depends(get_network_model_service),
+    _current_user: User = Depends(get_current_user),
+) -> BoundaryPocketEvaluation:
+    try:
+        return service.evaluate_boundary(request)
     except AppError as exc:
         raise _error_response(exc) from exc
 

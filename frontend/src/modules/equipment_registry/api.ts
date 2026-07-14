@@ -6,6 +6,7 @@ import type {
   CircuitPage,
   CircuitStatusChange,
   CircuitTerminalAdd,
+  CircuitTerminalIdentity,
   CircuitTerminalSummary,
   CircuitTerminalUpdate,
   CircuitUpdate,
@@ -109,4 +110,6 @@ export const equipmentRegistryApi = {
     ),
   listTransformerTerminalIdentities: () =>
     apiClient.get<TransformerTerminalIdentity[]>("/api/v1/transformer-terminals"),
+  listCircuitTerminalIdentities: () =>
+    apiClient.get<CircuitTerminalIdentity[]>("/api/v1/circuit-terminals"),
 };

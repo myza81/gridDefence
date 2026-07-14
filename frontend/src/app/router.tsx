@@ -18,6 +18,7 @@ import { RolesPage } from "../modules/iam/pages/RolesPage";
 import { UsersPage } from "../modules/iam/pages/UsersPage";
 import { ProtectedRoute } from "../modules/iam/ProtectedRoute";
 import { BayViewPage } from "../modules/network_model/pages/BayViewPage";
+import { BoundaryPocketEvaluatorPage } from "../modules/network_model/pages/BoundaryPocketEvaluatorPage";
 import { ConnectivityViewPage } from "../modules/network_model/pages/ConnectivityViewPage";
 import { NetworkOverviewPage } from "../modules/network_model/pages/NetworkOverviewPage";
 import { NetworkTraversalPage } from "../modules/network_model/pages/NetworkTraversalPage";
@@ -403,6 +404,19 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <OperationalSnapshotVerificationPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    // Foundation Hardening Sprint A.1 — diagnostic tool only, per
+    // docs/architecture/boundary-pocket-architecture.md. Not the future
+    // Scheme Engineering Workspace's Pocket Builder.
+    path: "/network-model/boundary-pocket-evaluator",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <BoundaryPocketEvaluatorPage />
         </ProtectedRoute>
       </AppShell>
     ),

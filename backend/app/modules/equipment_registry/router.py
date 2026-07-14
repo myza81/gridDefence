@@ -25,6 +25,7 @@ from app.modules.equipment_registry.schemas import (
     CircuitPage,
     CircuitStatusChange,
     CircuitTerminalAdd,
+    CircuitTerminalIdentity,
     CircuitTerminalSummary,
     CircuitTerminalUpdate,
     CircuitUpdate,
@@ -49,6 +50,15 @@ transformer_router = APIRouter(prefix="/transformers", tags=["equipment-registry
 transformer_terminal_router = APIRouter(
     prefix="/transformer-terminals", tags=["equipment-registry"]
 )
+# Foundation Hardening Sprint A.1 — read-only, cross-network Circuit Terminal
+# browse, mirroring `transformer_terminal_router`'s own "top-level resource,
+# not path-nested" precedent, for the same reason: a Boundary Pocket
+# diagnostic opening-point picker needs to browse/search Circuit Terminals
+# *across* Circuits, not only within one already-selected Circuit (unlike
+# `/circuits/{circuit_id}/terminals`, which remains path-nested and
+# unchanged — this is an additional, read-only access pattern, not a
+# replacement).
+circuit_terminal_router = APIRouter(prefix="/circuit-terminals", tags=["equipment-registry"])
 
 
 def _error_response(exc: AppError) -> HTTPException:
@@ -419,6 +429,23 @@ def list_transformer_terminal_identities(
     _current_user: User = Depends(get_current_user),
 ) -> list[TransformerTerminalIdentity]:
     return service.list_transformer_terminal_identities()
+
+
+# --- Circuit Terminal (Foundation Hardening Sprint A.1) -----------------------------
+#
+# Exposed as its own top-level resource, `/circuit-terminals`, alongside the
+# existing path-nested `/circuits/{circuit_id}/terminals` — mirroring
+# `transformer_terminal_router`'s own precedent above. Read-only, authenticated
+# only (no dedicated permission gate), consistent with every other engineering
+# reference-data read in this module.
+
+
+@circuit_terminal_router.get("", response_model=list[CircuitTerminalIdentity])
+def list_circuit_terminal_identities(
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    _current_user: User = Depends(get_current_user),
+) -> list[CircuitTerminalIdentity]:
+    return service.list_circuit_terminal_identities()
 
 
 @voltage_yard_router.patch("/{voltage_yard_id}", response_model=VoltageYardSummary)
