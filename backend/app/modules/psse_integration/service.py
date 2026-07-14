@@ -75,7 +75,8 @@ from app.modules.psse_integration.schemas import (
     TopologyVersionSummary,
 )
 from app.modules.psse_integration.signature import compute_topology_signature
-from app.modules.substation_registry.models import Substation
+from app.modules.substation_registry.schemas import SubstationSummary
+from app.modules.substation_registry.service import SubstationService
 
 # --- Commit engineering findings: categorization and aggregation
 # (Phase 6.1 engineering presentation refinement, §8.9d) -----------------------
@@ -264,6 +265,14 @@ class PsseIntegrationService:
         self.db = db
         self.repo = PsseIntegrationRepository(db)
         self.iam = IAMService(db)
+        # Foundation Hardening Sprint B — Substation Registry is Master
+        # Data this module depends on (CLAUDE.md A2); bus-to-substation
+        # mnemonic matching and mnemonic display enrichment now go
+        # through its own service layer (psse-integration-module.md §13's
+        # own "substation lookup/matching by mnemonic... From Master Data
+        # (Substation Registry)" requirement), never this module's own
+        # repository querying `Substation` directly.
+        self.substation_service = SubstationService(db)
 
     # --- internal helpers ---------------------------------------------------
     def _resolve_user(self, user_id: uuid.UUID | None) -> UserSummary | None:
@@ -290,7 +299,7 @@ class PsseIntegrationService:
             )
         )
 
-    def _match_substation_for_bus(self, bus_name: str | None) -> Substation | None:
+    def _match_substation_for_bus(self, bus_name: str | None) -> SubstationSummary | None:
         """Best-effort bus-to-substation matching by mnemonic prefix
         (psse-integration-module.md §9 rule 12's "unmatched buses are
         warnings only" — this module never invents or auto-creates a
@@ -301,15 +310,18 @@ class PsseIntegrationService:
         matching the leading 4 characters is a deliberately simple,
         transparent heuristic, not a claim of perfect fidelity.
 
-        Returns the full `Substation` row (not just its id) — Phase 7C's
+        Returns the full `SubstationSummary` (not just its id) — Phase 7C's
         Correlated Operational Model and Preview enrichment both need the
         mnemonic for display, not only the id; callers that only need the
         id (e.g. `TopologyBus.substation_id`) read `.substation_id` off the
-        result."""
+        result. Resolved through Substation Registry's own service layer
+        (`SubstationService.find_by_mnemonic`), never this module's own
+        repository querying `Substation` directly (Foundation Hardening
+        Sprint B)."""
         if not bus_name or len(bus_name.strip()) < 4:
             return None
         candidate_mnemonic = bus_name.strip()[:4]
-        return self.repo.find_substation_by_mnemonic_ci(candidate_mnemonic)
+        return self.substation_service.find_by_mnemonic(candidate_mnemonic)
 
     def _build_voltage_yard_lookup(
         self, substation_ids: list[uuid.UUID]
@@ -335,7 +347,7 @@ class PsseIntegrationService:
         }
 
     def _enrich_buses_for_preview(
-        self, buses: list, bus_substations: list[Substation | None]
+        self, buses: list, bus_substations: list[SubstationSummary | None]
     ) -> list[SimpleNamespace]:
         """Phase 7C — Preview/Inspector enrichment (zero persistence): the
         same Substation match Preview's own Registry Matching count
@@ -1371,8 +1383,11 @@ class PsseIntegrationService:
         substation_id = self._terminal_substation_id(terminal) if terminal else None
         substation_mnemonic = ""
         if substation_id is not None:
-            substation_row = self.db.get(Substation, substation_id)
-            substation_mnemonic = substation_row.mnemonic if substation_row else ""
+            # Foundation Hardening Sprint B — Substation Registry's own
+            # service layer, never this module's `self.db` reading
+            # `Substation` directly.
+            substation = self.substation_service.get_substation(substation_id)
+            substation_mnemonic = substation.mnemonic if substation is not None else ""
         return EquipmentTopologyMapEntry(
             map_id=entry.map_id,
             topology_version_id=entry.topology_version_id,
@@ -1807,9 +1822,7 @@ class PsseIntegrationService:
             return []
         wanted = set(bus_numbers)
         buses = [
-            b
-            for b in self.repo.list_topology_buses(topology_version_id)
-            if b.bus_number in wanted
+            b for b in self.repo.list_topology_buses(topology_version_id) if b.bus_number in wanted
         ]
         return self._build_operational_bus_views(topology_version_id, buses)
 

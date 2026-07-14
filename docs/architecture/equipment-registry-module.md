@@ -680,6 +680,8 @@ Per CLAUDE.md A1 (module communication via in-process service-layer interfaces):
 
 Equipment Registry never calls a scheme module's service interface (§4), and no scheme module writes to this module's tables, per CLAUDE.md A1 and [ADR-001](../adr/ADR-001-modular-monolith-and-module-communication.md).
 
+**Status update (Foundation Hardening Sprint B — Architecture Boundary Review).** A compliance audit confirmed this module's own `substation_exists`/read-enrichment queries (`EquipmentRegistryRepository`, backing `CircuitTerminalSummary`/`ConnectingLine`/`TerminalOnCircuit` display fields and the write-time substation-existence check) read Substation Registry's `Substation` model directly rather than through `SubstationService`, as the line above documents as intended. Classified as an **acceptable implementation shortcut (Class B), not corrected in this sprint**: every call is a single-column existence check or read-only display join, never a business decision with audit consequence (contrast [psse-integration-module.md](psse-integration-module.md) §13's own status note, where the equivalent gap was judged Class C and corrected); the pattern is pervasive across this codebase's read paths (Network Model's own composition layer relies on the identical mechanism, deliberately, per [network-model-module.md](network-model-module.md) §19.2); and routing bulk display joins through `SubstationService` one row at a time would reintroduce N+1 query behaviour. Left as documented, low-priority technical debt, not silently ignored.
+
 ---
 
 ## 14. Audit Requirements

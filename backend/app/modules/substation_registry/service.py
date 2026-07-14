@@ -486,6 +486,20 @@ class SubstationService:
         return substation
 
     # --- Read ---------------------------------------------------------------------
+    def find_by_mnemonic(self, mnemonic: str) -> SubstationSummary | None:
+        """Case-insensitive exact-mnemonic lookup — the service-layer
+        entry point for cross-module mnemonic matching (e.g. PSS/E
+        Integration's bus-to-substation matching during import,
+        psse-integration-module.md §13's own "substation lookup/matching
+        by mnemonic, used during import parsing" requirement). Returns
+        the lightweight `SubstationSummary` (not `SubstationDetail`,
+        which additionally resolves `created_by`/`updated_by` — needless
+        work for a lookup that may run once per imported Bus)."""
+        substation = self.repo.get_by_mnemonic_ci(mnemonic)
+        if substation is None:
+            return None
+        return SubstationSummary.model_validate(substation)
+
     def get_substation(self, substation_id: uuid.UUID) -> SubstationDetail | None:
         substation = self.repo.get_by_id(substation_id)
         if substation is None:

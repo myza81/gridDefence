@@ -259,10 +259,18 @@ class PsseIntegrationRepository:
         return list(self.db.execute(stmt).scalars().all())
 
     # --- Substation Registry (read-only, cross-module) --------------------------
-    def find_substation_by_mnemonic_ci(self, mnemonic: str) -> Substation | None:
-        stmt = select(Substation).where(func.lower(Substation.mnemonic) == mnemonic.lower())
-        return self.db.execute(stmt).scalar_one_or_none()
-
+    #
+    # Foundation Hardening Sprint B: single-substation mnemonic matching
+    # (the former `find_substation_by_mnemonic_ci`) now goes through
+    # Substation Registry's own service layer (`SubstationService.
+    # find_by_mnemonic`, called from `PsseIntegrationService.
+    # _match_substation_for_bus`), never this repository. `list_substations_
+    # by_ids` remains here deliberately — a bulk, display-only enrichment
+    # read (Correlated Operational Model mnemonic display across many
+    # already-matched Buses in one query), acceptable under CLAUDE.md A1's
+    # query-optimisation exception; going through the service layer
+    # one-substation-at-a-time here would reintroduce the N+1 query pattern
+    # that read-only-join exception exists to avoid.
     def list_substations_by_ids(self, substation_ids: list[uuid.UUID]) -> list[Substation]:
         """Phase 7C — bulk read for the Correlated Operational Model
         (mnemonic display for every already-matched Bus in one query, not
