@@ -22,6 +22,16 @@ The engineering result of running `run_commit_job(...)` (or any future
 submitted function) is identical either way — this module changes nothing
 about *what* runs, only *how* its completion is reported back to the
 caller. See docs/architecture/psse-integration-module.md §8.9c.
+
+`submit()` gained optional `queue_name`/`job_id`/`retry` keyword-only
+parameters (Shared Platform Sprint 6) — all default to `None`/absent, so
+every existing call site (PSS/E Integration's own) is unaffected.
+`DirectExecutionEngine` accepts and discards them (immediate in-process
+execution has no queue, no job id, and nothing to retry);
+`QueueExecutionEngine` forwards them to `app.core.queue.enqueue`, which
+forwards `job_id`/`retry` to RQ's own `Queue.enqueue` (RQ's own,
+already-existing retry mechanism — ADR-023 introduces no new retry
+policy) and `queue_name` to select which named queue receives the job.
 """
 
 from __future__ import annotations
@@ -63,16 +73,34 @@ class ExecutionResult:
 
 
 class ExecutionEngine(Protocol):
-    def submit(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> ExecutionResult: ...
+    def submit(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        queue_name: str | None = None,
+        job_id: str | None = None,
+        retry: Any | None = None,
+        **kwargs: Any,
+    ) -> ExecutionResult: ...
 
     def fetch(self, job_id: str) -> ExecutionResult | None: ...
 
 
 class DirectExecutionEngine:
     """Runs the submitted function synchronously, in the calling thread.
-    No Redis, no RQ, no worker process — the default execution mode."""
+    No Redis, no RQ, no worker process — the default execution mode.
+    `queue_name`/`job_id`/`retry` are accepted and discarded: none of
+    those concepts apply to immediate, in-process execution."""
 
-    def submit(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> ExecutionResult:
+    def submit(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        queue_name: str | None = None,
+        job_id: str | None = None,
+        retry: Any | None = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
         try:
             result = func(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 - surfaced via ExecutionResult.error, not raised
@@ -86,11 +114,29 @@ class DirectExecutionEngine:
 
 class QueueExecutionEngine:
     """Enqueues the submitted function via Redis+RQ (`app.core.queue`) —
-    unchanged production behaviour from before this refactor."""
+    unchanged production behaviour from before this refactor.
+    `queue_name` selects which named RQ queue receives the job (default:
+    the PSS/E Integration queue); `job_id`/`retry` are forwarded to RQ's
+    own `Queue.enqueue`."""
 
-    def submit(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> ExecutionResult:
+    def submit(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        queue_name: str | None = None,
+        job_id: str | None = None,
+        retry: Any | None = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        enqueue_kwargs: dict[str, Any] = dict(kwargs)
+        if queue_name is not None:
+            enqueue_kwargs["queue_name"] = queue_name
+        if job_id is not None:
+            enqueue_kwargs["job_id"] = job_id
+        if retry is not None:
+            enqueue_kwargs["retry"] = retry
         try:
-            job = enqueue(func, *args, **kwargs)
+            job = enqueue(func, *args, **enqueue_kwargs)
         except redis.exceptions.RedisError as exc:
             logger.error("Execution Engine: queue unavailable — %s", exc)
             raise ExecutionUnavailableError(str(exc)) from exc

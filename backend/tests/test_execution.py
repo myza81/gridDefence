@@ -103,3 +103,47 @@ def test_get_queue_still_usable_directly_for_worker_process_startup() -> None:
     process itself, which must remain a plain RQ worker."""
     queue = get_queue()
     assert queue.name == "psse_integration"
+
+
+class TestQueueNameRouting:
+    """Shared Platform Sprint 6 addition: `submit`/`enqueue`/`get_queue`
+    gained an optional `queue_name` (default unchanged: the PSS/E
+    Integration queue) so a second module (Continuous Evaluation) can own
+    an exclusive named queue on the same Redis connection (ADR-023),
+    without any existing call site changing behaviour."""
+
+    def test_enqueue_defaults_to_the_existing_psse_integration_queue(self) -> None:
+        from app.core.queue import enqueue
+
+        job = enqueue(_add, 2, 3)
+        assert job.origin == "psse_integration"
+
+    def test_enqueue_honours_an_explicit_queue_name(self) -> None:
+        from app.core.queue import enqueue
+
+        job = enqueue(_add, 2, 3, queue_name="continuous_evaluation")
+        assert job.origin == "continuous_evaluation"
+
+    def test_get_queue_honours_an_explicit_queue_name(self) -> None:
+        queue = get_queue("continuous_evaluation")
+        assert queue.name == "continuous_evaluation"
+
+    def test_queue_execution_engine_submit_routes_to_the_named_queue(self) -> None:
+        outcome = QueueExecutionEngine().submit(_add, 2, 3, queue_name="continuous_evaluation")
+        fetched = QueueExecutionEngine().fetch(outcome.job_id)
+        assert fetched is not None
+        assert fetched.result == 5
+
+    def test_queue_execution_engine_submit_without_queue_name_is_unchanged(self) -> None:
+        outcome = QueueExecutionEngine().submit(_add, 2, 3)
+        assert outcome.job_id is not None
+        fetched = QueueExecutionEngine().fetch(outcome.job_id)
+        assert fetched is not None
+        assert fetched.result == 5
+
+    def test_direct_execution_engine_accepts_and_discards_queue_specific_kwargs(self) -> None:
+        outcome = DirectExecutionEngine().submit(
+            _add, 2, 3, queue_name="continuous_evaluation", job_id="whatever", retry=None
+        )
+        assert outcome.completed is True
+        assert outcome.result == 5

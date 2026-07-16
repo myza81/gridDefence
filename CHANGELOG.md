@@ -11,6 +11,557 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Shared Platform Sprint 6 — Continuous Evaluation Engine: Background Refresh, Evaluation Projection, and Platform Event Consumption Foundation
+
+**Scope:** Sixth implementation sprint of the finalized Shared Platform architecture. Implements
+ADR-023's asynchronous evaluation-refresh foundation and the disposable Evaluation Projection
+lifecycle continuous-evaluation-architecture.md §3.1 defines, on top of Sprint 5's synchronous core.
+Background refresh foundation, disposable Evaluation Projection, and platform-event consumer
+contracts implemented; source-module event emission and non-MW detectors remain pending.
+
+**Backend (new files, `app/modules/continuous_evaluation/`):**
+
+- `models.py` — `EvaluationProjection`: disposable, non-authoritative, one row per `(scheme_type,
+  scheme_version_id)` target (unique index), the four documented statuses (`CURRENT`/`STALE`/
+  `RECALCULATING`/`FAILED`), a `generation` invalidation counter, and a frozen JSON snapshot of the
+  most recent *successful* `EvaluationResult` (preserved across a later `FAILED`/`STALE`
+  transition). No FK into any scheme-version table (none exists); never referenced by
+  `PublicationRecord`.
+- `repository.py` — `EvaluationProjectionRepository`: pure persistence (`get_by_target` with an
+  optional `SELECT ... FOR UPDATE`, `create`, `save`) — no business rules, no transition logic.
+- `provider.py` — `EvaluationRequestProvider` (typed seam a future scheme module implements to
+  supply an `EvaluationRequest` from its own repository, hidden from this module entirely) and
+  `EvaluationRequestProviderRegistry` (explicit, static, per-scheme-type registration, empty by
+  default — no real scheme module exists yet).
+- `resolver.py` — `AffectedSchemeResolver` (typed seam mapping one platform event to the
+  `EvaluationTarget`s it may affect) and `NullAffectedSchemeResolver` (the production default: zero
+  targets, since no real source-to-scheme mapping exists yet).
+- `worker.py` — `refresh_evaluation_projection`, the plain, RQ-serializable job function
+  (`app.core.execution`-submitted) owning Continuous Evaluation's own exclusive `continuous_evaluation`
+  RQ queue (ADR-023). Opens its own database session, delegates every state transition and the one
+  `evaluate()` call to `ContinuousEvaluationService.run_refresh_worker_cycle` — no detector logic of
+  its own.
+- `schemas.py` (extended) — `ProjectionStatus`, `EvaluationTarget`, `ChangeDescriptor` (ADR-023's own
+  `change_descriptor`, realized as a stable, dot-namespaced-validated envelope — not one Python class
+  per event type, and no invented causation-id/payload-schema-version/arbitrary-payload fields beyond
+  what ADR-023 itself documents), `RefreshRequestResult`, `ProjectionDetail`.
+- `service.py` (extended) — three new public entry points, all reusing Sprint 5's `evaluate()`
+  exactly once per refresh, never duplicating detector logic: `notify_source_data_changed(event)`
+  (ADR-023's own named entry point), `request_refresh(target, trigger, correlation_id)` (marks/creates
+  the projection `STALE`, bumps `generation`, and arranges an idempotent refresh to be enqueued — never
+  evaluates inline), and `run_refresh_worker_cycle(...)` (the worker's own claim/evaluate/complete-or-
+  reconcile algorithm). At most one job is ever outstanding per target — a request while one is already
+  queued or running just bumps `generation`; the in-flight worker's own end-of-run generation
+  comparison detects a newer invalidation and re-enqueues exactly once itself, guaranteeing no false
+  `CURRENT` state. The actual job submission is deferred to `self.db`'s own SQLAlchemy `after_commit`
+  event rather than called synchronously — see the dedicated finding below.
+- `tests/synthetic_evaluation.py` (extended) — `FakeEvaluationRequestProvider`,
+  `RaisingEvaluationRequestProvider`, `FakeAffectedSchemeResolver`, `RecordingExecutionEngine` (an
+  `ExecutionEngine` test double that records submissions without running them, isolating
+  enqueue/coalescing decisions from real execution), `synthetic_change_descriptor`.
+
+**Backend (extended shared infrastructure, minimal and additive):** `app/core/queue.py`
+(`get_queue`/`enqueue` gained an optional `queue_name`, default unchanged — every existing PSS/E
+Integration call site is unaffected) and `app/core/execution.py` (`ExecutionEngine.submit` gained
+optional `queue_name`/`job_id`/`retry`, `DirectExecutionEngine` accepts and discards them,
+`QueueExecutionEngine` forwards them to RQ). This was a necessary, narrow adjustment: ADR-023
+requires "one shared queue... owned exclusively by the Continuous Evaluation Engine module," but the
+pre-existing infrastructure had exactly one hardcoded queue name belonging to PSS/E Integration —
+resolved by parameterizing the queue name rather than reusing PSS/E's own queue or building new
+infrastructure. `app/worker.py` now listens on both named queues from the same single worker process
+— no new worker or infrastructure component.
+
+**Persistence and migration:** `0021_evaluation_projection` (down-revision `0020_publication_record`)
+creates `continuous_evaluation_projection` only. The revision id is `0021_evaluation_projection`, not
+the fuller `0021_continuous_evaluation_projection` — that longer id was tried first and rejected by a
+real PostgreSQL database's own `alembic_version.version_num varchar(32)` column, an error this
+sprint's own verification pass caught and fixed by shortening it. Verified on a real PostgreSQL
+database: full chain `0001`→`0021`, downgrade one revision (table correctly dropped), re-upgrade
+(table correctly restored), all check constraints and both unique/non-unique indexes confirmed via
+direct catalog inspection.
+
+**No API, no new permissions:** service-only, matching Sprint 5's own precedent and this sprint's own
+explicit preference — no generic projection routes are documented as required this sprint.
+
+**Critical finding from real-PostgreSQL verification: a genuine self-deadlock, found and fixed.**
+`execution_mode="direct"` — this platform's own documented default, and its default deployment
+configuration regardless of database choice (`docker-compose.yml` always points `DATABASE_URL` at a
+real PostgreSQL server, independent of `EXECUTION_MODE`) — runs a submitted job function immediately,
+in-process, including this module's own worker cycle, which opens a *separate* database connection
+(`worker.py`'s own `SessionLocal()`, deliberately mimicking a real separate worker process). The first
+implementation of `request_refresh` enqueued (and, transitively, ran the worker inline) synchronously,
+before its own row mutation was committed — on a real multi-connection database, the worker's own
+separate connection blocked waiting to lock a row this connection's own uncommitted transaction still
+held, a genuine deadlock. This was invisible on SQLite's shared single-connection `StaticPool` test
+setup and was caught only by running the full `continuous_evaluation` suite against a real PostgreSQL
+database, where it hung indefinitely partway through. **Fix:** `request_refresh`/
+`notify_source_data_changed` now defer the actual job submission to `self.db`'s own SQLAlchemy
+`after_commit` event, firing exactly once and only if that commit actually succeeds — the row lock is
+released before any recursive worker execution can occur, and, as a beneficial side effect, a caller
+transaction that rolls back now never enqueues a job at all (no dual-write/outbox gap to disclose,
+where an earlier draft of this sprint's own work had flagged one as an accepted limitation). `job_id`
+remains available synchronously from `request_refresh`'s own return value regardless, since it is a
+deterministic identity, not one RQ assigns. Re-verified clean (all 78 tests, no hang) against real
+PostgreSQL after the fix.
+
+**Testing:** 46 new tests — 17 projection-lifecycle tests (`test_projection_lifecycle.py`: creation,
+coalescing while a job is already outstanding, transitions back to `STALE` from `CURRENT`/`FAILED`,
+successful/failed worker cycles, failure preserving the last successful result, the critical
+generation-mismatch-during-recalculation concurrency case, read-DTO reconstruction, and an explicit
+regression test for the deadlock fix using the real, uninjected `DirectExecutionEngine`), 11
+platform-event-consumer tests (`test_platform_event_consumer.py`: `ChangeDescriptor` envelope
+validation and immutability, resolver invocation, deterministic deduplication, zero/one/multiple
+targets, correlation propagation, duplicate event delivery safety, and confirmation that no detector
+calculation ever runs inside the event-consumer path), 7 worker/queue integration tests
+(`test_worker_queue_integration.py`: real queue routing via fakeredis, deterministic job identity,
+missing-provider and missing-projection safe handling, retry-safe duplicate execution, and the outer
+worker wrapper's own rollback/re-raise behaviour on a genuinely unexpected exception), and 6 tests
+extending the existing `tests/test_execution.py` for the new `queue_name` parameter (default-preserving
+behaviour confirmed for every pre-existing call shape). All Sprint 5 tests continue to pass unchanged.
+Full backend suite passes on SQLite with no regressions beyond the same pre-existing,
+independently-reproduced `sensitive_customer_registry` standalone-bootstrap subprocess flake already
+documented in Sprints 1-5. The full `continuous_evaluation` suite was additionally run against a real
+PostgreSQL database via this repository's own sanctioned `GRIDDEFENCE_TEST_DATABASE_URL`/
+`GRIDDEFENCE_ALLOW_DESTRUCTIVE_TEST_DATABASE` mechanism — twice: once which surfaced the deadlock above
+(killed after hanging), and once clean after the fix.
+
+**Known, disclosed limitation:** a projection stuck `RECALCULATING` because its own worker process
+crashed without raising has no automatic timeout/recovery in this sprint — no such mechanism is
+documented, and inventing one was judged premature without evidence of need (CLAUDE.md §21).
+
+**Frontend:** Not part of this sprint's scope — deferred, per the task's own instructions.
+
+**Documentation:** [ADR-023](docs/adr/ADR-023-platform-event-architecture.md),
+`docs/architecture/platform-event-architecture.md`, and
+`docs/architecture/continuous-evaluation-architecture.md` all updated with an implementation-status
+note using the wording: "Background refresh foundation, disposable Evaluation Projection, and
+platform-event consumer contracts implemented; source-module event emission and non-MW detectors
+remain pending." ADR-023 is explicitly not marked fully complete — no source module yet calls
+`notify_source_data_changed`.
+
+---
+
+## Shared Platform Sprint 5 — Continuous Evaluation Engine: Synchronous Core and MW Tolerance Detector
+
+**Scope:** Fifth implementation sprint of the finalized Shared Platform architecture. Implements
+[ADR-022](docs/adr/ADR-022-continuous-evaluation-detector-framework.md)'s detector framework and the
+synchronous Continuous Evaluation Engine core in a new `app/modules/continuous_evaluation/` module.
+Synchronous Continuous Evaluation core, explicit detector framework, and MW tolerance detector
+implemented; background event-driven refresh (ADR-023) and remaining detectors pending. No persisted
+evaluation projection, no API/router, and no real scheme (UFLS/UVLS/EMLS) integration were
+implemented this sprint.
+
+**Backend (new files):**
+
+- `schemas.py` — the evaluation value contracts (CLAUDE.md A6): `EvaluationRequest` (scheme type,
+  scheme-version id, opaque snapshot references, and a named, typed `mw_inputs` sub-contract — no
+  ORM model, no generic `SchemeVersion` table, no unbounded dictionary service locator),
+  `MwAssignmentGroupInput`/`MwEvaluationInputs` (the MW detector's own typed input), and
+  `EvaluationResult`/`DetectorExecutionSummary` (the stable result contract; computed MW metrics are
+  conveyed as structured evidence on each raised MW finding rather than a separate top-level field,
+  since populating one for in-tolerance groups would require either MW-specific logic inside the
+  engine or an invented "everything is fine" finding — both explicitly out of scope).
+- `detectors/base.py` — `EngineeringFindingDetector`, ADR-022's own interface exactly: stable
+  `detector_id`, declared `applicable_scheme_types`, synchronous `detect(context) -> list[Finding]`.
+- `detectors/registry.py` — `DetectorRegistry`: explicit `register()`, duplicate-id rejection,
+  registration-order-preserving `for_scheme_type()` filtering (ADR-022: execution order carries no
+  meaning beyond registration order). No dynamic discovery of any kind.
+- `detectors/mw_tolerance.py` — `MwToleranceDetector`, the first and, this sprint, only registered
+  detector. Implements the exact documented formula
+  (`deviation_percentage = (current_mw - reference_mw) / reference_mw * 100`), the exact documented
+  tolerance boundary (±tolerance inclusive = within tolerance; strictly beyond = under-/over-
+  allocation finding), reads the approved tolerance exclusively through
+  `EngineeringParameterService.get_parameter`, and validates its unit (`percent`) and numeric range
+  independently of that service's own write-time validation. Assigns exactly one severity
+  (`Severity.WARNING`) to every out-of-tolerance finding — no invented percentage-based escalation
+  bands, since ADR-018 left this exact decision to this sprint and neither document defines a second
+  threshold.
+- `detectors/registration.py` — `build_default_registry()`, the one application-composition point
+  that registers `MwToleranceDetector`; detector registration remains composition-only, never a
+  runtime API.
+- `service.py` — `ContinuousEvaluationService.evaluate(request)`: resolves applicable detectors in
+  registration order, runs each, validates every returned `Finding.source` matches its own
+  detector's `detector_id`, and assembles the result. Contains no MW-specific calculation logic. A
+  detector's own exception fails the whole evaluation (wrapped in `DetectorExecutionFailedError`)
+  rather than silently omitting that detector or returning a result that looks complete — the
+  architecture defines no partial-evaluation mode. FastAPI-independent (plain constructor args only).
+- `exceptions.py` — structured domain errors for every expected failure mode (duplicate detector id,
+  no applicable detectors, detector source mismatch, detector execution failure, missing/invalid-
+  unit/invalid-value engineering parameter, invalid/zero reference MW, invalid current MW). No
+  generic 500s; a software/configuration failure is never converted into a `Finding`.
+- `tests/synthetic_evaluation.py` — reusable synthetic `EvaluationRequest`/`MwAssignmentGroupInput`
+  factories, mirroring `findings_publication_governance/tests/synthetic_scheme.py`'s own established
+  shape; no production synthetic records or routes.
+
+**No persistence, no migration:** No migration was created because the synchronous evaluation result
+remains transient in Sprint 5 under the authoritative architecture. continuous-evaluation-
+architecture.md §3 frames the disposable cached projection as an independent, performance-motivated
+mechanism with no documented mandate for this sprint's on-demand synchronous path, and no consumer or
+measured performance need for one exists yet (CLAUDE.md §21).
+
+**No API, no new permissions:** continuous-evaluation-architecture.md documents no HTTP contract of
+its own for this engine — it is a shared, in-process capability future scheme modules call from their
+own routers. `evaluate()` is therefore service-only this sprint; no router, no new IAM permissions.
+
+**Testing:** 38 new tests — 6 detector-framework tests (`test_detector_registry.py`: ABC enforcement,
+duplicate-id rejection, deterministic registration-order execution, scheme-type filtering, additive
+registration), 20 MW tolerance detector tests (`test_mw_tolerance_detector.py`: within/at/beyond
+tolerance in both directions, multi-group independence, Decimal-precision, zero/negative reference and
+current MW, missing/wrong-unit/non-numeric/out-of-range engineering parameter, parameter changes
+affecting only later evaluations), and 12 evaluation-engine tests
+(`test_continuous_evaluation_service.py`: successful evaluation, deterministic multi-detector
+ordering/aggregation, context propagation, no-applicable-detectors and detector-failure semantics,
+source-mismatch validation, no session commit, FastAPI-independent callability, request/result
+immutability). Full backend suite passes on SQLite with no regressions beyond the same pre-existing,
+independently-reproduced `sensitive_customer_registry` standalone-bootstrap subprocess flake already
+documented in Sprints 1-4.
+
+**Frontend:** Not part of this sprint's scope — deferred, per the task's own instructions.
+
+**Documentation:** [ADR-022](docs/adr/ADR-022-continuous-evaluation-detector-framework.md) and
+`docs/architecture/continuous-evaluation-architecture.md` both updated with an implementation-status
+note: "Synchronous Continuous Evaluation core, explicit detector framework, and MW tolerance detector
+implemented; background event-driven refresh and remaining detectors pending." ADR-023's own
+background/event-driven path is explicitly noted as still unimplemented.
+
+---
+
+## Shared Platform Sprint 4 — Findings and Publication Governance: Publication Record and Publication Orchestration Foundation
+
+**Scope:** Fourth implementation sprint of the finalized Shared Platform architecture. Extends the
+existing `app/modules/findings_publication_governance/` module (Sprint 3) with immutable
+`PublicationRecord` evidence and the shared publication-orchestration foundation — never a second
+publication-governance module. **Only the Publication Record foundation is complete** — real scheme
+publication integration (a real UFLS/UVLS/EMLS Scheme Version, its own publish route, its own
+structural-prerequisite checks) and the Continuous Evaluation Engine remain future work. No generic
+`SchemeVersion` table was created; no real scheme entity or publish route was implemented; no
+detector or evaluation cache was implemented.
+
+**Backend (new files):**
+
+- `publication.py` — the publication-orchestration value contracts: `PublicationPrerequisiteResult`
+  (a generic, scheme-agnostic structural-prerequisite result — ADR-015's own Publication
+  Prerequisites, without this module ever knowing a scheme module's own table structure),
+  `AcknowledgementInput` (keyed by `finding_index`, the deterministic *publication-local* identity
+  this sprint introduces since `Finding` itself has none), `PublicationRequest` (everything the
+  shared service needs from a future scheme module's own Publish action — never an ORM model), and
+  `PublicationResult` (a thin write-result DTO).
+- `tests/synthetic_scheme.py` — a durable, reusable synthetic scheme-version test fixture
+  demonstrating the publication service is entirely scheme-module-agnostic; no
+  `synthetic_scheme_version` production table, no route reachable through the normal application
+  router.
+
+**Backend (extended files):**
+
+- `models.py` — `PublicationRecord` (immutable; `publication_event_id` UNIQUE as the caller-supplied
+  idempotency key) plus three frozen-evidence child tables: `PublicationRecordFinding` (every
+  `Finding` field copied at Publish time, plus the resolved treatment *and* the matched policy's own
+  severity/finding_type/scheme_type — so the record stays interpretable even after that policy is
+  later changed or removed), `PublicationRecordPrerequisite`, `PublicationRecordAcknowledgement`
+  (composite foreign key into `PublicationRecordFinding` — genuine same-aggregate referential
+  integrity). `scheme_version_id`/`topology_version_id`/`load_snapshot_id` are deliberately not
+  foreign keys (CLAUDE.md A2/F2 — Shared Platform never depends on a scheme module's own tables,
+  which do not exist).
+- `repository.py` — `PublicationRecordRepository`: insert-and-read only, no update or delete method
+  anywhere (immutability enforced structurally, by absence, not a runtime guard).
+- `service.py` — `PublicationRecordService.evaluate_and_record_publication(request)`, the shared
+  entry point, following the exact sequential algorithm this sprint's own instructions specify:
+  validate structurally → reject a duplicate `publication_event_id` → confirm every prerequisite
+  passed → resolve Publication Treatment Policy per finding (Sprint 3's own policy service) → reject
+  if any finding resolves to `BLOCK` → verify acknowledgement evidence matches exactly (no missing,
+  no unnecessary, no duplicate, no unknown target) → freeze evidence into new ORM rows → insert
+  (flush only, **never commit** — a future scheme service calls this within its own transaction,
+  alongside its own Scheme Version transition, and commits once, itself). Also adds
+  `resolve_publication_treatment_with_policy` to `PublicationTreatmentPolicyService` — a
+  behaviour-preserving refactor; the existing `resolve_publication_treatment` now delegates to it
+  and returns the identical bare treatment string every Sprint 3 caller already expects.
+- `router.py` — new `publication_records_router` (`/publication-records`): `GET` list (summary
+  shape, no publisher identity, no evidence) and `GET /{id}` (full frozen evidence). No write route
+  of any kind — `evaluate_and_record_publication` is reachable only in-process, never through HTTP,
+  per this sprint's own explicit instruction not to expose the internal publication command to
+  ordinary API callers.
+
+**Concurrency / idempotency:** the chosen, documented approach is a caller-supplied
+`publication_event_id` (UUID) — a per-attempt idempotency key, enforced by a database-level `UNIQUE`
+constraint. Not a scheme-lifecycle sequence number: this module has no visibility into any scheme
+module's own version-history sequencing, so that alternative was not implementable without inventing
+scheme lifecycle behaviour this sprint has no mandate to invent.
+
+**Permissions:** list uses the existing broad `findings_publication_governance.read`; full-evidence
+detail reuses the existing, more restrictive `findings_publication_governance.view_audit`
+(Administrator-only) — the same permission Sprint 3 already gates policy audit history behind,
+reused rather than duplicated, per this sprint's own "most restrictive documented precedent for
+immutable audit evidence" instruction.
+
+**Database:** `0020_publication_record` (down-revision `0019_publication_treatment`). Creates
+`publication_record`, `publication_record_finding`, `publication_record_prerequisite`,
+`publication_record_acknowledgement`. Verified linear on both SQLite (full backend suite) and a real
+PostgreSQL database — full chain upgrade from `0001` through `0020`, downgrade, and re-upgrade all
+confirmed clean, including the composite foreign key, the `publication_event_id` uniqueness
+constraint, and every check constraint.
+
+**Testing:** 27 orchestration-service tests (`test_publication_service.py` — every successful/
+blocked/acknowledgement scenario, policy-resolution integration at every precedence level, frozen-
+evidence immutability against later policy changes/removals and against caller-side input mutation,
+duplicate-event prevention, no-hidden-commit/rollback behaviour, deterministic ordering, synthetic-
+fixture reuse), 11 repository/database tests (`test_publication_record_repository.py` — 2 of which
+are PostgreSQL-only, skipped under SQLite, since SQLite does not enforce `FOREIGN KEY` constraints by
+default and this project's own shared `conftest.py` does not turn that pragma on), and 16 API
+contract tests (`test_publication_records_api.py` — authentication, permission tiers, filters,
+pagination, complete evidence in detail, not-found/malformed-identifier handling, and confirmation
+that no write route of any kind is exposed) — 54 new tests total. All Sprint 3 tests continue to
+pass unchanged, confirming the `resolve_publication_treatment` refactor preserved exact behaviour.
+Full backend suite passes on SQLite with no regressions beyond the same pre-existing,
+independently-reproduced `sensitive_customer_registry` standalone-bootstrap subprocess flake already
+documented in Sprints 1-3.
+
+**Frontend:** Not part of this sprint's scope — deferred, per the task's own instructions.
+
+**Documentation:** `docs/architecture/findings-and-publication-governance-architecture.md` and
+[ADR-018](docs/adr/ADR-018-findings-severity-and-publication-governance-separation.md) both updated
+to "Policy Layer and Publication Record foundation implemented; real scheme publication integration
+and Continuous Evaluation remain pending" — no architecture rewritten, no adopted decision reopened.
+
+---
+
+## Shared Platform Sprint 3 — Findings and Publication Governance: Policy Layer
+
+**Scope:** Third implementation sprint of the finalized Shared Platform architecture. Implements
+[ADR-018](docs/adr/ADR-018-findings-severity-and-publication-governance-separation.md)'s Finding
+value contract and Publication Treatment Policy layer only. `PublicationRecord` persistence,
+`recordPublication()`, scheme-version publish actions, structural publication-prerequisite
+checking, the Continuous Evaluation Engine, detector execution, evaluation caching, regional
+analytics, the Engineering Review Panel, platform-event producers/consumers, and every UFLS/UVLS/
+EMLS scheme entity all remain explicitly out of scope, per later sprints. **Only the Policy Layer
+is complete after this sprint** — Publication Record and publish orchestration remain future work.
+
+**Backend:** New `app/modules/findings_publication_governance/` module.
+
+- `findings.py` — the shared `Finding` value contract: a frozen, non-ORM Pydantic model (no
+  `finding` table — findings are computed live, never persisted at Draft time, per module document
+  §8), plus the canonical `Severity` (`INFORMATION`/`ADVISORY`/`WARNING`/`CRITICAL`), `FindingType`
+  (the exact eight finding-source categories the architecture already names — MW tolerance
+  deviation, ALSF capability absence, Sensitive Customer association, topology/registry change,
+  Boundary Pocket structural, Boundary Pocket composition, cross-scheme overlap, critical-
+  infrastructure protection — no detailed subtypes invented), and `SchemeType` (UFLS/UVLS/EMLS)
+  enums.
+- `models.py`/`0019_publication_treatment` — `PublicationTreatmentPolicy` (severity mandatory;
+  `finding_type`/`scheme_type` independently optional narrowing dimensions; `treatment` one of
+  `BLOCK`/`ALLOW_WITH_ACKNOWLEDGEMENT`/`ALLOW_WITHOUT_ACKNOWLEDGEMENT`) and its own append-only
+  `publication_treatment_policy_audit_log`. Four partial unique indexes (not one composite `UNIQUE`
+  constraint) correctly enforce "at most one policy per precedence level" across two independently-
+  nullable columns — generalizing the same `NULL`-is-never-equal-to-`NULL` lesson Sprint 2 already
+  documented for one nullable column to two.
+- `service.py` — `resolve_publication_treatment(finding, scheme_type=None)`, the one shared
+  resolution path (ADR-018's own central rule: never bespoke per-detector gating logic), following
+  a four-level precedence order derived from the architecture's own stated axis primacy (finding-
+  type specificity ranks above scheme-type specificity): scheme+finding-type override → global
+  finding-type override → scheme-specific severity override → global severity baseline. Raises a
+  domain exception rather than silently falling back if no policy resolves (only possible if
+  bootstrap has never run). `resolve_publication_treatments` batches the same resolution for a
+  collection of findings.
+- Baseline protection: the four global severity baselines can have their `treatment` changed but
+  never be removed (`CannotRemoveBaselinePolicyError`), guaranteeing every supported severity always
+  resolves. `severity`/`finding_type`/`scheme_type` are immutable once a policy is created — only
+  `treatment` may be updated.
+
+Permissions: `findings_publication_governance.read` (all roles), `.manage_policy` and
+`.view_audit` (Administrator-only — two separate permissions, per this sprint's own explicit model,
+mirroring ADR-018 §4.1's elevated-tier precedent; ordinary scheme editors never change publication
+governance). Removal is a dedicated `POST .../remove` action (mandatory reason), not a bare
+`DELETE`, mirroring Sprint 2's own precedent for reasoned lifecycle actions.
+
+**Database:** `0019_publication_treatment` (down-revision `0018_stage_setting_registry`). Creates
+`publication_treatment_policy` and `publication_treatment_policy_audit_log`, referencing
+`user.user_id` only (nullably, mirroring Sprint 1's own bootstrap-actor precedent). Verified linear
+on both SQLite (full backend suite) and a real PostgreSQL database — full chain upgrade from `0001`
+through `0019`, downgrade, and re-upgrade all confirmed clean, including all four partial unique
+indexes and every check constraint.
+
+**Testing:** 23 value-contract tests (`test_findings.py`, including parametrized coverage of every
+canonical severity and finding type — construction, enum validation, immutability, serialization,
+no ORM coupling), 28 service tests (`test_service.py` — precedence at every level, fallback after
+override removal, baseline protection, duplicate prevention, mandatory reason, no-op mutation
+handling, audit retention after removal, deterministic batch resolution), 7 bootstrap tests
+(`test_bootstrap.py`), and 17 API contract tests (`test_findings_publication_governance_api.py` —
+authentication, read/manage_policy/view_audit permission enforcement, validation, conflict,
+baseline protection, deterministic ordering, complete create/update/remove lifecycle) — 75 new
+tests total, all passing on both SQLite and PostgreSQL. Full backend suite passes on SQLite with no
+regressions beyond the same pre-existing, independently-reproduced `sensitive_customer_registry`
+standalone-bootstrap subprocess flake already documented in Sprints 1 and 2.
+
+**Frontend:** Not part of this sprint's scope — deferred, per the task's own instructions.
+
+**Documentation:** `docs/architecture/findings-and-publication-governance-architecture.md` and
+[ADR-018](docs/adr/ADR-018-findings-severity-and-publication-governance-separation.md) both gain a
+short, additive "Policy Layer implemented; Publication Record and publish orchestration pending"
+status note — no architecture rewritten, no adopted decision reopened.
+
+---
+
+## Shared Platform Sprint 2 — Stage Setting Registry
+
+**Scope:** Second implementation sprint of the finalized Shared Platform architecture. Implements
+[ADR-020](docs/adr/ADR-020-stage-setting-registry-as-standalone-shared-module.md) in full: a new,
+standalone shared module owning `StageSettingSet`/`StageSetting` — the reusable, independently
+versioned stage structure UFLS and UVLS will reference by id, never duplicate. UFLS, UVLS, EMLS
+entities, the Continuous Evaluation Engine, Detector Framework, Publication Governance, Regional
+Analytics, and the Engineering Review Panel all remain out of scope, per later sprints. No Stage
+Setting Sets are seeded — the architecture defines no approved initial engineering records, and no
+default UFLS/UVLS thresholds are invented.
+
+**Backend:** New `app/modules/stage_setting_registry/` module — `StageSettingSet` (`scheme_type`
+`UFLS`/`UVLS`, `description`, `status`, audit metadata) and `StageSetting` (`stage_order`,
+`threshold_value` as an exact `Numeric(9,4)` — never a binary float, `threshold_unit` derived from
+the parent's own `scheme_type`, `time_delay_ms`, an optional UVLS-only `region_scope_id`), plus
+their own append-only `stage_setting_registry_audit_log`. Closed lifecycle transition table —
+`DRAFT -> PUBLISHED -> ENTERED_IN_ERROR` only; `ENTERED_IN_ERROR` is reachable only from
+`PUBLISHED` (never directly from `DRAFT`, mirroring ADR-015's own Scheme Version transition table
+and ADR-016's "should never have been published" framing) — no Draft-deletion operation is
+implemented (neither ADR-016 nor this sprint's own instructions grant one, unlike Scheme Version's
+own explicit exception). `StageSettingRegistryService.publish()` atomically validates the complete
+setting set (non-empty; no duplicate `stage_order` within any region-scope group; threshold values
+strictly decreasing as `stage_order` increases, independently within each region-scope group,
+including the grid-wide null-scope group treated as its own scope) before transitioning — no
+row-locking is needed, since the architecture explicitly permits many Stage Setting Sets of the
+same scheme type to be simultaneously Published (no "only one current" invariant, unlike Scheme
+Version). Two partial unique indexes (`region_scope_id IS NULL` / `IS NOT NULL`) implement
+per-scope `stage_order` uniqueness correctly — a single composite `UNIQUE` constraint cannot, since
+standard SQL treats every `NULL` as distinct from every other `NULL`. `reorder_settings()` reorders
+exactly one region-scope group at a time via a two-phase update (temporary negative sentinel values,
+then final positions) — found and fixed during PostgreSQL verification: an initial large positive
+offset (100,000) overflowed `stage_order`'s `SMALLINT` column on PostgreSQL (invisible under
+SQLite's flexible typing), corrected to small negative sentinels instead.
+
+Permissions: `stage_setting_registry.read` (Administrator/Engineer/Viewer), `.manage`
+(Administrator/Engineer — create/edit Drafts), `.publish` and `.enter_in_error` (Administrator
+only, mirroring findings-and-publication-governance-architecture.md §6's own "Only Administrators
+may publish" precedent — a user who may edit a Draft is not assumed to also be trusted to publish
+or correct it). Audit log endpoint follows this codebase's *default* precedent (open to any
+authenticated user), not Engineering Parameter Configuration's own documented exception — this
+module's architecture does not call for a stricter gate.
+
+**Database:** `0018_stage_setting_registry` (down-revision `0017_engineering_parameters`; revision
+id shortened from the fuller module name for the same `VARCHAR(32)` reason as Sprint 1). Creates
+`stage_setting_set`, `stage_setting`, `stage_setting_registry_audit_log`, referencing `user.user_id`
+and `region.region_id` only. Verified linear on both SQLite (full backend suite) and a real
+PostgreSQL database — full chain upgrade from `0001` through `0018`, downgrade, and re-upgrade all
+confirmed clean, including both partial unique indexes and every check constraint.
+
+**Testing:** 52 module-level unit tests (45 service-layer + 7 bootstrap — Draft creation/editing,
+UFLS/UVLS scheme-type-specific validation, per-scope threshold monotonicity, publication atomicity,
+the closed lifecycle transition table, audit history, decimal precision) plus 17 API contract tests
+(authentication, read/manage/publish/enter-in-error permission enforcement, request validation,
+list filters, deterministic ordering, complete UFLS and UVLS lifecycles) — 69 new tests total, all
+passing on both SQLite and PostgreSQL. Full backend suite (876 tests) passes on SQLite with no
+regressions.
+
+**Frontend:** Not part of this sprint's scope — deferred, per the task's own instructions.
+
+**Documentation:** `docs/architecture/stage-setting-set-architecture.md` and
+[ADR-020](docs/adr/ADR-020-stage-setting-registry-as-standalone-shared-module.md) both gain a
+short, additive "implemented" status note — no architecture rewritten. Two deliberate scope gaps
+recorded explicitly in that status note (threshold-range validation against Engineering Parameter
+Configuration; the "which Scheme Versions reference this set" reverse lookup) rather than silently
+invented or silently omitted.
+
+---
+
+## Shared Platform Sprint 1 — Engineering Parameter Configuration
+
+**Scope:** First implementation sprint of the finalized Shared Platform architecture
+([ADR-020](docs/adr/ADR-020-stage-setting-registry-as-standalone-shared-module.md) through
+[ADR-023](docs/adr/ADR-023-platform-event-architecture.md)). Implements
+[ADR-021](docs/adr/ADR-021-engineering-parameter-configuration-ownership.md) in full: a new,
+standalone Core Platform module owning the current, audited value of every named platform-wide
+engineering parameter. Only the one architecture-approved parameter — `mw_tolerance_percentage`,
+the ±10% global MW tolerance already named by
+[continuous-evaluation-architecture.md](docs/architecture/continuous-evaluation-architecture.md)
+§7 — is seeded; no additional parameter is invented. Stage Setting Registry, the Continuous
+Evaluation Engine/Detector Framework, Publication Governance, Regional Analytics, the Engineering
+Review Panel, and every Defence Scheme module (UFLS/UVLS/EMLS) remain out of scope, per later
+sprints.
+
+**Backend:** New `app/modules/engineering_parameters/` module — `EngineeringParameter`
+(`parameter_key` string PK, `value`/`unit`/`description`, `updated_at`/`updated_by_user_id`) and
+its own append-only `EngineeringParameterAuditLog`, current-value-plus-audit-log only (no
+Draft/Published lifecycle — ADR-021 §8). `EngineeringParameterService.set_parameter_value()` is
+the single, audited upsert write path (creates on first use, updates thereafter; mandatory
+non-empty `change_reason`; per-`parameter_key` value validation via a small, explicit
+`_NUMERIC_PARAMETER_BOUNDS` registry, extensible without a schema change). `GET
+/api/v1/engineering-parameters`, `GET /api/v1/engineering-parameters/{key}`, `PUT
+/api/v1/engineering-parameters/{key}`, `GET /api/v1/engineering-parameters/{key}/audit-log`. Read
+requires only authentication; `PUT` and the audit-log endpoint require the new, Administrator-only
+`engineering_parameters.manage` permission (Engineer/Viewer hold `engineering_parameters.read`
+only) — the audit-log gating is a deliberate deviation from this codebase's usual "audit log open
+to any authenticated user" precedent, per ADR-021 §4.1. `bootstrap.py` registers both permissions
+and idempotently seeds `mw_tolerance_percentage` through the same audited service-layer write path
+any future Administrator change uses (`actor_user_id=None`, mirroring every other module's own
+bootstrap convention). Also exposes `get_parameter_value(parameter_key)`, a read-only in-process
+interface for the future MW tolerance detector (ADR-022) to consume without an HTTP round trip.
+
+**Database:** `0017_engineering_parameters` (Alembic revision id shortened from
+`0017_engineering_parameter_configuration` — `alembic_version.version_num` is `VARCHAR(32)`).
+Creates `engineering_parameter` and `engineering_parameter_audit_log`, both referencing
+`user.user_id` only (`ON DELETE RESTRICT`); both actor columns are nullable, exclusively for the
+bootstrap-seed exception. Verified linear on both SQLite (full backend suite) and a real
+PostgreSQL database — full chain upgrade from `0001` through `0017`, downgrade, and re-upgrade all
+confirmed clean.
+
+**Testing:** 22 module-level unit tests (bootstrap idempotency/permission grants/initial seeding;
+service-layer upsert/audit/validation/not-found behaviour) plus 13 API contract tests
+(authentication, permission enforcement including the audit-log deviation, full set/get/audit-log
+flow, validation error shapes) — all passing on both SQLite and PostgreSQL. Full backend suite (843
+tests) passes on SQLite with no regressions.
+
+**Frontend:** Not part of this sprint's scope — deferred, per the task's own instructions.
+
+**Documentation:** `docs/architecture/engineering-parameter-configuration-architecture.md` and
+[ADR-021](docs/adr/ADR-021-engineering-parameter-configuration-ownership.md) both gain a short,
+additive "implemented" status note — no architecture rewritten.
+
+---
+
+## IAM Completion Sprint — User Status Lifecycle and Last-Active-Administrator Safeguard
+
+**Scope:** Two bounded IAM gaps identified by the Bootstrap Administrator Lifecycle and Existing
+IAM User Management Capability investigations (following the Development Database Recovery
+incident): (1) `User.status` had no service/API path to transition a user between `Active`,
+`Suspended`, and `Deactivated` after creation, even though the data model already supported it;
+(2) nothing prevented removing the Administrator role, or suspending/deactivating a user, in a way
+that would leave the system with zero active Administrators. Both closed the gap that made it
+impossible to fully retire the `gd_recovery_admin` account created during the earlier recovery.
+
+**Backend:** `IAMService.set_user_status()` — a closed allow-list (`Active ⇄ Suspended`,
+`Active/Suspended → Deactivated`, `Deactivated` terminal), mirroring Substation Registry's own
+`_STATUS_TRANSITIONS` convention. Rejects no-op transitions, undefined transitions, and an
+empty/whitespace-only reason; never touches username, password, or role grants; records a full
+audit entry (previous status, new status, reason, actor, timestamp) on every successful
+transition. `POST /api/v1/users/{user_id}/status`, gated by the existing `iam.user.manage`
+permission — no new permission or role introduced. The last-active-Administrator invariant
+(`IAMService._assert_would_not_remove_last_active_administrator`) is enforced inside the same
+transaction as the mutation, with `FOR UPDATE OF "user"` row-locking against concurrent callers,
+applied to both `set_user_status` and `revoke_role_from_user`. Confirmed (no code change needed):
+`get_current_user` already re-checks `User.status` from the database on every request, so an
+existing token for a newly-suspended or -deactivated user is rejected on its very next use — no
+token blacklist was required.
+
+**Frontend:** `UsersPage.tsx` gains a status panel per user (Suspend/Reactivate/Deactivate buttons,
+matching the user's current status), requiring a non-empty reason before the action can be
+confirmed, and surfacing the backend's own rejection message verbatim (including the
+last-Administrator safeguard's message) — no client-side admin-counting logic. No delete or
+password control was added.
+
+**Explicitly not implemented (deferred, per this sprint's own scope):** self-service or
+administrator-driven password reset/change, audit-history viewing, Role retirement, bootstrap
+scope changes, and a CLI administration tool — see `docs/architecture/iam-module.md` §17.
+
+**Documentation:** `docs/architecture/iam-module.md` §8 (lifecycle) and §12 (API contract) updated
+in place to describe the completed transitions and the new endpoint; a status note records the
+sprint and cross-references the investigations that motivated it.
+
+---
+
 ## Substation Registry Fix — Editable Region, State, and Grid Owner Metadata
 
 **Scope:** UAT finding: Region, State, and Grid Owner could not be edited on an existing Substation

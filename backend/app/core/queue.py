@@ -9,6 +9,19 @@ in-process, via RQ's own `Queue(is_async=False)` mode — no real Redis
 server or background worker needed for correctness tests. Production runs
 with `rq_async = True` against a real Redis connection and a real
 `app.worker` process (`docker-compose.yml`'s `worker` service).
+
+`get_queue`/`enqueue` gained an optional `queue_name` (Shared Platform
+Sprint 6) — still defaulting to `_QUEUE_NAME` ("psse_integration"), so
+every existing call site is unaffected. This is the narrow, additive
+change that lets a second module hold its own exclusively-owned named RQ
+queue on the same Redis connection, per ADR-023's own "one shared
+queue... owned exclusively by the Continuous Evaluation Engine module" —
+without that, a second module's jobs would have had to share PSS/E
+Integration's own queue name, which the ADR does not permit. See
+`app/modules/continuous_evaluation/worker.py`'s own module docstring for
+the consuming side, and `app/worker.py`, updated to listen on both named
+queues from the same worker process (no new worker/infrastructure
+component — just a second name in one `rq.Worker`'s own listen list).
 """
 
 from __future__ import annotations
@@ -44,15 +57,16 @@ def get_redis_connection() -> redis.Redis:
     return redis.Redis.from_url(settings.redis_url)
 
 
-def get_queue() -> Queue:
+def get_queue(queue_name: str = _QUEUE_NAME) -> Queue:
     settings = get_settings()
-    return Queue(_QUEUE_NAME, connection=get_redis_connection(), is_async=settings.rq_async)
+    return Queue(queue_name, connection=get_redis_connection(), is_async=settings.rq_async)
 
 
-def enqueue(func: Any, *args: Any, **kwargs: Any) -> Job:
-    """Enqueues `func(*args, **kwargs)` on the PSS/E Integration queue.
-    Returns the RQ `Job` — callers read `.id` for polling (`fetch_job`)."""
-    return get_queue().enqueue(func, *args, **kwargs)
+def enqueue(func: Any, *args: Any, queue_name: str = _QUEUE_NAME, **kwargs: Any) -> Job:
+    """Enqueues `func(*args, **kwargs)` on `queue_name` (default: the PSS/E
+    Integration queue, unchanged for every pre-existing caller). Returns
+    the RQ `Job` — callers read `.id` for polling (`fetch_job`)."""
+    return get_queue(queue_name).enqueue(func, *args, **kwargs)
 
 
 def fetch_job(job_id: str) -> Job | None:

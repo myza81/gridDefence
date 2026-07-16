@@ -19,12 +19,20 @@ from app.db.base import Base
 from app.modules.automatic_load_shedding_functionality import (  # noqa: F401
     models as automatic_load_shedding_functionality_models,
 )
+from app.modules.continuous_evaluation import models as continuous_evaluation_models  # noqa: F401
+from app.modules.engineering_parameters import (  # noqa: F401
+    models as engineering_parameters_models,
+)
 from app.modules.equipment_registry import models as equipment_registry_models  # noqa: F401
+from app.modules.findings_publication_governance import (  # noqa: F401
+    models as findings_publication_governance_models,
+)
 from app.modules.iam import models as iam_models  # noqa: F401
 from app.modules.psse_integration import models as psse_integration_models  # noqa: F401
 from app.modules.sensitive_customer_registry import (  # noqa: F401
     models as sensitive_customer_registry_models,
 )
+from app.modules.stage_setting_registry import models as stage_setting_registry_models  # noqa: F401
 from app.modules.substation_registry import models as substation_registry_models  # noqa: F401
 from app.reference_data import models as reference_data_models  # noqa: F401
 
