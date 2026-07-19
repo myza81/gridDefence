@@ -15,6 +15,7 @@ frontend/coverage/
 # Environment
 .env
 .env.local
+.secrets_do_not_commit_admin_password.txt
 
 # Editors / OS
 .vscode/
