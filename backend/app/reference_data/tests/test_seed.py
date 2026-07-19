@@ -58,6 +58,17 @@ def test_first_run_creates_every_documented_row(db_session: Session) -> None:
     )
 
 
+def test_seed_includes_thailand_and_singapore_states(db_session: Session) -> None:
+    run_seed(db_session)
+    codes = {s.code for s in db_session.query(State).all()}
+    assert "THA" in codes
+    assert "SGP" in codes
+    assert db_session.query(State).filter_by(code="THA").one().label == "Thailand"
+    assert db_session.query(State).filter_by(code="SGP").one().label == "Singapore"
+    # The pre-existing Malaysian states remain present and unchanged.
+    assert {"JHR", "SEL", "PJY"} <= codes
+
+
 def test_second_run_creates_nothing_and_does_not_duplicate(db_session: Session) -> None:
     run_seed(db_session)
     second_counts = run_seed(db_session)

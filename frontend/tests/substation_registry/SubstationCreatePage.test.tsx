@@ -14,7 +14,11 @@ const CURRENT_USER = {
   status: "active" as const,
 };
 
-function stubSession() {
+function stubSession(
+  states: Array<{ state_id: number; code: string; label: string }> = [
+    { state_id: 1, code: "SEL", label: "Selangor" },
+  ],
+) {
   stubFetch([
     {
       method: "GET",
@@ -50,7 +54,7 @@ function stubSession() {
     {
       method: "GET",
       pattern: /\/reference-data\/states$/,
-      respond: () => ({ status: 200, body: [{ state_id: 1, code: "SEL", label: "Selangor" }] }),
+      respond: () => ({ status: 200, body: states }),
     },
     {
       method: "GET",
@@ -116,6 +120,50 @@ describe("SubstationCreatePage", () => {
 
     const gmZoneSelect = await screen.findByLabelText("GM Zone");
     expect(gmZoneSelect).toBeRequired();
+  });
+
+  it("State dropdown includes Thailand and Singapore, alphabetically sorted", async () => {
+    authStorage.setToken("token");
+    // Provided out of alphabetical order on purpose to prove the UI sorts.
+    stubSession([
+      { state_id: 3, code: "THA", label: "Thailand" },
+      { state_id: 1, code: "JHR", label: "Johor" },
+      { state_id: 2, code: "SGP", label: "Singapore" },
+    ]);
+
+    renderWithProviders(<SubstationCreatePage />, { route: "/substations/new" });
+
+    const stateSelect = await screen.findByLabelText("State (Optional)");
+    await waitFor(() => {
+      expect(stateSelect.querySelectorAll("option").length).toBe(4); // None + 3 states
+    });
+    const labels = Array.from(stateSelect.querySelectorAll("option")).map((o) =>
+      o.textContent?.trim(),
+    );
+    // Placeholder first, then States A–Z by display name.
+    expect(labels).toEqual(["None", "Johor", "Singapore", "Thailand"]);
+    expect(labels).toContain("Thailand");
+    expect(labels).toContain("Singapore");
+  });
+
+  it("an existing State selection still works after the list is extended", async () => {
+    authStorage.setToken("token");
+    stubSession([
+      { state_id: 1, code: "SEL", label: "Selangor" },
+      { state_id: 14, code: "THA", label: "Thailand" },
+      { state_id: 15, code: "SGP", label: "Singapore" },
+    ]);
+    const user = userEvent.setup();
+
+    renderWithProviders(<SubstationCreatePage />, { route: "/substations/new" });
+
+    const stateSelect = (await screen.findByLabelText("State (Optional)")) as HTMLSelectElement;
+    // Wait for the async reference-data options to load before selecting.
+    await waitFor(() => {
+      expect(stateSelect.querySelectorAll("option").length).toBe(4); // None + 3 states
+    });
+    await user.selectOptions(stateSelect, "1"); // select Selangor by its stable id
+    expect(stateSelect.value).toBe("1");
   });
 
   it("submits the form and navigates to the new substation's detail page", async () => {

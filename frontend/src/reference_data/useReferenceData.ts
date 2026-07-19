@@ -62,7 +62,12 @@ export function useReferenceData() {
   const voltageLevelItems: VoltageLevelSummary[] = voltageLevels.data ?? [];
   const regionItems: RegionSummary[] = regions.data ?? [];
   const gmZoneItems: GmZoneSummary[] = gmZones.data ?? [];
-  const stateItems: StateSummary[] = states.data ?? [];
+  // Present States alphabetically by display name (A–Z) so the dropdown scales
+  // as more options are added. Presentation only — stored reference IDs/codes
+  // are unchanged; `statesById` below is still keyed by id.
+  const stateItems: StateSummary[] = [...(states.data ?? [])].sort((a, b) =>
+    a.label.localeCompare(b.label),
+  );
   const gridOwnerItems: GridOwnerSummary[] = gridOwners.data ?? [];
   const operationalStatusItems: OperationalStatusSummary[] = operationalStatuses.data ?? [];
   const lineTypeItems: LineTypeSummary[] = lineTypes.data ?? [];

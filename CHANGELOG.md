@@ -11,6 +11,37 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Reference Data — Add Thailand and Singapore as State Options
+
+**Scope:** Reference-data refinement only. Extends the existing flat `state`
+reference list with two neighbouring interconnected systems so future
+engineering records at the northern/southern grid boundaries may reference
+them: `THA` (Thailand) and `SGP` (Singapore). No Country/Nation/Region-Group
+hierarchy is introduced and the `State` model is unchanged — these are ordinary
+`state` rows, exactly like every existing option. Not related to the completed
+Substation Registry migration; no migrated Substation/Voltage-Yard record was
+touched and no migration was rerun.
+
+**Backend:** `app/reference_data/seed.py`'s `STATES` now lists the two rows
+(idempotent `_seed_states` covers fresh databases); new migration
+`0027_thailand_singapore_states` inserts them into already-deployed
+databases — idempotent (inserts only a `code` not already present, so it is
+safe alongside the seed), reversible (downgrade deletes only these two by
+`code`; blocked by the `ON DELETE RESTRICT` FK if either is already
+referenced), preserving every existing `state_id` and row. The read-only
+`GET /reference-data/states` endpoint returns the two new values with no code
+change.
+
+**Frontend:** the State dropdown (Substation create/edit) now presents States
+alphabetically by display name (A–Z) via `useReferenceData`, so the list scales
+as options are added — presentation only; stored reference ids/codes are
+unchanged.
+
+**Tests:** backend seed test asserts the seeded States include `THA`/`SGP` while
+the pre-existing Malaysian states remain; frontend tests assert the State
+selector renders Thailand and Singapore in alphabetical order and that an
+existing State selection still works after the list is extended.
+
 ## Stage Setting Registry — Multiple Operating Criteria per Stage (ADR-025)
 
 **Scope:** Resolves a UFLS UAT-identified real-site configuration the as-built Stage Setting Registry could not represent — a single shedding stage carrying more than one independent relay operating criterion (e.g. Stage 8: 48.1 Hz at 0 ms delay, and 49.3 Hz at 60,000 ms delay). The prior one-threshold-per-stage model rejected a second setting sharing the same `stage_order`, since these are not separate shedding stages. See [ADR-025](docs/adr/ADR-025-stage-setting-trigger-multiple-operating-criteria.md).

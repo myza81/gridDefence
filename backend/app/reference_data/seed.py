@@ -108,7 +108,13 @@ GM_ZONES: list[dict[str, str]] = [
 ]
 
 # Assumption (see module docstring) — the 11 Peninsular Malaysia states plus
-# the two Federal Territories located within Peninsular Malaysia.
+# the two Federal Territories located within Peninsular Malaysia, plus the two
+# neighbouring interconnected systems (Thailand, Singapore) added as ordinary
+# State options so records at the northern/southern grid boundaries may
+# reference them. These remain flat State reference rows — no Country/Nation
+# hierarchy is introduced (they are added by migration
+# 0027_thailand_singapore_states for already-deployed databases; this list
+# keeps a fresh-database seed and the idempotent baseline in sync).
 STATES: list[dict[str, str]] = [
     {"code": "JHR", "label": "Johor"},
     {"code": "KDH", "label": "Kedah"},
@@ -123,6 +129,8 @@ STATES: list[dict[str, str]] = [
     {"code": "TRG", "label": "Terengganu"},
     {"code": "KUL", "label": "W.P. Kuala Lumpur"},
     {"code": "PJY", "label": "W.P. Putrajaya"},
+    {"code": "THA", "label": "Thailand"},
+    {"code": "SGP", "label": "Singapore"},
 ]
 
 GRID_OWNERS: list[dict[str, str]] = [
