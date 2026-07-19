@@ -27,7 +27,9 @@ export function SubstationCreatePage() {
         official_name: officialName,
         region_id: Number(regionId),
         gm_zone_id: Number(gmZoneId),
-        state_id: Number(stateId),
+        // State is optional (ADR-026) — omit it entirely when none is
+        // chosen; never send a placeholder or a fabricated value.
+        ...(stateId ? { state_id: Number(stateId) } : {}),
         grid_owner_id: Number(gridOwnerId),
         operational_status_id: Number(operationalStatusId),
       }),
@@ -112,10 +114,10 @@ export function SubstationCreatePage() {
           </select>
         </div>
         <div>
-          <label htmlFor="state">State</label>
+          <label htmlFor="state">State (Optional)</label>
           <br />
-          <select id="state" value={stateId} onChange={(e) => setStateId(e.target.value)} required>
-            <option value="">Select...</option>
+          <select id="state" value={stateId} onChange={(e) => setStateId(e.target.value)}>
+            <option value="">None</option>
             {referenceData.states.map((state) => (
               <option key={state.state_id} value={state.state_id}>
                 {state.label}

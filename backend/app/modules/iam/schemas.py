@@ -46,6 +46,16 @@ class UserPage(BaseModel):
     total: int
 
 
+class UserStatusChange(BaseModel):
+    """IAM Completion Sprint — a status transition always carries a
+    mandatory, non-empty reason (`min_length=1` catches an outright empty
+    string at the request-shape layer; the service layer additionally
+    rejects a whitespace-only reason, since `min_length` alone cannot)."""
+
+    status: UserStatus
+    change_reason: str = Field(min_length=1, max_length=500)
+
+
 # --- Roles ---------------------------------------------------------------------
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)

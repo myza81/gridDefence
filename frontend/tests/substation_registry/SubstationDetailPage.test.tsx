@@ -66,8 +66,8 @@ const REFERENCE_DATA_HANDLERS = [
     respond: () => ({
       status: 200,
       body: [
-        { gm_zone_id: 1, code: "ALOR_SETAR", label: "Alor Setar" },
-        { gm_zone_id: 2, code: "BUTTERWORTH", label: "Butterworth" },
+        { gm_zone_id: 1, code: "KEDP", label: "Alor Setar" },
+        { gm_zone_id: 2, code: "PPNG", label: "Butterworth" },
       ],
     }),
   },
@@ -1296,7 +1296,7 @@ describe("SubstationDetailPage", () => {
     });
 
     expect((screen.getByLabelText("Region") as HTMLSelectElement).value).toBe("1");
-    expect((screen.getByLabelText("State") as HTMLSelectElement).value).toBe("1");
+    expect((screen.getByLabelText("State (Optional)") as HTMLSelectElement).value).toBe("1");
     expect((screen.getByLabelText("Grid owner") as HTMLSelectElement).value).toBe("1");
   });
 
@@ -1367,7 +1367,7 @@ describe("SubstationDetailPage", () => {
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText("Region"), "2");
     await user.selectOptions(screen.getByLabelText("GM Zone"), "2");
-    await user.selectOptions(screen.getByLabelText("State"), "2");
+    await user.selectOptions(screen.getByLabelText("State (Optional)"), "2");
     await user.selectOptions(screen.getByLabelText("Grid owner"), "2");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -1379,6 +1379,122 @@ describe("SubstationDetailPage", () => {
         grid_owner_id: 2,
       });
     });
+  });
+
+  it("displays '—' for a substation that has no State (ADR-026)", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/users\/me$/,
+        respond: () => ({ status: 200, body: CURRENT_USER }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
+        respond: () => ({ status: 200, body: { ...SUBSTATION_DETAIL, state_id: null } }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`),
+        respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 50, total: 0 } }),
+      },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Substation One" })).toBeInTheDocument();
+    });
+    // The State term's value renders as an em dash, never "null" or a
+    // placeholder State.
+    const stateDd = screen.getByText("State", { selector: "dt" }).nextElementSibling;
+    expect(stateDd?.textContent).toBe("—");
+  });
+
+  it("clears a substation's State when 'None' is selected and saved (ADR-026)", async () => {
+    authStorage.setToken("token");
+    let updatePayload: Record<string, unknown> | null = null;
+    stubFetch([
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/users\/me$/,
+        respond: () => ({ status: 200, body: CURRENT_USER }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({
+          status: 200,
+          body: [
+            {
+              role: {
+                role_id: "role-1",
+                name: "Administrator",
+                description: null,
+                is_system_role: true,
+                status: "active",
+              },
+              granted_at: "2026-01-01T00:00:00Z",
+              permissions: ["substation_registry.write"],
+            },
+          ],
+        }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
+        respond: () => ({ status: 200, body: SUBSTATION_DETAIL }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`),
+        respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 50, total: 0 } }),
+      },
+      ...REFERENCE_DATA_HANDLERS,
+      {
+        method: "PATCH",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
+        respond: (_url, init) => {
+          updatePayload = init?.body ? JSON.parse(init.body as string) : null;
+          return { status: 200, body: { ...SUBSTATION_DETAIL, state_id: null } };
+        },
+      },
+    ]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
+    });
+    // The current State (id 1) is preloaded; choosing "None" clears it.
+    const stateSelect = screen.getByLabelText("State (Optional)") as HTMLSelectElement;
+    expect(stateSelect.value).toBe("1");
+    const user = userEvent.setup();
+    await user.selectOptions(stateSelect, "");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(updatePayload).not.toBeNull();
+    });
+    // An explicit null clears it — never omitted, never a placeholder.
+    expect(updatePayload).toHaveProperty("state_id", null);
   });
 
   it("displays a backend validation error when the edit form submission fails", async () => {

@@ -34,6 +34,7 @@ from app.modules.sensitive_customer_registry import (  # noqa: F401
 )
 from app.modules.stage_setting_registry import models as stage_setting_registry_models  # noqa: F401
 from app.modules.substation_registry import models as substation_registry_models  # noqa: F401
+from app.modules.ufls import models as ufls_models  # noqa: F401
 from app.reference_data import models as reference_data_models  # noqa: F401
 
 # ------------------------------------------------------------------------------

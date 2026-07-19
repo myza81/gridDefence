@@ -9,6 +9,7 @@ import type {
   UserCreate,
   UserPage,
   UserRoleSummary,
+  UserStatusChange,
   UserSummary,
 } from "./types";
 
@@ -21,6 +22,8 @@ export const iamApi = {
   listUsers: (page = 1, pageSize = 50) =>
     apiClient.get<UserPage>(`/api/v1/users?page=${page}&page_size=${pageSize}`),
   createUser: (payload: UserCreate) => apiClient.post<UserSummary>("/api/v1/users", payload),
+  changeUserStatus: (userId: string, payload: UserStatusChange) =>
+    apiClient.post<UserSummary>(`/api/v1/users/${userId}/status`, payload),
 
   listUserRoles: (userId: string) => apiClient.get<UserRoleSummary[]>(`/api/v1/users/${userId}/roles`),
   grantUserRole: (userId: string, roleId: string) =>

@@ -30,6 +30,11 @@ from app.modules.substation_registry.models import Substation
 from app.modules.substation_registry.service import SubstationService
 from app.modules.substation_registry.tests.conftest import ReferenceIds
 
+# Sentinel distinguishing "_create caller did not mention state" (use the
+# fixture's state, preserving every pre-existing test's behaviour) from an
+# explicit `state_id=None` (create a substation with no State — ADR-026).
+_STATE_UNSET = object()
+
 
 def _create(
     service: SubstationService,
@@ -40,20 +45,25 @@ def _create(
     official_name: str = "Substation One",
     status_code: str = "ACTIVE",
     gm_zone_id: int | None = None,
+    state_id: object = _STATE_UNSET,
     psse_bus_number: int | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
 ):
-    # gm_zone_id is unconditionally required (like region_id/state_id/
-    # grid_owner_id) — defaults to `ref.gm_zone_id` unless a caller is
-    # specifically exercising an unknown/invalid id.
+    # gm_zone_id is unconditionally required (like region_id/grid_owner_id)
+    # — defaults to `ref.gm_zone_id` unless a caller is specifically
+    # exercising an unknown/invalid id.
     resolved_gm_zone_id = ref.gm_zone_id if gm_zone_id is None else gm_zone_id
+    # State is optional (ADR-026): default to the fixture's state (so every
+    # pre-existing test is unchanged), but let a caller pass state_id=None
+    # to create a stateless substation.
+    resolved_state_id = ref.state_id if state_id is _STATE_UNSET else state_id
     return service.create_substation(
         mnemonic=mnemonic,
         official_name=official_name,
         region_id=ref.region_id,
         gm_zone_id=resolved_gm_zone_id,
-        state_id=ref.state_id,
+        state_id=resolved_state_id,
         grid_owner_id=ref.grid_owner_id,
         operational_status_id=ref.status_id_by_code[status_code],
         psse_bus_number=psse_bus_number,
@@ -1092,3 +1102,146 @@ class TestNotFoundGuards:
     def test_get_unknown_substation_returns_none(self, db_session: Session) -> None:
         service = SubstationService(db_session)
         assert service.get_substation(uuid.uuid4()) is None
+
+
+# --- State is optional (ADR-026) -----------------------------------------------------
+class TestOptionalState:
+    """State is an administrative attribute, not part of engineering
+    identity — it is optional: may be omitted at creation, added later,
+    changed, or cleared. region_id/gm_zone_id/grid_owner_id remain
+    required and are not affected by these tests."""
+
+    def test_create_without_state_succeeds(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id, state_id=None)
+        db_session.commit()
+
+        assert substation.state_id is None
+        detail = service.get_substation(substation.substation_id)
+        assert detail is not None
+        assert detail.state_id is None
+        # Creation writes no audit rows (accountability is on the row itself).
+        _entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 0
+
+    def test_create_with_state_still_supported(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+        assert substation.state_id == reference_ids.state_id
+
+    def test_create_with_unknown_state_id_still_rejected(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """Optionality must not weaken validation — a *supplied* State must
+        still exist in reference data."""
+        service = SubstationService(db_session)
+        with pytest.raises(ReferenceDataNotFoundError):
+            _create(service, reference_ids, actor_user_id, state_id=999_999)
+
+    def test_add_state_to_a_stateless_substation(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id, state_id=None)
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id, state_id=reference_ids.state_id, actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        detail = service.get_substation(substation.substation_id)
+        assert detail is not None
+        assert detail.state_id == reference_ids.state_id
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 1
+        assert entries[0].field_name == "state_id"
+        assert entries[0].old_value is None
+        assert entries[0].new_value == str(reference_ids.state_id)
+
+    def test_clear_existing_state_by_sending_null(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id, state_id=None, actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        detail = service.get_substation(substation.substation_id)
+        assert detail is not None
+        assert detail.state_id is None
+
+        entries, total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert total == 1
+        assert entries[0].field_name == "state_id"
+        assert entries[0].old_value == str(reference_ids.state_id)
+        assert entries[0].new_value is None
+
+    def test_omitting_state_leaves_it_unchanged(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """Not supplying state_id (the `...` sentinel) must never clear it —
+        only an explicit null clears. Updating another field must leave
+        State untouched and write no state_id audit row."""
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+
+        service.update_substation(
+            substation.substation_id, remarks="only remarks changed", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        detail = service.get_substation(substation.substation_id)
+        assert detail is not None
+        assert detail.state_id == reference_ids.state_id
+        entries, _total = service.list_audit_log(substation.substation_id, page=1, page_size=50)
+        assert not any(e.field_name == "state_id" for e in entries)
+
+    def test_update_with_unknown_state_id_still_rejected(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        service = SubstationService(db_session)
+        substation = _create(service, reference_ids, actor_user_id)
+        db_session.commit()
+        with pytest.raises(ReferenceDataNotFoundError):
+            service.update_substation(
+                substation.substation_id, state_id=999_999, actor_user_id=actor_user_id
+            )
+
+    def test_filter_by_state_excludes_stateless_substations(
+        self, db_session: Session, reference_ids: ReferenceIds, actor_user_id: uuid.UUID
+    ) -> None:
+        """A specific-State filter still works and a null-State substation
+        simply does not match it (no placeholder, no special bucket)."""
+        service = SubstationService(db_session)
+        with_state = _create(
+            service, reference_ids, actor_user_id, mnemonic="WSUB", official_name="With State"
+        )
+        without_state = _create(
+            service,
+            reference_ids,
+            actor_user_id,
+            mnemonic="NSUB",
+            official_name="No State",
+            state_id=None,
+        )
+        db_session.commit()
+
+        items, total = service.list_substations(
+            page=1, page_size=50, state_id=reference_ids.state_id
+        )
+        ids = {s.substation_id for s in items}
+        assert with_state.substation_id in ids
+        assert without_state.substation_id not in ids
+        assert total == 1

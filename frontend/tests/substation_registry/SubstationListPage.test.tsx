@@ -32,7 +32,7 @@ const REFERENCE_DATA_HANDLERS = [
     pattern: /\/reference-data\/gm-zones$/,
     respond: () => ({
       status: 200,
-      body: [{ gm_zone_id: 1, code: "ALOR_SETAR", label: "Alor Setar" }],
+      body: [{ gm_zone_id: 1, code: "KEDP", label: "Alor Setar" }],
     }),
   },
   {

@@ -53,7 +53,7 @@ def _seed_reference_data(db_session: Session) -> dict[str, int]:
         .one()
         .operational_status_id,
         "region_id": db_session.query(Region).filter_by(code="NORTH").one().region_id,
-        "gm_zone_id": db_session.query(GmZone).filter_by(code="ALOR_SETAR").one().gm_zone_id,
+        "gm_zone_id": db_session.query(GmZone).filter_by(code="KEDP").one().gm_zone_id,
         "state_id": db_session.query(State).filter_by(code="SEL").one().state_id,
         "grid_owner_id": db_session.query(GridOwner).filter_by(code="TNB").one().grid_owner_id,
     }

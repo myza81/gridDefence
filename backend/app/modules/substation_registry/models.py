@@ -89,8 +89,16 @@ class Substation(Base):
     gm_zone_id: Mapped[int] = mapped_column(
         SmallInteger, ForeignKey("gm_zone.gm_zone_id", ondelete="RESTRICT"), nullable=False
     )
-    state_id: Mapped[int] = mapped_column(
-        SmallInteger, ForeignKey("state.state_id", ondelete="RESTRICT"), nullable=False
+    # State (Malaysian state) is an *administrative* classification, not
+    # part of a Substation's engineering identity (which is electrical/
+    # operational — mnemonic, voltage yards, connectivity). It is therefore
+    # OPTIONAL: nullable, may be omitted at creation, added later, or
+    # cleared later, exactly as an administrative attribute should be
+    # (substation-registry.md §"State is optional"; ADR-026). This is a
+    # deliberate loosening — region_id/gm_zone_id/grid_owner_id remain
+    # NOT NULL; State alone is administrative rather than identity-bearing.
+    state_id: Mapped[int | None] = mapped_column(
+        SmallInteger, ForeignKey("state.state_id", ondelete="RESTRICT"), nullable=True
     )
     grid_owner_id: Mapped[int] = mapped_column(
         SmallInteger, ForeignKey("grid_owner.grid_owner_id", ondelete="RESTRICT"), nullable=False

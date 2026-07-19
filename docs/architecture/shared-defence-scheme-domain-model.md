@@ -6,6 +6,8 @@ Related documents: [scheme-engineering-principles.md](scheme-engineering-princip
 
 This document states the domain model shared by every Defence Scheme module (UFLS, UVLS, EMLS today; SPS/RAS, Black Start, Islanding Strategy, Restoration Planning in the future). It is deliberately implementation-ready in shape and boundaries, but does not freeze low-level schemas beyond what is needed to express the shared concepts precisely.
 
+**Status update (Shared Defence-Scheme Platform implementation).** §2 (Scheme Version), §4 (Lifecycle), and §8 (Service Interfaces, lifecycle portion only) are now implemented as reusable backend/frontend infrastructure — see [shared-scheme-platform-implementation.md](shared-scheme-platform-implementation.md) for exactly what was built (`backend/app/modules/scheme_platform/`, `frontend/src/components/scheme-platform/`) and how a future concrete scheme module composes with it. No concrete scheme module (UFLS/UVLS/EMLS) has been built against it yet; no scheme-specific structure (§2.2 Version Stage, §2.3 Priority Group, §3 Shedding Assignments) is implemented by this update.
+
 ---
 
 ## 1. Defence Scheme

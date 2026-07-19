@@ -50,7 +50,7 @@ def reference_ids(db_session: Session) -> ReferenceIds:
     voltage_level = db_session.query(VoltageLevel).filter_by(label="500kV").one()
     line_type = db_session.query(LineType).filter_by(code="OVERHEAD").one()
     region = db_session.query(Region).filter_by(code="NORTH").one()
-    gm_zone = db_session.query(GmZone).filter_by(code="ALOR_SETAR").one()
+    gm_zone = db_session.query(GmZone).filter_by(code="KEDP").one()
     state = db_session.query(State).filter_by(code="SEL").one()
     grid_owner = db_session.query(GridOwner).filter_by(code="TNB").one()
     statuses = {s.code: s.operational_status_id for s in db_session.query(OperationalStatus).all()}

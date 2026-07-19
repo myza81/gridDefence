@@ -6,12 +6,17 @@ This document is the entry point to the Engineering Scheme Architecture Pack —
 
 > **Architecture Freeze.** The Engineering Scheme Architecture Pack is now considered architecturally complete and serves as the authoritative implementation baseline for Phase 6 onward. This states that the architecture is frozen pending future engineering requirements — it does not claim any implementation is complete; Phases 6–8 (UFLS, UVLS, EMLS) remain unbuilt, per [implementation-plan.md](implementation-plan.md).
 
+> **Shared Platform Architecture Finalization (2026-07-15).** The Shared Platform Implementation Readiness Review's open platform-level questions are now resolved: Stage Setting Registry module ownership ([ADR-020](../adr/ADR-020-stage-setting-registry-as-standalone-shared-module.md)), Engineering Parameter Configuration ownership ([ADR-021](../adr/ADR-021-engineering-parameter-configuration-ownership.md)), the Continuous Evaluation Detector Framework ([ADR-022](../adr/ADR-022-continuous-evaluation-detector-framework.md)), and the Platform Event Architecture connecting existing modules to Continuous Evaluation ([ADR-023](../adr/ADR-023-platform-event-architecture.md)). See [shared-platform-dependency-diagram.md](shared-platform-dependency-diagram.md) for the resulting canonical cross-module dependency picture. This closes the last known ambiguity blocking Shared Platform implementation — see that document's own validation pass for the full assessment.
+
 **Pack index:**
 - [Shared Defence Scheme Domain Model](shared-defence-scheme-domain-model.md)
+- [Shared Defence-Scheme Platform — Implementation](shared-scheme-platform-implementation.md) (`backend/app/modules/scheme_platform/`, `frontend/src/components/scheme-platform/` — implemented, no scheme module built against it yet)
 - [Stage Setting Set Architecture](stage-setting-set-architecture.md)
+- [Engineering Parameter Configuration Architecture](engineering-parameter-configuration-architecture.md)
 - [Boundary Pocket Architecture](boundary-pocket-architecture.md)
 - [Engineering Workspace Architecture](engineering-workspace-architecture.md)
 - [Continuous Evaluation Architecture](continuous-evaluation-architecture.md)
+- [Platform Event Architecture](platform-event-architecture.md)
 - [Findings and Publication Governance Architecture](findings-and-publication-governance-architecture.md)
 - [Engineering Review Panel Architecture](engineering-review-panel-architecture.md)
 - [Regional Engineering Analytics Architecture](regional-engineering-analytics-architecture.md)
@@ -20,7 +25,8 @@ This document is the entry point to the Engineering Scheme Architecture Pack —
 - [Future Extensibility and Architecture Constraints](scheme-future-extensibility.md)
 - [Roadmap and Implementation Plan Corrections](scheme-roadmap-corrections.md)
 - [Codex Foundation-Readiness Audit Brief](codex-foundation-readiness-audit-brief.md)
-- Governing decisions: [EDR-009](../engineering/edr/EDR-009-grid-defence-scheme-lifecycle-realignment.md), [EDR-010](../engineering/edr/EDR-010-boundary-pocket-as-engineering-identity.md), [ADR-015](../adr/ADR-015-defence-scheme-version-lifecycle-simplification.md), [ADR-016](../adr/ADR-016-stage-setting-set-as-reusable-versioned-entity.md), [ADR-017](../adr/ADR-017-boundary-pocket-assignment-architecture.md), [ADR-018](../adr/ADR-018-findings-severity-and-publication-governance-separation.md), [ADR-019](../adr/ADR-019-boundary-pocket-evaluation-by-connected-component-discovery.md) (corrects ADR-017's own evaluation mechanism only)
+- [Shared Platform Dependency Diagram](shared-platform-dependency-diagram.md)
+- Governing decisions: [EDR-009](../engineering/edr/EDR-009-grid-defence-scheme-lifecycle-realignment.md), [EDR-010](../engineering/edr/EDR-010-boundary-pocket-as-engineering-identity.md), [ADR-015](../adr/ADR-015-defence-scheme-version-lifecycle-simplification.md), [ADR-016](../adr/ADR-016-stage-setting-set-as-reusable-versioned-entity.md), [ADR-017](../adr/ADR-017-boundary-pocket-assignment-architecture.md), [ADR-018](../adr/ADR-018-findings-severity-and-publication-governance-separation.md), [ADR-019](../adr/ADR-019-boundary-pocket-evaluation-by-connected-component-discovery.md) (corrects ADR-017's own evaluation mechanism only), [ADR-020](../adr/ADR-020-stage-setting-registry-as-standalone-shared-module.md) (Stage Setting Registry module ownership), [ADR-021](../adr/ADR-021-engineering-parameter-configuration-ownership.md) (Engineering Parameter Configuration ownership), [ADR-022](../adr/ADR-022-continuous-evaluation-detector-framework.md) (Detector Framework), [ADR-023](../adr/ADR-023-platform-event-architecture.md) (Platform Event Architecture)
 
 ---
 

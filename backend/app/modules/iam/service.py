@@ -26,8 +26,12 @@ from app.modules.iam.exceptions import (
     DuplicateUsernameError,
     InactiveUserError,
     InvalidCredentialsError,
+    InvalidUserStatusTransitionError,
+    LastActiveAdministratorError,
     NotFoundError,
     RoleRetiredError,
+    StatusChangeReasonRequiredError,
+    UserStatusUnchangedError,
 )
 from app.modules.iam.models import (
     ExternalIdentityMapping,
@@ -48,6 +52,31 @@ from app.modules.iam.schemas import (
     UserRoleSummary,
     UserSummary,
 )
+
+# The system-defined Administrator role's own `name` (bootstrap.py's
+# SYSTEM_ROLES[0], matched case-insensitively — the same convention
+# `get_role_by_name` already uses) — not a display label, and not a
+# separate "code" field IAM's `Role` has no concept of. IAM Completion
+# Sprint's own last-active-Administrator safeguard identifies "the
+# Administrator role" this way, deliberately, rather than assuming any
+# particular role_id (which varies per deployment/bootstrap run).
+_ADMINISTRATOR_ROLE_NAME = "Administrator"
+
+# iam-module.md §8's own lifecycle, completed this sprint: a closed
+# allow-list, mirroring Substation Registry's own `_STATUS_TRANSITIONS`
+# convention (app/modules/substation_registry/service.py) exactly.
+# `DEACTIVATED` is terminal — no transition leads out of it, matching
+# §8's own one-way `Active → Suspended → Deactivated` arrow chain and
+# CLAUDE.md §11.6's "soft-delete represents retirement/decommissioning"
+# framing. Reactivation (`Suspended → Active`) and a direct
+# `Active → Deactivated` edge (skipping `Suspended`) are both included,
+# per this sprint's own explicit instruction not to assume a stricter,
+# purely-linear reading of §8's prose.
+_USER_STATUS_TRANSITIONS: dict[UserStatus, set[UserStatus]] = {
+    UserStatus.ACTIVE: {UserStatus.SUSPENDED, UserStatus.DEACTIVATED},
+    UserStatus.SUSPENDED: {UserStatus.ACTIVE, UserStatus.DEACTIVATED},
+    UserStatus.DEACTIVATED: set(),
+}
 
 
 class IAMService:
@@ -164,6 +193,89 @@ class IAMService:
     def list_users(self, *, page: int, page_size: int) -> tuple[list[UserSummary], int]:
         items, total = self.repo.list_users(offset=(page - 1) * page_size, limit=page_size)
         return [UserSummary.model_validate(u) for u in items], total
+
+    def set_user_status(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: UserStatus,
+        change_reason: str,
+        actor_user_id: uuid.UUID | None,
+    ) -> User:
+        """iam-module.md §8's `Active ⇄ Suspended`, `Active/Suspended →
+        Deactivated` lifecycle (IAM Completion Sprint). Never changes
+        `username`, `password`, or any `UserRole` grant — a status
+        transition is exactly, and only, a change to `User.status`.
+        """
+        if not change_reason or not change_reason.strip():
+            raise StatusChangeReasonRequiredError()
+
+        user = self.repo.get_user_by_id(user_id)
+        if user is None:
+            raise NotFoundError(f"User {user_id} not found")
+
+        if status == user.status:
+            raise UserStatusUnchangedError(user.status.value)
+
+        if status not in _USER_STATUS_TRANSITIONS.get(user.status, set()):
+            raise InvalidUserStatusTransitionError(user.status.value, status.value)
+
+        if status != UserStatus.ACTIVE:
+            # Reactivation (`status == ACTIVE`) can never remove an
+            # active Administrator — skip the (row-locking) safeguard
+            # check entirely for that direction.
+            self._assert_would_not_remove_last_active_administrator(user)
+
+        old_status = user.status
+        user.status = status
+        user.updated_by_user_id = actor_user_id
+        self._audit(
+            entity_type="User",
+            entity_id=str(user.user_id),
+            changed_by_user_id=actor_user_id,
+            field_name="status",
+            old_value=old_status.value,
+            new_value=status.value,
+            change_reason=change_reason,
+        )
+        self.db.flush()
+        return user
+
+    # --- Last-active-Administrator safeguard (IAM Completion Sprint) --------------
+    #
+    # "Active Administrator" is defined precisely as: `User.status ==
+    # ACTIVE` *and* a currently-active (non-revoked) grant of the
+    # `Administrator` system role, identified by name (`_ADMINISTRATOR_
+    # ROLE_NAME`), not by an assumed `role_id`. Applied wherever an
+    # active Administrator could be lost: `set_user_status` (above) and
+    # `revoke_role_from_user` (below).
+
+    def _is_active_administrator(self, user: User) -> bool:
+        if user.status != UserStatus.ACTIVE:
+            return False
+        admin_role = self.repo.get_role_by_name(_ADMINISTRATOR_ROLE_NAME)
+        if admin_role is None or admin_role.status != RoleStatus.ACTIVE:
+            return False
+        return self.repo.get_active_user_role(user.user_id, admin_role.role_id) is not None
+
+    def _assert_would_not_remove_last_active_administrator(self, user: User) -> None:
+        """No-op for any user who is not currently an active Administrator
+        themselves — such an operation cannot possibly affect the
+        invariant, so the (row-locking) query below is skipped entirely.
+        Otherwise, row-locks every other currently-active Administrator
+        (`lock=True`) for the remainder of this transaction before
+        deciding — the same transaction the caller's own mutation
+        commits in, closing the race a plain read-then-write would leave
+        open between two concurrent requests each targeting a different
+        Administrator.
+        """
+        if not self._is_active_administrator(user):
+            return
+        remaining = self.repo.list_active_administrator_user_ids(
+            administrator_role_name=_ADMINISTRATOR_ROLE_NAME, lock=True
+        )
+        if remaining <= {user.user_id}:
+            raise LastActiveAdministratorError()
 
     # --- Roles --------------------------------------------------------------------
     def create_role(
@@ -349,10 +461,22 @@ class IAMService:
         self, *, user_id: uuid.UUID, role_id: uuid.UUID, actor_user_id: uuid.UUID | None
     ) -> None:
         """Ends a grant by setting `revoked_at` — never deletes the row
-        (iam-module.md §9 rule 6, CLAUDE.md §5.2)."""
+        (iam-module.md §9 rule 6, CLAUDE.md §5.2).
+
+        IAM Completion Sprint: when the role being revoked is the
+        Administrator role specifically, the last-active-Administrator
+        safeguard applies — revoking any other role can never affect
+        that invariant, so the check is skipped entirely for those.
+        """
         grant = self.repo.get_active_user_role(user_id, role_id)
         if grant is None:
             raise NotFoundError(f"User {user_id} does not have an active grant of role {role_id}")
+
+        role = self.repo.get_role_by_id(role_id)
+        if role is not None and role.name.lower() == _ADMINISTRATOR_ROLE_NAME.lower():
+            user = self.repo.get_user_by_id(user_id)
+            if user is not None:
+                self._assert_would_not_remove_last_active_administrator(user)
 
         self.repo.revoke_user_role(grant, revoked_at=datetime.now(UTC))
         self._audit(

@@ -120,6 +120,29 @@ def test_seeded_gm_zones_match_the_project_owners_documented_list(db_session: Se
         "Dungun",
         "Kota Bharu",
     }
+    # The Project Owner's authoritative engineering GM Zone codes
+    # (migration 0023_gm_zone_engineering_codes remaps the original
+    # descriptive codes to these one-for-one by label; labels are
+    # unchanged). Pinning the exact code -> label mapping here — not just
+    # the label set — is what makes GridDefence's reference data a stable
+    # contract the Legacy Migration Workbench can resolve GM Zones against
+    # by engineering code; a future regression that reverts any code is
+    # caught by this assertion.
+    code_by_label = {z.label: z.code for z in db_session.query(GmZone).all()}
+    assert code_by_label == {
+        "Johor Bahru": "JOH1",
+        "Kluang": "JOH2",
+        "Alor Setar": "KEDP",
+        "Kota Bharu": "KELN",
+        "Kuala Lumpur": "KLUM",
+        "Ayer Keroh": "MLKA",
+        "Seremban": "NSEM",
+        "Ipoh": "PERK",
+        "Kuantan": "PHNG",
+        "Butterworth": "PPNG",
+        "Selangor": "SELG",
+        "Dungun": "TERG",
+    }
     # GM Zone codes are independent of, and never derived from, region
     # codes — no `region_id`/`region_code` column exists on `gm_zone` at
     # all (Region and GM Zone "must remain separate").

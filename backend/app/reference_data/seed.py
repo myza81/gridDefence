@@ -85,19 +85,26 @@ REGIONS: list[dict[str, str]] = [
 # and Region remain two independently-assigned attributes on Substation,
 # per the Project Owner's explicit instruction that they "must remain
 # separate."
+#
+# Codes below are the Project Owner's authoritative GM Zone engineering
+# codes (GM Zone Options refinement, superseding this table's original
+# descriptive `code` values below one-for-one by `label` — migration
+# 0023_gm_zone_engineering_codes remaps every pre-existing `gm_zone` row
+# in place, so `gm_zone_id` and every `substation.gm_zone_id` FK reference
+# are unaffected).
 GM_ZONES: list[dict[str, str]] = [
-    {"code": "ALOR_SETAR", "label": "Alor Setar"},
-    {"code": "BUTTERWORTH", "label": "Butterworth"},
-    {"code": "IPOH", "label": "Ipoh"},
-    {"code": "SELANGOR", "label": "Selangor"},
-    {"code": "KUALA_LUMPUR", "label": "Kuala Lumpur"},
-    {"code": "SEREMBAN", "label": "Seremban"},
-    {"code": "AYER_KEROH", "label": "Ayer Keroh"},
-    {"code": "KLUANG", "label": "Kluang"},
-    {"code": "JOHOR_BAHRU", "label": "Johor Bahru"},
-    {"code": "KUANTAN", "label": "Kuantan"},
-    {"code": "DUNGUN", "label": "Dungun"},
-    {"code": "KOTA_BHARU", "label": "Kota Bharu"},
+    {"code": "JOH1", "label": "Johor Bahru"},
+    {"code": "JOH2", "label": "Kluang"},
+    {"code": "KEDP", "label": "Alor Setar"},
+    {"code": "KELN", "label": "Kota Bharu"},
+    {"code": "KLUM", "label": "Kuala Lumpur"},
+    {"code": "MLKA", "label": "Ayer Keroh"},
+    {"code": "NSEM", "label": "Seremban"},
+    {"code": "PERK", "label": "Ipoh"},
+    {"code": "PHNG", "label": "Kuantan"},
+    {"code": "PPNG", "label": "Butterworth"},
+    {"code": "SELG", "label": "Selangor"},
+    {"code": "TERG", "label": "Dungun"},
 ]
 
 # Assumption (see module docstring) — the 11 Peninsular Malaysia states plus

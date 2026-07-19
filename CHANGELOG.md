@@ -11,6 +11,211 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Stage Setting Registry — Multiple Operating Criteria per Stage (ADR-025)
+
+**Scope:** Resolves a UFLS UAT-identified real-site configuration the as-built Stage Setting Registry could not represent — a single shedding stage carrying more than one independent relay operating criterion (e.g. Stage 8: 48.1 Hz at 0 ms delay, and 49.3 Hz at 60,000 ms delay). The prior one-threshold-per-stage model rejected a second setting sharing the same `stage_order`, since these are not separate shedding stages. See [ADR-025](docs/adr/ADR-025-stage-setting-trigger-multiple-operating-criteria.md).
+
+**Decision:** A `StageSetting` (a stage) now owns one or more `StageSettingTrigger` rows, each an independent frequency/voltage-time operating criterion. Satisfaction of any one configured trigger constitutes operation of that same stage (an "any-of"/OR relationship, ratified via UFLS UAT engineering clarification, not silently assumed). `UflsStage.stage_setting_id` continues to reference the parent stage, unchanged — no UFLS assignment is duplicated because a stage carries more than one trigger. Between-stage monotonicity is evaluated using each stage's most severe (numerically lowest) trigger threshold. `docs/engineering/glossary.md` and `02-engineering-concepts.md`'s own Stage definitions are corrected to describe one-or-many operating criteria per stage.
+
+**Backend (`backend/app/modules/stage_setting_registry/`):** new `StageSettingTrigger` model/table (`stage_setting_trigger`), owned by the parent `StageSetting`; `StageSetting` no longer carries `threshold_value`/`threshold_unit`/`time_delay_ms` directly. New migration `0025_stage_setting_trigger` creates the table, backfills exactly one trigger from every existing stage's own prior values, then drops the now-superseded columns (no deprecated compatibility columns retained — CLAUDE.md §5.1, no two authoritative copies). Verified upgrade/downgrade/re-upgrade on real PostgreSQL, preserving every existing `stage_setting_id` and `UflsStage` reference. Service layer split into stage-level (`add_stage`/`update_stage`/`remove_stage`/`reorder_stages`) and trigger-level (`add_trigger`/`update_trigger`/`remove_trigger`/`reorder_triggers`) operations; new structured errors for duplicate `trigger_order`, duplicate (threshold, delay) pairs, and zero-trigger publication attempts; audit log extended with a `STAGE_SETTING_TRIGGER` subject type and a non-foreign-key `stage_setting_trigger_id` column (mirroring `stage_setting_id`'s own established treatment). Draft deletion (ADR-024) now explicitly deletes every owned trigger before its owning stage, before the set itself — no `ON DELETE CASCADE` introduced.
+
+**Backend (UFLS):** `UflsStageDetail` now exposes a `triggers` list instead of flat `threshold_value`/`threshold_unit`/`time_delay_ms` fields; `to_stage_detail` reads every trigger of the referenced stage.
+
+**API:** `stage-setting-sets/{id}/settings` (stages) no longer accepts a threshold or time delay when creating a stage; new nested `stage-setting-sets/{id}/settings/{stage_setting_id}/triggers` endpoints (list/add/update/remove/reorder) for a stage's own operating criteria.
+
+**Frontend:** Stage Setting Set detail page redesigned — each stage renders as its own card with its operating criteria nested and grouped beneath it (never as separate stage rows), with a per-stage "Add Operating Point" action; "Add Stage" now asks only for stage order (and, for UVLS, region scope). UFLS Draft Editor renders each stage's full trigger set and no longer assumes a single threshold/delay pair.
+
+**Tests:** New backend coverage for single- and multi-trigger stages, duplicate trigger_order/pair rejection, most-severe-trigger monotonicity, zero-trigger publication blocking, trigger audit events, Draft deletion cascading through triggers, the `0025` migration's backfill correctness, and UFLS stage/trigger integration. New frontend coverage for grouped stage/trigger display, adding a second trigger under an existing stage without re-entering `stage_order`, Draft-only trigger editing, and Published read-only rendering.
+
+---
+
+## Stage Setting Registry — Draft Deletion and Selection-Time Validation Correction (ADR-024)
+
+**Scope:** Resolves the UAT-identified Stage Setting Set Draft-abandonment governance gap (a Draft with no supported way to remove it) and a companion divergence between `stage-setting-set-architecture.md` §6's own stated rule ("[Draft is] not yet referenceable by any Scheme Version") and the as-built UFLS validation, which enforced only a scheme-type match at selection time, deferring the Published-only requirement to the Publish-time prerequisite alone. See [ADR-024](docs/adr/ADR-024-stage-setting-set-draft-deletion.md) for the full architecture decision (adopted from a Project Owner-ratified prior architecture review, not invented in this task).
+
+**Decision:** A `DRAFT` Stage Setting Set may be physically deleted; `PUBLISHED` and `ENTERED_IN_ERROR` remain permanent and undeletable. No `Abandoned` state, soft-delete flag, or retirement flag was introduced — the identical reasoning [ADR-016](docs/adr/ADR-016-stage-setting-set-as-reusable-versioned-entity.md) already used to reject a `Superseded` state for this entity. A Scheme Version may now select only a `PUBLISHED` Stage Setting Set — enforced at selection time, not deferred.
+
+**Backend (`backend/app/modules/stage_setting_registry/`):**
+
+- `reference_check.py` (new) — `SchemeVersionReferenceChecker` Protocol plus `build_default_reference_checkers`, the read-only interface `StageSettingRegistryService.delete_draft` uses to ask each scheme module (today: UFLS only) "how many of your own Scheme Versions reference this set," without the Stage Setting Registry ever querying `ufls_scheme_version` directly (CLAUDE.md A1/A2) — a lazy-imported composition, mirroring `app.modules.ufls.evaluation.register_provider`'s own established pattern, avoiding a circular import (`UflsService` already imports `StageSettingRegistryService`).
+- `service.py` — `delete_draft(stage_setting_set_id, *, change_reason=None, actor_user_id)`: requires `DRAFT`, blocks if referenced (via the checker above), audits the deletion (capturing scheme type/description/setting count in `old_value`, since the row no longer exists afterward), deletes owned `StageSetting` rows explicitly before the parent (no `ON DELETE CASCADE`, per CLAUDE.md §11.7), all in one flush-only transaction.
+- `repository.py` — `delete_set`. `exceptions.py` — `StageSettingSetReferencedError`.
+- `router.py` — `DELETE /api/v1/stage-setting-sets/{id}`, `stage_setting_registry.manage`, `204` on success, structured `404`/`400` errors (this codebase's own established convention — no `409` is used anywhere else and none is introduced here), never a raw `IntegrityError`.
+
+**Backend (`backend/app/modules/ufls/`):** `_validate_stage_setting_set` now additionally requires the selected set's own `status == "PUBLISHED"` (new `StageSettingSetNotPublishedError`; the "missing record" case now raises a proper `StageSettingSetNotFoundError` instead of overloading the scheme-type-mismatch error). `UflsRepository.count_versions_by_stage_setting_set` / `UflsService.count_versions_referencing_stage_setting_set` — UFLS's own side of the reference-check interface above.
+
+**Frontend (`frontend/src/modules/stage_setting_registry/`):** Delete Draft action on the Stage Setting Set detail page — visible only for `DRAFT`, permission-gated on `stage_setting_registry.manage`, requires explicit confirmation, explains the deletion is permanent because the set was never Published, surfaces the structured conflict error if referenced, navigates back to the list on success. No Abandon action anywhere in the UI. The UFLS Draft Editor's own Stage Setting Set selector already filtered to `scheme_type=UFLS`/`status_filter=PUBLISHED` (unchanged by this task — confirmed, not re-implemented).
+
+**Tests:** New backend coverage for deletion (empty and with child settings, atomic parent+children deletion, audit entry content, permission enforcement, rejection for Published/Entered-in-Error, rejection when referenced by a UFLS Draft or Published version, `ON DELETE RESTRICT` as the final guarantee, rollback consistency) and for selection-time validation (Draft/Entered-in-Error/wrong-scheme-type/missing-record all rejected, Published accepted, historical Published UFLS data remains readable after its referenced set is later marked Entered in Error). New frontend coverage for Delete visibility/permission/confirmation/success/conflict-error rendering.
+
+---
+
+## Refinement — GM Zone Options (Authoritative Engineering Codes)
+
+**Scope:** Project Owner-approved refinement replacing the twelve `gm_zone.code` values (introduced
+by the "Substation Registry Enhancement — GM Zone Metadata" entry below) with the authoritative
+engineering codes the Project Owner supplied. Display names (`label`) are unchanged; only the
+persisted `code` changes.
+
+- Old code → new code (identical `label`, hence unambiguous): `ALOR_SETAR` → `KEDP`,
+  `BUTTERWORTH` → `PPNG`, `IPOH` → `PERK`, `SELANGOR` → `SELG`, `KUALA_LUMPUR` → `KLUM`,
+  `SEREMBAN` → `NSEM`, `AYER_KEROH` → `MLKA`, `KLUANG` → `JOH2`, `JOHOR_BAHRU` → `JOH1`,
+  `KUANTAN` → `PHNG`, `DUNGUN` → `TERG`, `KOTA_BHARU` → `KELN`.
+- `app/reference_data/seed.py`'s `GM_ZONES` list updated to the new codes.
+- New migration `0023_gm_zone_engineering_codes` remaps every pre-existing `gm_zone` row's `code`
+  in place, by matching on the old `(code, label)` pair. `gm_zone_id` (the actual FK target of
+  `substation.gm_zone_id`, per CLAUDE.md A5 — reference tables use surrogate SMALLINT keys, never
+  a business identifier, as their primary key) is never touched, so every existing
+  `substation.gm_zone_id` reference — and every UI/API consumer, which already resolves GM Zone
+  by `gm_zone_id`, never by `code` — is unaffected. Fully reversible (`downgrade()` restores the
+  original codes by the same matching approach).
+- Test fixtures across the backend (every module's test `conftest.py`/`test_*_api.py` that looks
+  up a GM Zone via `GmZone.filter_by(code=...)`) and frontend (Substation Registry page test
+  mocks) updated from `ALOR_SETAR`/`BUTTERWORTH` to `KEDP`/`PPNG`.
+- No frontend UI code change was needed: the GM Zone dropdown, list column, and filter are already
+  driven entirely by `gm_zone_id` (the FK value) and `label` (the display value) fetched live from
+  `GET /api/v1/reference-data/gm-zones` — `code` itself is never rendered.
+
+---
+
+## Phase 6 — UFLS Scheme Module (First Concrete Consumer of the Shared Defence-Scheme Platform)
+
+**Scope:** Implements UFLS — the first concrete Defence Scheme module, validating the Shared
+Defence-Scheme Platform's abstractions in a real engineering workflow. Full detail:
+[ufls-architecture.md](docs/architecture/ufls-architecture.md).
+
+**Reconciliation:** as with the Shared Platform task before it, this phase's own literal lifecycle
+description does not match ADR-015's ratified four-state model. Implemented ADR-015's model exactly
+(`Draft → Published → Superseded | Entered in Error`), per CLAUDE.md's own precedence rules.
+
+**Backend (new module, `backend/app/modules/ufls/`):**
+
+- `models.py` — `UflsScheme` (lineage identity), `UflsSchemeVersion` (composes
+  `scheme_platform.SchemeVersionMixin`), `UflsStage` (references a Stage Setting Registry
+  `StageSetting`; external-study `target_mw` only, no capture/approved-MW field anywhere), `UflsDirectAssignment`,
+  `UflsPocketAssignment`/`UflsPocketAssignmentOpeningPoint` (both attach directly to a stage — no
+  `UflsLoadBlock` grouping layer), `UflsAuditLog`.
+- `service.py` — `UflsService`: scheme/version/stage/assignment CRUD; Stage Setting Set scheme-type
+  validation; Transformer Terminal eligibility (excluded grid-owner/operational-status rules);
+  Boundary Pocket construction via `NetworkModelService.evaluate_boundary` (ADR-019), rejecting an
+  ineffective selection; direct/pocket substation-overlap prevention; ALSF-capability and
+  Sensitive-Customer finding computation (reusing existing `FindingType`s, never duplicated);
+  structural publication prerequisites (reusing `PublicationPrerequisiteResult`, no second validator);
+  `publish()` orchestrating prerequisite/finding evaluation, `PublicationRecordService`, and
+  `scheme_platform`'s own lifecycle transition as one transaction; engineering summaries (descriptive
+  only); platform-event emission for scheme/version/stage/assignment changes not already covered by
+  the shared platform's own lifecycle events.
+- `evaluation.py` — `UflsEvaluationRequestProvider`, the first concrete
+  `EvaluationRequestProvider` implementation. `target_mw` resolution is fully implemented; `current_mw`
+  resolution is deliberately deferred (`CurrentMwNotResolvableError`) — no Transformer-Terminal/
+  Substation-to-Bus load correlation mechanism exists anywhere in this codebase yet. Not wired into any
+  production composition root, since none exists yet (a confirmed pre-existing Shared Platform Sprint 6
+  gap); `register_provider()` is the documented, ready-to-call registration point for when one is built.
+- `router.py`/`dependencies.py` — full REST surface (scheme/version/stage/assignment CRUD, publication
+  review, publish, enter-in-error). `bootstrap.py` — `ufls.read`/`.manage`/`.publish`/`.enter_in_error`
+  permission catalog, mirroring `stage_setting_registry`'s own Administrator-only publish precedent.
+- `alembic/versions/0022_ufls.py` — seven tables, verified upgrade/downgrade against a real PostgreSQL
+  database (full chain 0001→0022), not merely SQLite.
+
+**Frontend (new module, `frontend/src/modules/ufls/`):** Scheme List, Scheme Detail (version history,
+Draft creation with optional structure-copy), Draft Editor + Stage/Assignment Workspace (Draft-only
+edit affordances; Published/Superseded/Entered-in-Error strictly read-only), Publication Review
+(blocking prerequisites, findings, engineering summary, permission-gated Publish). Reuses
+`components/scheme-platform`'s shared `LifecycleBadge`/`VersionBadge`/`SchemeVersionHeader`/
+`SchemeVersionMetadataPanel`.
+
+**Tests:** 13 backend service tests + 6 backend API tests (SQLite and real PostgreSQL, both green) + 9
+frontend tests. Full pre-existing backend suite (1157 passed) and frontend suite (265 passed)
+otherwise unaffected; one pre-existing, unrelated Windows-`subprocess` test failure in
+`sensitive_customer_registry` and one pre-existing, unrelated TypeScript error in
+`tests/components/ui/DataTable.test.tsx` — both predate this phase and are untouched by it.
+
+**Deferred:** Continuous Evaluation composition-root wiring (`current_mw` resolution, provider
+registration); a searchable Equipment Registry terminal picker in the frontend workspace (today: direct
+UUID entry); Cross-Scheme Compliance integration (module does not exist yet).
+
+---
+
+## Shared Defence-Scheme Platform — Reusable Version Lifecycle Infrastructure
+
+**Scope:** Implements the reusable platform every future Defence Scheme module (UFLS, UVLS, EMLS,
+and beyond) composes with — version lifecycle, shared metadata, and platform-event integration. Not
+the implementation of any defence scheme: no UFLS/UVLS/EMLS engineering logic, table, or route exists
+in this module. See
+[shared-scheme-platform-implementation.md](docs/architecture/shared-scheme-platform-implementation.md)
+for the full architecture summary.
+
+**Critical reconciliation:** this task's own prompt described a lifecycle of `Draft → Submitted for
+Review → Approved → Activated → Archived` — CLAUDE.md A3's general-purpose six-state model. That
+model is explicitly, narrowly superseded for Defence Scheme Version data specifically by
+[ADR-015](docs/adr/ADR-015-defence-scheme-version-lifecycle-simplification.md) (ratified via six
+Project Owner engineering-discovery workshops,
+[EDR-009](docs/engineering/edr/EDR-009-grid-defence-scheme-lifecycle-realignment.md)). Per CLAUDE.md's
+own precedence rules and this task's own explicit instruction to preserve engineering philosophy over
+a literal prompt reading, this implementation follows ADR-015's ratified four-state model exactly:
+`Draft → Published → Superseded | Entered in Error`. No `Under Review`, `Approved`, or `Archived`
+state exists; `Superseded → Published` reactivation (an explicitly open question) is not implemented.
+
+**Backend (new module, `backend/app/modules/scheme_platform/`):**
+
+- `lifecycle.py` — `SchemeVersionLifecycleStatus` (exactly the four ADR-015 states) and
+  `validate_transition()`, a pure function enforcing ADR-015's own closed four-transition allow-list.
+- `models.py` — `SchemeVersionMixin`, an `__abstract__ = True` SQLAlchemy mixin (never a table of its
+  own) carrying the shared columns every concrete scheme version needs: identity, sequential
+  `version_number`, lifecycle status, publish/supersede/entered-in-error timestamps and actors,
+  engineering remarks, audit timestamps. Deliberately excludes `scheme_id` (FK target differs per
+  concrete module) and any self-referential column — each concrete module adds these itself.
+- `schemas.py` — `SchemeVersionLifecycleInfo`, `SchemeVersionSummaryBase`/`SchemeVersionDetailBase`,
+  `EnterInErrorRequest` — reusable Pydantic base DTOs a concrete module extends.
+- `repository.py` — `get_next_version_number`, `get_current_published`, `list_versions`: plain
+  functions parameterized by the concrete model class, not a generic base-repository class hierarchy.
+- `service.py` — `SchemeVersionLifecycleService`: `create_draft`, `delete_draft`, `publish` (validates
+  the transition and atomically supersedes the previous Published version), `supersede`,
+  `enter_in_error` (mandatory reason). Calls
+  `ContinuousEvaluationService.notify_source_data_changed` (ADR-023) after every transition via a
+  reusable `build_lifecycle_change_descriptor` helper — no engineering-specific event payload.
+  Explicitly does **not** run structural Publication prerequisites, resolve Publication Treatment, or
+  create a `PublicationRecord` (already the established job of
+  `PublicationRecordService.evaluate_and_record_publication`, Sprint 4) — a concrete module composes
+  both, in one transaction, rather than this sprint duplicating that mechanism.
+- `exceptions.py` — `IllegalLifecycleTransitionError`, `DraftDeletionNotPermittedError`,
+  `EnteredInErrorReasonRequiredError`, `PublishedVersionAlreadyExistsError`.
+- `tests/synthetic_scheme_version.py` — a test-only concrete model built from `SchemeVersionMixin`,
+  proving the mixin is genuinely reusable without any real scheme module existing; never a production
+  table, never migrated, never exposed through any router.
+
+**Frontend (new components, `frontend/src/components/scheme-platform/`):** `LifecycleBadge`,
+`VersionBadge`, `SchemeVersionHeader`, `SchemeVersionMetadataPanel`, `PublicationHistoryPanel` — named
+"Publication History," not "Review History"/"Approval History," since ADR-015 defines no separate
+review or approval state to have a history of. None reference UFLS, UVLS, or EMLS.
+
+**Explicitly deferred, not built this sprint:** a generic FastAPI router (its exact shape cannot be
+validated without a real concrete consumer — the reusable pattern is documented, the code is deferred
+to the first concrete scheme module that needs it) and a separate "validator registry" for Publication
+prerequisites (the existing `PublicationPrerequisiteResult`/`PublicationRequest` contract, Sprint 4,
+already serves this need — not duplicated here).
+
+**Testing:** 52 new backend tests (`test_lifecycle.py`: exactly four states, every legal/illegal
+transition pair including `Superseded → Published` reactivation and reverse transitions;
+`test_models.py`: the database-level lifecycle-status `CHECK` constraint; `test_repository.py`:
+version-number sequencing and per-scheme scoping, current-published lookup; `test_service.py`: draft
+creation, deletion rules, publish/supersede/enter-in-error transitions and their mandatory-reason/
+illegal-transition guards, platform-event descriptor shape and ordering, and a structural test
+confirming no scheme-specific engineering term appears in the shared service's own code) and 17 new
+frontend tests across 5 component test files. Full backend suite and full frontend suite both pass
+with no regressions (backend: pre-existing `sensitive_customer_registry` subprocess flake unrelated to
+this work; frontend: one pre-existing, unrelated TypeScript typecheck issue in
+`tests/components/ui/DataTable.test.tsx`, confirmed untouched by this sprint).
+
+**Documentation:** new
+[shared-scheme-platform-implementation.md](docs/architecture/shared-scheme-platform-implementation.md)
+(why the platform exists, module boundaries, inheritance strategy, lifecycle/version philosophy, the
+ADR-015 reconciliation, and what was explicitly deferred). Status-note pointers added to
+`scheme-engineering-principles.md`'s own pack index and `shared-defence-scheme-domain-model.md` — no
+rewrite of either. No new ADR: ADR-015 already governs the lifecycle question this sprint implements.
+
+---
+
 ## Shared Platform Sprint 6 — Continuous Evaluation Engine: Background Refresh, Evaluation Projection, and Platform Event Consumption Foundation
 
 **Scope:** Sixth implementation sprint of the finalized Shared Platform architecture. Implements

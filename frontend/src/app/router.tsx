@@ -36,9 +36,15 @@ import { FacilityDetailPage } from "../modules/sensitive_customer_registry/pages
 import { FacilityListPage } from "../modules/sensitive_customer_registry/pages/FacilityListPage";
 import { FacilitySectorAdminPage } from "../modules/sensitive_customer_registry/pages/FacilitySectorAdminPage";
 import { SensitivityClassificationAdminPage } from "../modules/sensitive_customer_registry/pages/SensitivityClassificationAdminPage";
+import { StageSettingSetDetailPage } from "../modules/stage_setting_registry/pages/StageSettingSetDetailPage";
+import { StageSettingSetListPage } from "../modules/stage_setting_registry/pages/StageSettingSetListPage";
 import { SubstationCreatePage } from "../modules/substation_registry/pages/SubstationCreatePage";
 import { SubstationDetailPage } from "../modules/substation_registry/pages/SubstationDetailPage";
 import { SubstationListPage } from "../modules/substation_registry/pages/SubstationListPage";
+import { UflsDraftEditorPage } from "../modules/ufls/pages/UflsDraftEditorPage";
+import { UflsPublicationReviewPage } from "../modules/ufls/pages/UflsPublicationReviewPage";
+import { UflsSchemeDetailPage } from "../modules/ufls/pages/UflsSchemeDetailPage";
+import { UflsSchemeListPage } from "../modules/ufls/pages/UflsSchemeListPage";
 
 /**
  * Root route table. Each business module registers its own routes here once
@@ -417,6 +423,66 @@ const router = createBrowserRouter([
       <AppShell>
         <ProtectedRoute>
           <BoundaryPocketEvaluatorPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/stage-setting-sets",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <StageSettingSetListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/stage-setting-sets/:stageSettingSetId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <StageSettingSetDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/ufls/schemes",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <UflsSchemeListPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/ufls/schemes/:schemeId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <UflsSchemeDetailPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/ufls/versions/:versionId",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <UflsDraftEditorPage />
+        </ProtectedRoute>
+      </AppShell>
+    ),
+  },
+  {
+    path: "/ufls/versions/:versionId/publication-review",
+    element: (
+      <AppShell>
+        <ProtectedRoute>
+          <UflsPublicationReviewPage />
         </ProtectedRoute>
       </AppShell>
     ),

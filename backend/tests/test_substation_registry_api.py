@@ -38,7 +38,7 @@ def _seed_reference_data(db_session: Session) -> dict[str, int]:
         .one()
         .voltage_level_id,
         "region_id": db_session.query(Region).filter_by(code="NORTH").one().region_id,
-        "gm_zone_id": db_session.query(GmZone).filter_by(code="ALOR_SETAR").one().gm_zone_id,
+        "gm_zone_id": db_session.query(GmZone).filter_by(code="KEDP").one().gm_zone_id,
         "state_id": db_session.query(State).filter_by(code="SEL").one().state_id,
         "grid_owner_id": db_session.query(GridOwner).filter_by(code="TNB").one().grid_owner_id,
         "operational_status_id": db_session.query(OperationalStatus)
@@ -597,3 +597,163 @@ def test_update_without_substation_registry_write_is_forbidden(
         json={"region_id": ref["region_id"]},
     )
     assert response.status_code == 403
+
+
+# --- State is optional (ADR-026) -----------------------------------------------------
+
+
+def test_create_without_state_returns_201_with_null_state(
+    client: TestClient, db_session: Session
+) -> None:
+    """State omitted entirely at creation — the API accepts it and the
+    response serializes state_id as null (no placeholder)."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {k: v for k, v in ref.items() if k != "state_id"}
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "NOSTATE", "official_name": "Stateless One", **payload},
+    )
+    assert create_response.status_code == 201, create_response.text
+    body = create_response.json()
+    assert "state_id" in body
+    assert body["state_id"] is None
+
+    get_response = client.get(f"/api/v1/substations/{body['substation_id']}", headers=headers)
+    assert get_response.status_code == 200
+    assert get_response.json()["state_id"] is None
+
+
+def test_create_with_explicit_null_state_returns_201(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {k: v for k, v in ref.items() if k != "state_id"}
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "NULLST", "official_name": "Null State", "state_id": None, **payload},
+    )
+    assert create_response.status_code == 201, create_response.text
+    assert create_response.json()["state_id"] is None
+
+
+def test_clear_state_via_patch_null_and_add_it_back(
+    client: TestClient, db_session: Session
+) -> None:
+    """Round trip: a substation created with a State can have it cleared
+    (explicit null), then set again — each audited."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "RT1", "official_name": "Round Trip", **ref},
+    )
+    assert create_response.status_code == 201, create_response.text
+    substation_id = create_response.json()["substation_id"]
+    assert create_response.json()["state_id"] == ref["state_id"]
+
+    # Clear it.
+    clear_response = client.patch(
+        f"/api/v1/substations/{substation_id}", headers=headers, json={"state_id": None}
+    )
+    assert clear_response.status_code == 200, clear_response.text
+    assert clear_response.json()["state_id"] is None
+
+    # Add it back.
+    readd_response = client.patch(
+        f"/api/v1/substations/{substation_id}",
+        headers=headers,
+        json={"state_id": ref["state_id"]},
+    )
+    assert readd_response.status_code == 200, readd_response.text
+    assert readd_response.json()["state_id"] == ref["state_id"]
+
+    audit = client.get(f"/api/v1/substations/{substation_id}/audit-log", headers=headers)
+    state_changes = [e for e in audit.json()["items"] if e["field_name"] == "state_id"]
+    assert len(state_changes) == 2
+    # Both transitions were recorded — the clear (id -> null) and the
+    # re-add (null -> id). Compared as a set because the two audit rows
+    # can share the same `changed_at` second, making their relative order
+    # non-deterministic (not a product concern — both are present).
+    transitions = {(e["old_value"], e["new_value"]) for e in state_changes}
+    assert transitions == {(str(ref["state_id"]), None), (None, str(ref["state_id"]))}
+
+
+def test_patch_without_state_leaves_it_unchanged(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "KEEP1", "official_name": "Keep State", **ref},
+    )
+    substation_id = create_response.json()["substation_id"]
+
+    update_response = client.patch(
+        f"/api/v1/substations/{substation_id}", headers=headers, json={"remarks": "note"}
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["state_id"] == ref["state_id"]
+
+
+def test_create_with_unknown_state_id_still_returns_400(
+    client: TestClient, db_session: Session
+) -> None:
+    """Optionality must not weaken validation of a supplied State."""
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {k: v for k, v in ref.items() if k != "state_id"}
+    response = client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "BADST", "official_name": "Bad State", "state_id": 999999, **payload},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "validation_error"
+
+
+def test_list_filter_by_state_excludes_stateless_rows(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token = _admin_token(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "HASST", "official_name": "Has State", **ref},
+    )
+    stateless_payload = {k: v for k, v in ref.items() if k != "state_id"}
+    client.post(
+        "/api/v1/substations",
+        headers=headers,
+        json={"mnemonic": "NOST", "official_name": "No State Row", **stateless_payload},
+    )
+
+    filtered = client.get(
+        "/api/v1/substations", headers=headers, params={"state_id": ref["state_id"]}
+    )
+    assert filtered.status_code == 200
+    mnemonics = {row["mnemonic"] for row in filtered.json()["items"]}
+    assert "HASST" in mnemonics
+    assert "NOST" not in mnemonics
+
+    # Unfiltered still returns both.
+    unfiltered = client.get("/api/v1/substations", headers=headers)
+    all_mnemonics = {row["mnemonic"] for row in unfiltered.json()["items"]}
+    assert {"HASST", "NOST"} <= all_mnemonics

@@ -19,9 +19,11 @@ from app.modules.iam.models import (
     Permission,
     Role,
     RolePermission,
+    RoleStatus,
     User,
     UserCredential,
     UserRole,
+    UserStatus,
 )
 
 
@@ -128,6 +130,47 @@ class IAMRepository:
     def revoke_user_role(self, user_role: UserRole, revoked_at: datetime) -> None:
         user_role.revoked_at = revoked_at
         self.db.flush()
+
+    def list_active_administrator_user_ids(
+        self, *, administrator_role_name: str, lock: bool = False
+    ) -> set[uuid.UUID]:
+        """User ids currently holding a live claim to the named
+        Administrator-equivalent role: `User.status = ACTIVE`, a
+        non-revoked `UserRole` grant, and the role itself `ACTIVE` (not
+        retired). Used exclusively by `IAMService`'s last-active-
+        Administrator safeguard (IAM Completion Sprint) — this method
+        itself contains no business rule, per this file's own module
+        docstring.
+
+        `lock=True` applies `FOR UPDATE OF "user"` to the underlying
+        query, serializing concurrent callers against the same candidate
+        `User` rows for the remainder of the caller's transaction — the
+        service layer's own safeguard depends on this to avoid two
+        concurrent requests each reading "more than one remains" and
+        both proceeding. Deliberately no `DISTINCT`/aggregate in the same
+        statement as the lock (PostgreSQL rejects `FOR UPDATE` combined
+        with either) — deduplication happens in Python via the returned
+        `set`, which is exact here since `UserRole` already enforces at
+        most one active grant per `(user_id, role_id)` pair. Silently
+        ignored on SQLite (no row-locking support), which is fine — the
+        default single-writer test suite has no concurrent-transaction
+        race to guard against in the first place.
+        """
+        stmt = (
+            select(User.user_id)
+            .select_from(User)
+            .join(UserRole, UserRole.user_id == User.user_id)
+            .join(Role, Role.role_id == UserRole.role_id)
+            .where(
+                User.status == UserStatus.ACTIVE,
+                UserRole.revoked_at.is_(None),
+                Role.status == RoleStatus.ACTIVE,
+                func.lower(Role.name) == administrator_role_name.lower(),
+            )
+        )
+        if lock:
+            stmt = stmt.with_for_update(of=User)
+        return set(self.db.execute(stmt).scalars().all())
 
     # --- ExternalIdentityMapping ------------------------------------------------------
     def get_active_external_identity(

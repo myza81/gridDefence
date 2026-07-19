@@ -5,7 +5,115 @@ import { useState } from "react";
 import { ApiError } from "../../../api/client";
 import { useAuth } from "../AuthContext";
 import { iamApi } from "../api";
-import type { UserSummary } from "../types";
+import type { UserStatus, UserSummary } from "../types";
+
+/** IAM Completion Sprint — iam-module.md §8's own closed lifecycle,
+ * mirrored client-side for display/available-actions purposes only
+ * (CLAUDE.md A12: the backend's own `_USER_STATUS_TRANSITIONS` allow-list
+ * is what is actually enforced; this table only decides which buttons to
+ * show — the backend rejects anything this table gets wrong). */
+const AVAILABLE_STATUS_ACTIONS: Record<UserStatus, { label: string; target: UserStatus }[]> = {
+  active: [
+    { label: "Suspend", target: "suspended" },
+    { label: "Deactivate", target: "deactivated" },
+  ],
+  suspended: [
+    { label: "Reactivate", target: "active" },
+    { label: "Deactivate", target: "deactivated" },
+  ],
+  deactivated: [],
+};
+
+function UserStatusPanel({
+  user,
+  onStatusChanged,
+}: {
+  user: UserSummary;
+  onStatusChanged: () => void;
+}) {
+  const { permissions: myPermissions } = useAuth();
+  const canManage = myPermissions.has("iam.user.manage");
+  const [pendingTarget, setPendingTarget] = useState<UserStatus | null>(null);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const statusMutation = useMutation({
+    mutationFn: (target: UserStatus) =>
+      iamApi.changeUserStatus(user.user_id, { status: target, change_reason: reason }),
+    onSuccess: () => {
+      setPendingTarget(null);
+      setReason("");
+      setError(null);
+      onStatusChanged();
+    },
+    onError: (err: unknown) =>
+      setError(err instanceof ApiError ? err.message : "Status change failed."),
+  });
+
+  function cancel(): void {
+    setPendingTarget(null);
+    setReason("");
+    setError(null);
+  }
+
+  if (!canManage) {
+    return (
+      <p>Status: {user.status}</p>
+    );
+  }
+
+  const actions = AVAILABLE_STATUS_ACTIONS[user.status];
+
+  return (
+    <div>
+      <p>Status: {user.status}</p>
+      {actions.length === 0 && (
+        <p>A deactivated account has no further status changes available.</p>
+      )}
+      {!pendingTarget &&
+        actions.map((action) => (
+          <button
+            key={action.target}
+            type="button"
+            onClick={() => {
+              setPendingTarget(action.target);
+              setError(null);
+            }}
+            style={{ marginRight: "0.5rem" }}
+          >
+            {action.label}
+          </button>
+        ))}
+      {pendingTarget && (
+        <div style={{ border: "1px solid #e2e2e2", padding: "0.5rem", marginTop: "0.5rem" }}>
+          <p>
+            Change {user.username}&apos;s status to <strong>{pendingTarget}</strong>?
+          </p>
+          <label htmlFor={`status-reason-${user.user_id}`}>Reason (required)</label>
+          <br />
+          <input
+            id={`status-reason-${user.user_id}`}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <br />
+          <button
+            type="button"
+            disabled={!reason.trim() || statusMutation.isPending}
+            onClick={() => statusMutation.mutate(pendingTarget)}
+            style={{ marginTop: "0.5rem", marginRight: "0.5rem" }}
+          >
+            {statusMutation.isPending ? "Applying..." : "Confirm"}
+          </button>
+          <button type="button" onClick={cancel} style={{ marginTop: "0.5rem" }}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </div>
+  );
+}
 
 function UserRolesPanel({ user }: { user: UserSummary }) {
   const queryClient = useQueryClient();
@@ -213,7 +321,17 @@ export function UsersPage() {
             >
               {user.username} ({user.status})
             </button>
-            {expandedUserId === user.user_id && <UserRolesPanel user={user} />}
+            {expandedUserId === user.user_id && (
+              <>
+                <UserStatusPanel
+                  user={user}
+                  onStatusChanged={() =>
+                    void queryClient.invalidateQueries({ queryKey: ["iam", "users"] })
+                  }
+                />
+                <UserRolesPanel user={user} />
+              </>
+            )}
           </li>
         ))}
       </ul>

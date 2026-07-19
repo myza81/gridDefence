@@ -115,14 +115,16 @@ class SubstationService:
         *,
         region_id: int,
         gm_zone_id: int,
-        state_id: int,
+        state_id: int | None,
         grid_owner_id: int,
     ) -> None:
         if self.reference_data.get_region(region_id) is None:
             raise ReferenceDataNotFoundError("region_id", region_id)
         if self.reference_data.get_gm_zone(gm_zone_id) is None:
             raise ReferenceDataNotFoundError("gm_zone_id", gm_zone_id)
-        if self.reference_data.get_state(state_id) is None:
+        # State is optional (ADR-026) — only validate it against reference
+        # data when one is actually supplied; `None` is a legitimate value.
+        if state_id is not None and self.reference_data.get_state(state_id) is None:
             raise ReferenceDataNotFoundError("state_id", state_id)
         if self.reference_data.get_grid_owner(grid_owner_id) is None:
             raise ReferenceDataNotFoundError("grid_owner_id", grid_owner_id)
@@ -194,7 +196,9 @@ class SubstationService:
         official_name: str,
         region_id: int,
         gm_zone_id: int,
-        state_id: int,
+        # State is optional (ADR-026) — an administrative attribute, not
+        # part of engineering identity. May be omitted at creation.
+        state_id: int | None,
         grid_owner_id: int,
         operational_status_id: int,
         psse_bus_number: int | None,
@@ -250,25 +254,27 @@ class SubstationService:
         self,
         substation_id: uuid.UUID,
         *,
-        # mnemonic/official_name/region_id/gm_zone_id/state_id/
-        # grid_owner_id are never-null business fields: `None`
-        # unambiguously means "not supplied, leave unchanged." (gm_zone_id
-        # joined this group once migration 0016_gm_zone tightened it to
-        # NOT NULL — it can no longer be legally cleared, mirroring
-        # region_id/state_id/grid_owner_id exactly.) psse_bus_number/
-        # latitude/longitude/commissioned_date/remarks are genuinely
-        # nullable (clearing them is a valid request), so they default to
-        # the `...` (Ellipsis) sentinel instead — "not supplied" and
-        # "explicitly set to null" must stay distinguishable for those
-        # fields. voltage_level_id is deprecated (ADR-009) and no longer
-        # part of this method's update surface — SubstationVoltageYard
-        # (ADR-008) is the only way to change a substation's voltage
-        # level(s) now.
+        # mnemonic/official_name/region_id/gm_zone_id/grid_owner_id are
+        # never-null business fields: `None` unambiguously means "not
+        # supplied, leave unchanged." (gm_zone_id joined this group once
+        # migration 0016_gm_zone tightened it to NOT NULL — it can no
+        # longer be legally cleared, mirroring region_id/grid_owner_id
+        # exactly.) state_id, psse_bus_number, latitude, longitude,
+        # commissioned_date, and remarks are genuinely nullable (clearing
+        # them is a valid request), so they default to the `...` (Ellipsis)
+        # sentinel instead — "not supplied" and "explicitly set to null"
+        # must stay distinguishable for those fields. state_id joined this
+        # nullable group when State became optional (ADR-026): sending
+        # `"state_id": null` clears a substation's State, exactly as
+        # `"psse_bus_number": null` clears its bus number. voltage_level_id
+        # is deprecated (ADR-009) and no longer part of this method's update
+        # surface — SubstationVoltageYard (ADR-008) is the only way to
+        # change a substation's voltage level(s) now.
         mnemonic: str | None = None,
         official_name: str | None = None,
         region_id: int | None = None,
         gm_zone_id: int | None = None,
-        state_id: int | None = None,
+        state_id: int | None = ...,
         grid_owner_id: int | None = None,
         psse_bus_number: int | None = ...,
         latitude: float | None = ...,
@@ -334,8 +340,11 @@ class SubstationService:
             substation.gm_zone_id = gm_zone_id
             changed = True
 
-        if state_id is not None and state_id != substation.state_id:
-            if self.reference_data.get_state(state_id) is None:
+        # State is optional (ADR-026) — the `...` sentinel means "not
+        # supplied"; an explicit `None` clears it; an int sets it (validated
+        # only when non-null, mirroring psse_bus_number below).
+        if state_id is not ... and state_id != substation.state_id:
+            if state_id is not None and self.reference_data.get_state(state_id) is None:
                 raise ReferenceDataNotFoundError("state_id", state_id)
             self._audit_field_change(
                 substation_id=substation_id,

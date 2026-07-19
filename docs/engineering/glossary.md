@@ -66,7 +66,7 @@ For the corresponding **implementation** name of any engineering term below (whi
 
 **Shedding Action** — A single, specific instruction within a Stage to disconnect a defined piece of equipment or electrical boundary, contributing a known quantity of load. See [02-engineering-concepts.md](02-engineering-concepts.md).
 
-**Stage** — A named subdivision of a Grid Defence Scheme, triggered at a specific frequency or voltage threshold with an associated time delay, grouping the Shedding Actions executed together. See [02-engineering-concepts.md](02-engineering-concepts.md).
+**Stage** — A named subdivision of a Grid Defence Scheme, grouping the Shedding Actions executed together, triggered by one or more independent frequency-time (or voltage-time) operating criteria — satisfaction of any one configured criterion triggers that stage's execution. A stage with a single operating criterion and a stage with several are the same kind of thing; multiplicity reflects real relay configuration (e.g. a fast trip and a slower backup trip protecting the same stage), not multiple stages. See [02-engineering-concepts.md](02-engineering-concepts.md) and [ADR-025](../adr/ADR-025-stage-setting-trigger-multiple-operating-criteria.md).
 
 **Stage Coordination** — The workflow step in which selected Shedding Actions are grouped into Stages with their triggering thresholds. See [03-system-workflow.md](03-system-workflow.md).
 

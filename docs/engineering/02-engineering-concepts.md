@@ -92,11 +92,11 @@ Each concept is defined the way a power system engineer would explain it to a co
 
 ## Stage
 
-**Definition.** A Stage is a named subdivision of a Grid Defence Scheme, triggered at a specific frequency or voltage threshold (with an associated time delay), that groups together the Shedding Actions to be executed when that threshold is crossed.
+**Definition.** A Stage is a named subdivision of a Grid Defence Scheme that groups together the Shedding Actions to be executed together, triggered by one or more independent frequency-time (or voltage-time) operating criteria. A stage may carry a single operating criterion, or several — for example a fast, low-delay trip at a severe threshold and a slower backup trip at a less severe but sustained threshold, both protecting the same stage. Satisfaction of any one configured criterion constitutes operation of that stage; multiple criteria under one stage are not multiple stages (see [ADR-025](../adr/ADR-025-stage-setting-trigger-multiple-operating-criteria.md)).
 
 **Purpose.** A single disturbance rarely calls for shedding all planned load at once. Staging lets a scheme shed progressively larger amounts of load as a disturbance worsens, giving the system a chance to stabilize after each stage rather than over-shedding on the first trigger.
 
-**Engineering significance.** The composition of a stage — which bays, which lines, which pockets are grouped together, and at what threshold — is entirely an engineering judgement call; GridDefence records and enforces the structure of that judgement, it does not compute it (01-engineering-philosophy.md §5, Step 7).
+**Engineering significance.** The composition of a stage — which bays, which lines, which pockets are grouped together, and at what threshold(s) — is entirely an engineering judgement call; GridDefence records and enforces the structure of that judgement, it does not compute it (01-engineering-philosophy.md §5, Step 7). This includes the relationship between multiple operating criteria under one stage: GridDefence records the set an engineer configures without evaluating or simulating which criterion would fire first.
 
 **Relationship to other concepts.** A **Grid Defence Scheme** contains one or more Stages. A Stage contains one or more **Shedding Actions**, of any combination of type (Transformer Bay Shedding, Line Bay Shedding, Boundary Line Shedding).
 

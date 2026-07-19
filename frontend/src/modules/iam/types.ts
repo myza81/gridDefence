@@ -22,6 +22,11 @@ export interface UserPage {
   total: number;
 }
 
+export interface UserStatusChange {
+  status: UserStatus;
+  change_reason: string;
+}
+
 export interface UserCreate {
   username: string;
   display_name: string;

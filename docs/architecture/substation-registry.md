@@ -37,6 +37,30 @@ Scope: Master Data Management (MDM) module for GridDefence
 > schema and are left as-is per this project's immutable-history practice;
 > GM Zone is additive to, not a rewrite of, that design.
 
+> **Status update (State made optional, [ADR-026](../adr/ADR-026-substation-state-optional.md), Project Owner-approved).**
+> **State is now an OPTIONAL attribute of a Substation**, not a mandatory
+> one. State (the Malaysian state a substation sits in) is an
+> *administrative/geographic classification* — it is **not part of a
+> Substation's engineering identity**, which is electrical and operational
+> (mnemonic, voltage yards per ADR-008/009, connectivity, operational
+> status). Consistent with [scheme-data-consumption-matrix.md](scheme-data-consumption-matrix.md)
+> §1, which already treats Region/State/GM Zone/Grid Owner as analytics-and-
+> filtering metadata rather than validation rules, State is therefore
+> optional while remaining fully supported: `substation.state_id` is now
+> **nullable** (migration `0026_substation_state_optional`), may be omitted
+> at creation, added later, or cleared later, and appears in API responses
+> as `null` when unassigned. Filtering by a specific State is unchanged;
+> a null-State substation simply does not match a specific-State filter. No
+> placeholder, "Unknown", or inferred State value is ever written.
+> **`region_id`, `gm_zone_id`, and `grid_owner_id` remain `NOT NULL`** —
+> State alone is the purely administrative label in that group (ADR-026).
+> Wherever the historical text below states or implies that State is
+> required — the `state_id ... NOT NULL` in §6's schema, "Requires ...
+> state" in §10, and the never-null field grouping in §10's Update note
+> (and the "exactly like `region_id`/`state_id`/`grid_owner_id`" comparison
+> in the GM Zone note above) — read State as optional per this note; those
+> passages are left as-is per this project's immutable-history practice.
+
 ---
 
 ## 1. Module Overview

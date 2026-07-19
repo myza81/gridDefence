@@ -29,6 +29,7 @@ from app.modules.iam.schemas import (
     UserCreate,
     UserPage,
     UserRoleSummary,
+    UserStatusChange,
     UserSummary,
 )
 from app.modules.iam.security import issue_access_token
@@ -98,6 +99,29 @@ def create_user(
             actor_user_id=actor.user_id,
         )
     except ValidationAppError as exc:
+        raise _error_response(exc) from exc
+
+    service.db.commit()
+    return UserSummary.model_validate(user)
+
+
+@router.post("/users/{user_id}/status", response_model=UserSummary)
+def change_user_status(
+    user_id: uuid.UUID,
+    payload: UserStatusChange,
+    service: IAMService = Depends(get_iam_service),
+    actor: User = Depends(require_permission("iam.user.manage")),
+) -> UserSummary:
+    """IAM Completion Sprint — `Active ⇄ Suspended`, `Active/Suspended →
+    Deactivated` (iam-module.md §8). Never username/password/role grants."""
+    try:
+        user = service.set_user_status(
+            user_id,
+            status=payload.status,
+            change_reason=payload.change_reason,
+            actor_user_id=actor.user_id,
+        )
+    except AppError as exc:
         raise _error_response(exc) from exc
 
     service.db.commit()

@@ -72,3 +72,19 @@ Two distinct questions, never merged (per this task's explicit instruction, reaf
 - **Critical Infrastructure asks:** "Which network or operational asset is strategically important to operate, protect, or restore the grid?" — substation granularity, carries an explicit `restriction_type` that directly drives finding severity, purpose-built for GridDefence's own compliance-checking needs.
 
 Both are consulted, independently, by Continuous Evaluation; neither is a Phase 6 (UFLS) dependency unless a future, explicitly-approved architecture change says otherwise.
+
+## 9. Stage Setting Registry
+
+**Provides:** the current set of Published Stage Setting Sets, filtered by scheme type; the reverse lookup of which Scheme Versions currently reference a given Stage Setting Set.
+
+**Consumption rule:** resolved by [ADR-020](../adr/ADR-020-stage-setting-registry-as-standalone-shared-module.md) — a new, standalone module, never duplicated inside UFLS or UVLS. **Read-only to every consuming scheme module** — a Scheme Version references a Stage Setting Set by id; it never copies or reinterprets the referenced set's own `StageSetting` rows. EMLS never consumes this module — it has no Stage Setting Set ([shared-defence-scheme-domain-model.md](shared-defence-scheme-domain-model.md) §2.3).
+
+**Consumed by:** UFLS and UVLS (Stage Setting Set selection during Draft editing, and Publication-prerequisite validation, per [ADR-015](../adr/ADR-015-defence-scheme-version-lifecycle-simplification.md)); the Entered-in-Error correction workflow's own "which versions reference this" query ([stage-setting-set-architecture.md](stage-setting-set-architecture.md) §7 rules 2/3).
+
+## 10. Engineering Parameter Configuration
+
+**Provides:** the current, audited value of every named platform-wide engineering parameter (e.g. `mw_tolerance_percentage`).
+
+**Consumption rule:** resolved by [ADR-021](../adr/ADR-021-engineering-parameter-configuration-ownership.md) — a new, standalone Core Platform module, deliberately not folded into `reference_data` (see that ADR's "Why not Reference Data"). **Read-only to every consumer** — no module other than Engineering Parameter Configuration itself ever writes a parameter's value; a consumer reads the current value at evaluation time, never caches it as its own owned fact.
+
+**Consumed by:** the Continuous Evaluation Engine's MW tolerance detector ([continuous-evaluation-architecture.md](continuous-evaluation-architecture.md) §7.1, [ADR-022](../adr/ADR-022-continuous-evaluation-detector-framework.md)); any future detector or scheme module needing a validated threshold range or similar audited engineering constant (CLAUDE.md A7).

@@ -261,7 +261,11 @@ export function SubstationDetailPage() {
       setOfficialName(substationQuery.data.official_name);
       setRegionId(String(substationQuery.data.region_id));
       setGmZoneId(String(substationQuery.data.gm_zone_id));
-      setStateId(String(substationQuery.data.state_id));
+      // State is optional (ADR-026) — a null state maps to the empty
+      // "None" option, never the string "null".
+      setStateId(
+        substationQuery.data.state_id === null ? "" : String(substationQuery.data.state_id),
+      );
       setGridOwnerId(String(substationQuery.data.grid_owner_id));
       setRemarks(substationQuery.data.remarks ?? "");
     }
@@ -278,7 +282,10 @@ export function SubstationDetailPage() {
         official_name: officialName,
         region_id: Number(regionId),
         gm_zone_id: Number(gmZoneId),
-        state_id: Number(stateId),
+        // State is optional (ADR-026) — an empty selection sends an
+        // explicit null, which clears the substation's State; a value
+        // sets it. Never a placeholder.
+        state_id: stateId === "" ? null : Number(stateId),
         grid_owner_id: Number(gridOwnerId),
         remarks: remarks || null,
       }),
@@ -392,7 +399,11 @@ export function SubstationDetailPage() {
         <dt>GM Zone</dt>
         <dd>{referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? "—"}</dd>
         <dt>State</dt>
-        <dd>{referenceData.statesById.get(substation.state_id)?.label}</dd>
+        <dd>
+          {substation.state_id === null
+            ? "—"
+            : (referenceData.statesById.get(substation.state_id)?.label ?? "—")}
+        </dd>
         <dt>Grid owner</dt>
         <dd>{referenceData.gridOwnersById.get(substation.grid_owner_id)?.label}</dd>
         <dt>Status</dt>
@@ -462,15 +473,14 @@ export function SubstationDetailPage() {
               </select>
             </div>
             <div>
-              <label htmlFor="edit-state">State</label>
+              <label htmlFor="edit-state">State (Optional)</label>
               <br />
               <select
                 id="edit-state"
                 value={stateId}
                 onChange={(e) => setStateId(e.target.value)}
-                required
               >
-                <option value="">Select...</option>
+                <option value="">None</option>
                 {referenceData.states.map((state) => (
                   <option key={state.state_id} value={state.state_id}>
                     {state.label}

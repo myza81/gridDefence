@@ -209,6 +209,7 @@ schema — see `DEVELOPMENT.md` §10):
 ```bash
 cd backend
 export GRIDDEFENCE_TEST_DATABASE_URL="postgresql+psycopg://engineering_app:<your-password>@localhost:5432/engineering_platform_test"
+export GRIDDEFENCE_ALLOW_DESTRUCTIVE_TEST_DATABASE=true
 pytest
 ```
 
@@ -218,7 +219,32 @@ pytest
 for a disposable test database, destructive against a database holding real
 data.
 
-Unset the variable (or open a new shell) to go back to the fast SQLite
+**Safety guard (added after the Development Database Recovery incident —
+`GRIDDEFENCE_TEST_DATABASE_URL` was once pointed at the real development
+database, and this same `drop_all()` teardown destroyed every application
+table in it, with no backup).** `conftest.py` now refuses to run in
+PostgreSQL mode at all — before creating or dropping a single table —
+unless every one of the following holds:
+
+- `GRIDDEFENCE_TEST_DATABASE_URL`'s own database name ends in `_test`.
+- It is not identical to the application's configured `DATABASE_URL`.
+- It is not `engineering_platform` (the known, hard-coded development
+  database name), regardless of what `DATABASE_URL` happens to be set to.
+- `GRIDDEFENCE_ALLOW_DESTRUCTIVE_TEST_DATABASE=true` is explicitly set — a
+  second, deliberate acknowledgement, independent of the URL itself.
+- The target database is either genuinely empty (first run — a marker
+  table is provisioned automatically) or already carries that same marker
+  from a prior run — a database that merely *looks* like a test database
+  by name, but was never actually provisioned as one, is still refused.
+
+Any unmet condition raises `RuntimeError` immediately, with the reason
+explained and only the host/database name shown — never a password or the
+full connection URL. This is enforced in code, not only by this
+documentation — see `backend/conftest.py`'s
+`_assert_safe_for_destructive_testing` and
+`backend/tests/test_destructive_test_database_guard.py`.
+
+Unset both variables (or open a new shell) to go back to the fast SQLite
 default.
 
 ---

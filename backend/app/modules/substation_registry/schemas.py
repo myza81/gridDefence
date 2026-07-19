@@ -24,7 +24,10 @@ class SubstationCreate(BaseModel):
     # exactly like region_id — every Substation shall reference exactly
     # one GM Zone.
     gm_zone_id: int
-    state_id: int
+    # State is an administrative attribute, not part of engineering
+    # identity — optional (ADR-026). Omit it, or send an explicit value;
+    # both are valid at creation.
+    state_id: int | None = None
     grid_owner_id: int
     operational_status_id: int
     psse_bus_number: int | None = None
@@ -46,6 +49,12 @@ class SubstationUpdate(BaseModel):
     official_name: str | None = Field(default=None, min_length=1, max_length=150)
     region_id: int | None = None
     gm_zone_id: int | None = None
+    # State is optional (ADR-026). Because the router forwards only
+    # client-supplied fields (`model_dump(exclude_unset=True)`), the service
+    # distinguishes "state_id omitted → leave unchanged" from "state_id sent
+    # as null → clear it" and "state_id sent as an int → set it". A null is
+    # therefore a valid, meaningful value here (unlike region/gm_zone/
+    # grid_owner, which remain never-null).
     state_id: int | None = None
     grid_owner_id: int | None = None
     psse_bus_number: int | None = None
@@ -70,7 +79,9 @@ class SubstationSummary(BaseModel):
     official_name: str
     region_id: int
     gm_zone_id: int
-    state_id: int
+    # State is optional (ADR-026) — the field is always present in the
+    # response, but is `null` for a substation that has no State assigned.
+    state_id: int | None
     grid_owner_id: int
     operational_status_id: int
     psse_bus_number: int | None
@@ -91,7 +102,8 @@ class SubstationDetail(BaseModel):
     official_name: str
     region_id: int
     gm_zone_id: int
-    state_id: int
+    # State is optional (ADR-026) — `null` when no State is assigned.
+    state_id: int | None
     grid_owner_id: int
     operational_status_id: int
     psse_bus_number: int | None

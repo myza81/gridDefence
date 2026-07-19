@@ -8,7 +8,12 @@ Platform reference-data router; Phase 3 adds Equipment Registry's
 Circuit/CircuitTerminal router; Phase 4 adds PSS/E Integration's router;
 Phase 5 adds the static Network Model's router; Phase 3.6 adds the
 Automatic Load Shedding Functionality Registry's router; Phase 3.7 adds
-the Sensitive Customer Registry's router.
+the Sensitive Customer Registry's router; Shared Platform Sprint 1 adds
+Engineering Parameter Configuration's router (ADR-021); Shared Platform
+Sprint 2 adds the Stage Setting Registry's router (ADR-020); Shared
+Platform Sprint 3 adds the Findings and Publication Governance policy
+layer's router (ADR-018); Shared Platform Sprint 4 adds that module's
+read-only Publication Record router.
 """
 
 from fastapi import APIRouter, FastAPI
@@ -19,6 +24,7 @@ from app.core.logging import configure_logging
 from app.modules.automatic_load_shedding_functionality.router import (
     router as automatic_load_shedding_functionality_router,
 )
+from app.modules.engineering_parameters.router import router as engineering_parameters_router
 from app.modules.equipment_registry.router import (
     circuit_terminal_router,
     transformer_router,
@@ -26,13 +32,21 @@ from app.modules.equipment_registry.router import (
     voltage_yard_router,
 )
 from app.modules.equipment_registry.router import router as equipment_registry_router
+from app.modules.findings_publication_governance.router import (
+    publication_records_router,
+)
+from app.modules.findings_publication_governance.router import (
+    router as findings_publication_governance_router,
+)
 from app.modules.iam.router import router as iam_router
 from app.modules.network_model.router import router as network_model_router
 from app.modules.psse_integration.router import router as psse_integration_router
 from app.modules.sensitive_customer_registry.router import (
     router as sensitive_customer_registry_router,
 )
+from app.modules.stage_setting_registry.router import router as stage_setting_registry_router
 from app.modules.substation_registry.router import router as substation_registry_router
+from app.modules.ufls.router import router as ufls_router
 from app.reference_data.router import router as reference_data_router
 
 settings = get_settings()
@@ -67,6 +81,11 @@ api_v1_router.include_router(psse_integration_router)
 api_v1_router.include_router(network_model_router)
 api_v1_router.include_router(automatic_load_shedding_functionality_router)
 api_v1_router.include_router(sensitive_customer_registry_router)
+api_v1_router.include_router(engineering_parameters_router)
+api_v1_router.include_router(stage_setting_registry_router)
+api_v1_router.include_router(findings_publication_governance_router)
+api_v1_router.include_router(publication_records_router)
+api_v1_router.include_router(ufls_router)
 app.include_router(api_v1_router)
 
 

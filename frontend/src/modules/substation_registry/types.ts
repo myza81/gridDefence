@@ -12,7 +12,8 @@ export interface SubstationSummary {
   official_name: string;
   region_id: number;
   gm_zone_id: number;
-  state_id: number;
+  // State is optional (ADR-026) — `null` when no State is assigned.
+  state_id: number | null;
   grid_owner_id: number;
   operational_status_id: number;
   psse_bus_number: number | null;
@@ -31,7 +32,8 @@ export interface SubstationDetail {
   official_name: string;
   region_id: number;
   gm_zone_id: number;
-  state_id: number;
+  // State is optional (ADR-026) — `null` when no State is assigned.
+  state_id: number | null;
   grid_owner_id: number;
   operational_status_id: number;
   psse_bus_number: number | null;
@@ -53,7 +55,9 @@ export interface SubstationCreate {
   // region_id. Required, exactly like region_id — every Substation shall
   // reference exactly one GM Zone.
   gm_zone_id: number;
-  state_id: number;
+  // State is an administrative attribute, not part of engineering
+  // identity — optional (ADR-026). Omit it, or send null/a value.
+  state_id?: number | null;
   grid_owner_id: number;
   operational_status_id: number;
   psse_bus_number?: number | null;
@@ -68,7 +72,9 @@ export interface SubstationUpdate {
   official_name?: string;
   region_id?: number;
   gm_zone_id?: number;
-  state_id?: number;
+  // State is optional (ADR-026): omit to leave unchanged, send `null` to
+  // clear it, or send a value to set it.
+  state_id?: number | null;
   grid_owner_id?: number;
   psse_bus_number?: number | null;
   latitude?: number | null;

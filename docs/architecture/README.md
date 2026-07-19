@@ -13,9 +13,36 @@ Governing standard: [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) (v1.1). Where
 | [system-overview.md](system-overview.md) | High-level architecture: bounded contexts, tech stack, module communication, dependency direction | Project Architecture |
 | [domain-model.md](domain-model.md) | Conceptual domain model: domain hierarchy, domain groupings, entity ownership rules | Project Architecture |
 | [substation-registry.md](substation-registry.md) | Module architecture for the Substation Registry (Master Data domain) | Substation Registry module owner |
+| [ufls-architecture.md](ufls-architecture.md) | Module architecture for UFLS — the first concrete Defence Scheme module built on the Shared Defence-Scheme Platform | UFLS module owner |
 | [../adr/](../adr/) | Architecture Decision Records — the append-only log of accepted architectural decisions | Project Architecture |
 
 Module-specific architecture documents (e.g. `substation-registry.md`, future `ufls.md`, `uvls.md`, `emls.md`) each describe a single bounded context in depth. `system-overview.md` and `domain-model.md` describe the platform as a whole and do not duplicate module-level detail.
+
+### 1.1 Engineering Scheme Architecture Pack
+
+Formalizes six Project Owner engineering-discovery workshops on UFLS/UVLS/EMLS's shared philosophy, domain model, workflow, governance, data consumption, and future extensibility. Entry point: [scheme-engineering-principles.md](scheme-engineering-principles.md).
+
+| Document | Purpose |
+|---|---|
+| [scheme-engineering-principles.md](scheme-engineering-principles.md) | Pack entry point and governing philosophy |
+| [shared-defence-scheme-domain-model.md](shared-defence-scheme-domain-model.md) | Shared Scheme/Version/Assignment domain model |
+| [stage-setting-set-architecture.md](stage-setting-set-architecture.md) | Reusable, independently-versioned Stage Setting Set (UFLS/UVLS), owned by the standalone Stage Setting Registry module |
+| [engineering-parameter-configuration-architecture.md](engineering-parameter-configuration-architecture.md) | Standalone module owning audited, platform-wide engineering parameter values (e.g. MW tolerance) |
+| [boundary-pocket-architecture.md](boundary-pocket-architecture.md) | Boundary Pocket construction, built on Network Model's `traverse` |
+| [engineering-workspace-architecture.md](engineering-workspace-architecture.md) | Shared iterative scheme-design workflow |
+| [continuous-evaluation-architecture.md](continuous-evaluation-architecture.md) | Live MW/topology/finding evaluation, hybrid model, registered Detector Framework |
+| [platform-event-architecture.md](platform-event-architecture.md) | Async trigger mechanism connecting source modules to the Continuous Evaluation Engine |
+| [findings-and-publication-governance-architecture.md](findings-and-publication-governance-architecture.md) | Finding severity vs. publication treatment separation, initial Publication Treatment Policy |
+| [engineering-review-panel-architecture.md](engineering-review-panel-architecture.md) | The Evaluation Engine's primary UX surface — consolidated findings, publication readiness, and navigation hub |
+| [regional-engineering-analytics-architecture.md](regional-engineering-analytics-architecture.md) | Per-Region (and future GM Zone/State/Grid Owner) engineering analytics — informational, never enforced |
+| [ufls-engineering-philosophy.md](ufls-engineering-philosophy.md) / [uvls-engineering-philosophy.md](uvls-engineering-philosophy.md) / [emls-engineering-philosophy.md](emls-engineering-philosophy.md) | What is genuinely scheme-specific per scheme type |
+| [scheme-data-consumption-matrix.md](scheme-data-consumption-matrix.md) | Registry/data-consumption boundaries |
+| [scheme-future-extensibility.md](scheme-future-extensibility.md) | Future-scheme stress tests and durable constraints |
+| [scheme-roadmap-corrections.md](scheme-roadmap-corrections.md) | Itemized corrections to prior planning documents |
+| [codex-foundation-readiness-audit-brief.md](codex-foundation-readiness-audit-brief.md) | Audit instructions for the upcoming foundation-readiness pass |
+| [shared-platform-dependency-diagram.md](shared-platform-dependency-diagram.md) | Canonical cross-module dependency diagram for the Shared Platform |
+
+Governing decisions: [EDR-009](../engineering/edr/EDR-009-grid-defence-scheme-lifecycle-realignment.md), [EDR-010](../engineering/edr/EDR-010-boundary-pocket-as-engineering-identity.md), [ADR-015](../adr/ADR-015-defence-scheme-version-lifecycle-simplification.md) through [ADR-025](../adr/ADR-025-stage-setting-trigger-multiple-operating-criteria.md).
 
 ---
 
