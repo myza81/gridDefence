@@ -1,7 +1,7 @@
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { AppShell } from "../components/layout/AppShell";
-import { StatusPage } from "../components/layout/StatusPage";
+import { EngineeringHomePage } from "../modules/home/pages/EngineeringHomePage";
 import { FunctionalityCandidatePage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityCandidatePage";
 import { FunctionalityCreatePage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityCreatePage";
 import { FunctionalityDetailPage } from "../modules/automatic_load_shedding_functionality/pages/FunctionalityDetailPage";
@@ -54,8 +54,9 @@ import { UflsSchemeListPage } from "../modules/ufls/pages/UflsSchemeListPage";
  * Transformer Registry (Phase 3.5) adds /transformers; PSS/E Integration
  * (Phase 4) adds /psse-integration/*; the static Network Model (Phase 5B)
  * adds /network-model/* — an engineering navigation interface, not a
- * topology visualization (network-model-module.md §19). The landing/status
- * route from Phase 0 stays public.
+ * topology visualization (network-model-module.md §19). The root route `/`
+ * is the authenticated Engineering Home (Phase C), inside AppShell +
+ * ProtectedRoute (it superseded the public Phase 0 status landing).
  */
 const router = createBrowserRouter([
   {
@@ -65,10 +66,14 @@ const router = createBrowserRouter([
     element: <LoginPage />,
   },
   {
+    // The root route IS the Engineering Home — the authenticated landing
+    // workspace (Phase C), not a top-level /dashboard.
     path: "/",
     element: (
       <AppShell>
-        <StatusPage />
+        <ProtectedRoute>
+          <EngineeringHomePage />
+        </ProtectedRoute>
       </AppShell>
     ),
   },

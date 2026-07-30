@@ -1,49 +1,21 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 
 import { AppShell } from "../src/components/layout/AppShell";
-import { StatusPage } from "../src/components/layout/StatusPage";
-import { AuthProvider } from "../src/modules/iam/AuthContext";
+import { EngineeringHomePage } from "../src/modules/home/pages/EngineeringHomePage";
+import { renderWithProviders } from "./testUtils";
 
 describe("App renders", () => {
-  beforeEach(() => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: "ok", environment: "test" }),
-      }),
-    );
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    window.localStorage.clear();
-  });
-
-  it("renders the landing page inside the app shell without crashing", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <MemoryRouter>
-            <AppShell>
-              <StatusPage />
-            </AppShell>
-          </MemoryRouter>
-        </AuthProvider>
-      </QueryClientProvider>,
+  it("renders the Engineering Home landing inside the app shell without crashing", () => {
+    renderWithProviders(
+      <AppShell>
+        <EngineeringHomePage />
+      </AppShell>,
+      { route: "/" },
     );
 
-    expect(screen.getByRole("heading", { level: 1, name: "GridDefence" })).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("status-badge")).toBeInTheDocument();
-    });
+    // The root landing is the engineering workspace, not a stats dashboard.
+    expect(screen.getByRole("heading", { level: 1, name: /welcome back/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Engineering modules" })).toBeInTheDocument();
   });
 });

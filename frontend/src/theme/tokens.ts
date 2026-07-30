@@ -42,6 +42,8 @@ const color = {
 
   /** Interactive blue for links. */
   link: "#2B5BE6",
+  /** Light blue wash for selected/active surfaces and icon chips. */
+  primaryWash: "#E7ECFE",
 
   /** Leading field icons (person / lock) — decorative, muted. */
   fieldIcon: "#98A2B3",

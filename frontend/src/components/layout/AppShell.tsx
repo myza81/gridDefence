@@ -25,7 +25,7 @@ export function AppShell({ children }: PropsWithChildren) {
           <strong>GridDefence</strong>
           {token !== null && (
             <nav style={{ display: "inline-flex", gap: "1rem", marginLeft: "1.5rem" }}>
-              <Link to="/">Status</Link>
+              <Link to="/">Home</Link>
               <Link to="/substations">Substations</Link>
               <Link to="/circuits">Circuits</Link>
               <Link to="/transformers">Transformers</Link>
