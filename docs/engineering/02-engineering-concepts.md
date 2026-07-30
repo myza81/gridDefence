@@ -132,6 +132,18 @@ See [EDR-005](edr/EDR-005-bay-as-engineering-identity.md) for the full engineeri
 
 ---
 
+## Transformer Engineering Classification
+
+**Definition.** A transformer's engineering classification is the engineer-asserted statement of which electrical-system domains its windings interface with — **not** its voltage ratio, winding construction, ownership, or GridDefence usage. Because the transmission grid is (almost) always one interfaced domain, the classification is determined by the *non-transmission* domain coupled to the grid, with the Inter-bus Transformer as the transmission-grid-to-transmission-grid special case. Five classifications are recognised: **Inter-bus Transformer**, **Load Transformer**, **Generation Step-Up Transformer (GSU)**, **Station Service Transformer (SST)**, and **Customer Supply Transformer (CST)**.
+
+**Engineering significance.** A transformer's terminal (a winding side, the `TransformerTerminal` of a **Bay**) interfaces an **Engineering Endpoint** — an electrical-system domain that is either *Registered* (a Transmission Voltage Yard) or *Typed* (a Distribution System, Generation Collector System, Station Auxiliary System, or Customer Installation not yet held as a first-class GridDefence registry object). This is why the same 132/33 kV transformer may be a Load, Station Service, or Customer Supply transformer — the distinction is the domain on the non-grid winding, not the ratio. Classification is a **Layer 1 Engineering Knowledge** attribute (curated engineering identity); it says nothing about *current* operational topology, which is **Layer 2 Operational Context** (PSS/E-derived), and it never implies defence-scheme eligibility — GridDefence participation is expressed only through capability and assignment.
+
+See [EDR-011](edr/EDR-011-transformer-engineering-interface-model.md) for the full engineering decision (classifications, Engineering Endpoint concept, Layer 1/Layer 2 boundary, multi-winding extensibility, and the architectural questions deferred to a later ADR), and [EDR-007](edr/EDR-007-phase-7-operational-identity-mapping.md) for the operational-side taxonomy it corresponds to.
+
+**Relationship to other concepts.** A transformer is **Primary Equipment** hosted by a **Transformer Bay**; each of its terminals interfaces one **Engineering Endpoint**. Its classification is independent of whether any **Grid Defence Scheme** uses it.
+
+---
+
 ## Transformer Bay Shedding
 
 **Definition.** Transformer Bay Shedding is a Shedding Action that disconnects a specific transformer bay at a substation, removing the load served through that transformer from the system.

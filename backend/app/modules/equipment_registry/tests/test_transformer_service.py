@@ -1198,6 +1198,124 @@ class TestTransformerReadAndSearch:
         )
         assert planned_total == 1
 
+    def test_list_transformers_pagination_is_complete_and_repeatable_with_duplicate_numbers(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        lv_voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_275 = {
+            "PKLG": _create_yard(
+                service,
+                db_session,
+                substation_id=substation_ids["PKLG"],
+                voltage_level_label="275kV",
+                actor_user_id=actor_user_id,
+            ),
+            "IGBK": _create_yard(
+                service,
+                db_session,
+                substation_id=substation_ids["IGBK"],
+                voltage_level_label="275kV",
+                actor_user_id=actor_user_id,
+            ),
+        }
+        yard_33 = {
+            "PKLG": _create_yard(
+                service,
+                db_session,
+                substation_id=substation_ids["PKLG"],
+                voltage_level_label="33kV",
+                actor_user_id=actor_user_id,
+            ),
+            "IGBK": _create_yard(
+                service,
+                db_session,
+                substation_id=substation_ids["IGBK"],
+                voltage_level_label="33kV",
+                actor_user_id=actor_user_id,
+            ),
+        }
+
+        active_ids: list[uuid.UUID] = []
+        for mnemonic in ("PKLG", "IGBK"):
+            for hv_yard, lv_yard in (
+                (voltage_yard_ids[mnemonic], yard_275[mnemonic]),
+                (voltage_yard_ids[mnemonic], lv_voltage_yard_ids[mnemonic]),
+                (lv_voltage_yard_ids[mnemonic], yard_33[mnemonic]),
+            ):
+                transformer = _create_transformer(
+                    service,
+                    reference_ids,
+                    substation_id=substation_ids[mnemonic],
+                    transformer_number="1",
+                    hv_switchyard_id=hv_yard,
+                    lv_switchyard_id=lv_yard,
+                    actor_user_id=actor_user_id,
+                )
+                active_ids.append(transformer.transformer_id)
+
+        entered_in_error = _create_transformer(
+            service,
+            reference_ids,
+            substation_id=substation_ids["ABBA"],
+            transformer_number="1",
+            hv_switchyard_id=voltage_yard_ids["ABBA"],
+            lv_switchyard_id=lv_voltage_yard_ids["ABBA"],
+            actor_user_id=actor_user_id,
+        )
+        service.update_transformer(
+            entered_in_error.transformer_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        def traverse(**filters) -> tuple[list[uuid.UUID], list[list[uuid.UUID]], int]:
+            ids: list[uuid.UUID] = []
+            pages: list[list[uuid.UUID]] = []
+            total = 0
+            page = 1
+            while True:
+                items, total = service.list_transformers(page=page, page_size=2, **filters)
+                page_ids = [item.transformer_id for item in items]
+                pages.append(page_ids)
+                ids.extend(page_ids)
+                if len(ids) >= total:
+                    return ids, pages, total
+                page += 1
+
+        first_ids, first_pages, total = traverse()
+        second_ids, second_pages, second_total = traverse()
+
+        assert total == len(active_ids)
+        assert second_total == total
+        assert first_ids == sorted(active_ids, key=str)
+        assert len(first_ids) == len(set(first_ids)) == total
+        assert first_ids == second_ids
+        assert first_pages == second_pages
+        assert [len(page) for page in first_pages] == [2, 2, 2]
+
+        filtered_ids, _filtered_pages, filtered_total = traverse(
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"]
+        )
+        assert filtered_total == total
+        assert filtered_ids == first_ids
+
+        search_ids, _search_pages, search_total = traverse(search="1")
+        assert search_total == total
+        assert search_ids == first_ids
+
+        with_error_ids, _with_error_pages, with_error_total = traverse(
+            include_entered_in_error=True
+        )
+        assert with_error_total == total + 1
+        assert set(with_error_ids) == set(active_ids) | {entered_in_error.transformer_id}
+
 
 # --- Audit logging ---------------------------------------------------------------------------
 class TestTransformerAuditLogging:

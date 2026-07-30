@@ -42,6 +42,17 @@ class VoltageYardUpdate(BaseModel):
     change_reason: str | None = None
 
 
+class VoltageYardRestore(BaseModel):
+    """Payload for the dedicated switchyard restoration command (ADR-027).
+
+    Deliberately carries no `operational_status_id`: restoration is a single
+    named lifecycle action whose target is always ACTIVE, not a general status
+    editor. `change_reason` is mandatory in both lifecycle directions.
+    """
+
+    change_reason: str = Field(min_length=1, max_length=500)
+
+
 class VoltageYardSummary(BaseModel):
     """Row shape for terminal-selection dropdowns and the Substation Detail
     page's voltage yard list — carries enough resolved context to render

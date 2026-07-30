@@ -1,0 +1,70 @@
+{
+  "canonical_terminology": {
+    "Substation": "Substation Registry identity (Substation)",
+    "Switchyard": "SubstationVoltageYard (Equipment Registry); user-facing 'Switchyard' (ADR-008)",
+    "Transformer": "Primary Equipment (transformer) — Equipment Registry",
+    "TransformerTerminal": "Transformer Bay (EDR-005/EDR-011)"
+  },
+  "compatibility_policy": {
+    "major": "incompatible field/type/cardinality/terminology/semantic change",
+    "minor": "backward-compatible optional additions (new optional field, new profile)",
+    "patch": "documentation or non-semantic correction",
+    "reference_data_values": "reference-data codes/labels are open strings; consumers MUST tolerate unknown values and MUST NOT hardcode enumerations",
+    "scheme": "semver",
+    "surrogate_ids": "environment-specific surrogate ids are never part of the contract"
+  },
+  "contract_name": "griddefence-engineering-data-contract",
+  "contract_version": "0.1.0",
+  "json_schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "manifest_digest": {
+    "algorithm": "sha256",
+    "value": "26c8ef7ca01ebfb98b6526ad33f9d91032cc66ac12e6fbfdc5c2836f7d52abac"
+  },
+  "payload_profiles": {
+    "griddefence.substation.import": {
+      "direction": "workbench_to_griddefence",
+      "mode": "import",
+      "schema": "schemas/substation-import.schema.json",
+      "sha256": "9a7d73e1486a83eb98ed27cf44a8962b18d48f3e95b0d24c19d33731c3fe6336"
+    },
+    "griddefence.transformer.target": {
+      "direction": "workbench_to_griddefence",
+      "mode": "preview_only",
+      "schema": "schemas/transformer-target.schema.json",
+      "sha256": "096e65a6414e7c2ec79de458678ac4738ba53469fe24bc567604ec970d6ac667"
+    },
+    "griddefence.validation-error": {
+      "direction": "griddefence_to_workbench",
+      "mode": "read",
+      "schema": "schemas/validation-error.schema.json",
+      "sha256": "99c8fee2f2bf456421b268e3ac7ee5dfbd7321a65783d64cc84fd33a6f2baac2"
+    }
+  },
+  "schemas": [
+    {
+      "path": "schemas/substation-import.schema.json",
+      "profile": "griddefence.substation.import",
+      "sha256": "9a7d73e1486a83eb98ed27cf44a8962b18d48f3e95b0d24c19d33731c3fe6336"
+    },
+    {
+      "path": "schemas/transformer-target.schema.json",
+      "profile": "griddefence.transformer.target",
+      "sha256": "096e65a6414e7c2ec79de458678ac4738ba53469fe24bc567604ec970d6ac667"
+    },
+    {
+      "path": "schemas/validation-error.schema.json",
+      "profile": "griddefence.validation-error",
+      "sha256": "99c8fee2f2bf456421b268e3ac7ee5dfbd7321a65783d64cc84fd33a6f2baac2"
+    }
+  ],
+  "source": {
+    "derived_from": [
+      "app.modules.substation_registry.schemas.SubstationCreate",
+      "app.modules.equipment_registry.schemas.TransformerCreate",
+      "app.shared.exceptions (structured error)"
+    ],
+    "generator": "app.contracts.engineering_data.export",
+    "note": "Alembic migration head is NOT the external compatibility key; contract_version is. See docs/architecture/engineering-data-contract-publication.md.",
+    "repository": "griddefence"
+  }
+}

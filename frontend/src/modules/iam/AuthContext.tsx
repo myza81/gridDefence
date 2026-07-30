@@ -13,7 +13,12 @@ interface AuthContextValue {
   isLoadingCurrentUser: boolean;
   /** UI-gating only (CLAUDE.md A12) — the backend re-checks every request. */
   permissions: Set<string>;
-  login: (username: string, password: string) => Promise<void>;
+  /**
+   * `remember` (default `true`) controls token persistence: `true` keeps the
+   * session across a browser restart (localStorage), `false` drops it when the
+   * tab closes (sessionStorage). Backs the login page's "Remember me" control.
+   */
+  login: (username: string, password: string, remember?: boolean) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -67,9 +72,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [token, currentUserQuery.error]);
 
-  async function login(username: string, password: string): Promise<void> {
+  async function login(username: string, password: string, remember = true): Promise<void> {
     const response = await iamApi.login({ username, password });
-    authStorage.setToken(response.access_token);
+    authStorage.setToken(response.access_token, remember);
     setToken(response.access_token);
   }
 

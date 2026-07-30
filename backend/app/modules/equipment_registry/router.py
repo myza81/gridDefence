@@ -37,6 +37,7 @@ from app.modules.equipment_registry.schemas import (
     TransformerUpdate,
     VoltageYardAuditLogPage,
     VoltageYardCreate,
+    VoltageYardRestore,
     VoltageYardSummary,
     VoltageYardUpdate,
 )
@@ -465,6 +466,40 @@ def update_voltage_yard(
     # include_entered_in_error=True: this re-fetch must find the yard
     # regardless of the status it was just corrected to (e.g. Entered in
     # Error itself), not only whatever the default list filter shows.
+    summaries = service.list_voltage_yards(
+        substation_id=yard.substation_id, include_entered_in_error=True
+    )
+    match = next((s for s in summaries if s.voltage_yard_id == yard.voltage_yard_id), None)
+    assert match is not None
+    return match
+
+
+@voltage_yard_router.post("/{voltage_yard_id}/restore", response_model=VoltageYardSummary)
+def restore_voltage_yard(
+    voltage_yard_id: uuid.UUID,
+    payload: VoltageYardRestore,
+    service: EquipmentRegistryService = Depends(get_equipment_registry_service),
+    actor: User = Depends(require_permission("equipment_registry.write")),
+) -> VoltageYardSummary:
+    """Restore an Entered-in-Error switchyard to Active (ADR-027).
+
+    A dedicated lifecycle command rather than a status edit — the target is
+    always ACTIVE and no `operational_status_id` is accepted, so the closed
+    transition allow-list cannot be bypassed from here. `PATCH` remains
+    available and is governed by the identical service-layer rules.
+    """
+    try:
+        yard = service.restore_voltage_yard(
+            voltage_yard_id,
+            change_reason=payload.change_reason,
+            actor_user_id=actor.user_id,
+        )
+    except ValidationAppError as exc:
+        raise _error_response(exc) from exc
+
+    service.db.commit()
+    # The restored yard is Active again, but re-fetch with the audit-visible
+    # flag for symmetry with the correction path above.
     summaries = service.list_voltage_yards(
         substation_id=yard.substation_id, include_entered_in_error=True
     )

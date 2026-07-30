@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<!--
+  GridDefence — Application Shell, Version 1 (VISUAL CONCEPT FOR REVIEW ONLY)
+  Status: PROPOSED — not approved, not implementation.
+  Purpose: validate the authenticated shell's visual direction before build.
+  This is a static, throwaway review mockup (placeholder markup + inline styles).
+  It is NOT the product frontend and defines no components, tokens, or CSS architecture.
+  Built from: docs/architecture/application-shell-architecture.md (role model),
+              docs/architecture/griddefence-theme.md (visual language),
+              docs/design/ (approved login direction — language carried inward, not the atmosphere).
+  Sample content is illustrative only (Peninsular Malaysia transmission placeholders).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GridDefence — Application Shell (V1 Concept)</title>
+<style>
+  :root{
+    /* Semantic roles only — illustrative review values, NOT design-system tokens */
+    --navy:#0F1E3D;          /* primary text / brand dark */
+    --navy-soft:#28374F;     /* strong secondary text */
+    --muted:#61708B;         /* secondary / supporting text */
+    --faint:#8C99AE;         /* tertiary text, meta */
+    --primary:#2540D8;       /* strong blue primary action / brand accent */
+    --primary-strong:#1E36BE;
+    --link:#2560E6;          /* interactive blue */
+    --surface:#FFFFFF;       /* white working surfaces */
+    --app-bg:#F3F6FC;        /* soft atmospheric blue ground */
+    --panel-tint:#F7FAFF;    /* very light blue panel wash */
+    --primary-wash:#EEF2FE;  /* selected/active nav wash */
+    --border:#E4E9F2;        /* subtle borders */
+    --border-strong:#D5DCEA;
+    --row-hover:#F5F8FE;
+    --ok:#1F8A54; --ok-dot:#22A45D;
+    --warn:#B5730E; --warn-dot:#D9880F;
+    --plan:#2560E6; --plan-dot:#2560E6;
+    --idle:#6B7891; --idle-dot:#94A1B8;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--app-bg); color:var(--navy);
+    font-family:'Inter','Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
+    font-size:13px; line-height:1.45; -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums}
+
+  .app{
+    height:100vh; display:grid;
+    grid-template-columns:248px 1fr;
+    grid-template-rows:56px 1fr 30px;
+    grid-template-areas:"header header" "sidebar main" "status status";
+  }
+
+  /* ---------- Header : global-frame role ---------- */
+  .header{
+    grid-area:header; background:var(--surface);
+    border-bottom:1px solid var(--border);
+    box-shadow:0 1px 2px rgba(16,30,61,.04);
+    display:flex; align-items:center; gap:20px; padding:0 18px; z-index:5;
+  }
+  .brand{display:flex; align-items:center; gap:10px; width:214px; flex:none}
+  .brand .mark{width:26px; height:26px; flex:none}
+  .brand .word{font-weight:800; letter-spacing:.3px; font-size:15px}
+  .brand .word b{color:var(--navy)} .brand .word span{color:var(--primary)}
+  .search{
+    flex:1; max-width:520px; display:flex; align-items:center; gap:8px;
+    background:var(--panel-tint); border:1px solid var(--border);
+    border-radius:8px; padding:7px 11px; color:var(--faint);
+  }
+  .search input{border:0; background:transparent; outline:0; width:100%;
+    font:inherit; color:var(--navy-soft)}
+  .search .kbd{border:1px solid var(--border-strong); border-radius:4px;
+    padding:1px 5px; font-size:11px; color:var(--faint); background:#fff}
+  .header .spacer{flex:1}
+  .h-actions{display:flex; align-items:center; gap:6px}
+  .icon-btn{
+    width:34px; height:34px; border-radius:8px; border:1px solid transparent;
+    display:flex; align-items:center; justify-content:center; color:var(--navy-soft);
+    position:relative; cursor:default;
+  }
+  .icon-btn:hover{background:var(--panel-tint); border-color:var(--border)}
+  .badge{position:absolute; top:4px; right:5px; min-width:15px; height:15px;
+    background:var(--primary); color:#fff; border-radius:8px; font-size:9.5px;
+    font-weight:700; display:flex; align-items:center; justify-content:center;
+    padding:0 3px; border:2px solid #fff}
+  .divider-v{width:1px; height:26px; background:var(--border); margin:0 4px}
+  .user{display:flex; align-items:center; gap:9px; padding:4px 6px 4px 4px;
+    border-radius:8px; cursor:default}
+  .user:hover{background:var(--panel-tint)}
+  .avatar{width:30px; height:30px; border-radius:50%; flex:none;
+    background:linear-gradient(180deg,#3D57E6,#2540D8); color:#fff;
+    font-weight:700; font-size:11px; display:flex; align-items:center; justify-content:center}
+  .user .who{line-height:1.15}
+  .user .who .n{font-weight:600; font-size:12.5px; color:var(--navy)}
+  .user .who .r{font-size:11px; color:var(--muted)}
+
+  /* ---------- Sidebar : navigation role ---------- */
+  .sidebar{grid-area:sidebar; background:var(--surface);
+    border-right:1px solid var(--border); padding:12px 12px; overflow-y:auto}
+  .nav-group{margin:6px 0 4px}
+  .nav-label{font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--faint); font-weight:700; padding:8px 10px 4px}
+  .nav-item{display:flex; align-items:center; gap:10px; padding:8px 10px;
+    border-radius:8px; color:var(--navy-soft); font-weight:500; cursor:default; margin:1px 0}
+  .nav-item:hover{background:var(--panel-tint)}
+  .nav-item svg{width:17px; height:17px; flex:none; color:var(--muted)}
+  .nav-item.active{background:var(--primary-wash); color:var(--primary-strong); font-weight:600}
+  .nav-item.active svg{color:var(--primary)}
+  .nav-item .caret{margin-left:auto; color:var(--faint)}
+  .sub{margin:2px 0 6px 16px; border-left:1px solid var(--border); padding-left:8px}
+  .sub .nav-item{padding:6px 10px; font-size:12.5px}
+  .sub .nav-item.active{background:var(--primary-wash)}
+  .nav-count{margin-left:auto; font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums}
+
+  /* ---------- Main : context + workspace host ---------- */
+  .main{grid-area:main; display:flex; flex-direction:column; min-width:0; overflow:hidden}
+
+  /* active-context role */
+  .context-bar{background:var(--surface); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:14px; padding:8px 20px; flex:none}
+  .crumbs{display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12.5px}
+  .crumbs a{color:var(--muted); text-decoration:none}
+  .crumbs .sep{color:var(--faint)}
+  .crumbs .here{color:var(--navy); font-weight:600}
+  .ctx-spacer{flex:1}
+  .ctx-label{font-size:11px; color:var(--faint); margin-right:2px}
+  .chip{display:inline-flex; align-items:center; gap:7px; background:var(--panel-tint);
+    border:1px solid var(--border); border-radius:7px; padding:5px 10px;
+    color:var(--navy-soft); font-size:12px; font-weight:500}
+  .chip b{color:var(--navy); font-weight:600}
+  .chip .k{color:var(--muted); font-weight:500}
+  .chip svg{width:13px;height:13px;color:var(--primary)}
+
+  /* workspace host */
+  .workspace{flex:1; overflow:auto; padding:20px 20px 22px}
+  .ws-head{display:flex; align-items:flex-start; gap:16px; margin-bottom:16px}
+  .ws-title h1{margin:0; font-size:20px; font-weight:700; letter-spacing:-.2px; color:var(--navy)}
+  .ws-title .meta{margin-top:3px; color:var(--muted); font-size:12.5px}
+  .ws-title .meta b{color:var(--navy-soft); font-weight:600}
+  .ws-actions{margin-left:auto; display:flex; align-items:center; gap:8px}
+  .btn{display:inline-flex; align-items:center; gap:7px; height:34px; padding:0 13px;
+    border-radius:8px; font:inherit; font-weight:600; font-size:12.5px; cursor:default;
+    border:1px solid var(--border-strong); background:#fff; color:var(--navy-soft)}
+  .btn:hover{background:var(--panel-tint)}
+  .btn svg{width:15px;height:15px}
+  .btn.primary{background:var(--primary); border-color:var(--primary); color:#fff}
+  .btn.primary:hover{background:var(--primary-strong)}
+
+  .toolbar{display:flex; align-items:center; gap:10px; margin-bottom:12px}
+  .ws-search{display:flex; align-items:center; gap:8px; background:#fff;
+    border:1px solid var(--border); border-radius:8px; padding:7px 11px; width:280px; color:var(--faint)}
+  .ws-search input{border:0;outline:0;background:transparent;font:inherit;width:100%;color:var(--navy-soft)}
+  .filter{display:inline-flex; align-items:center; gap:7px; background:#fff;
+    border:1px solid var(--border); border-radius:8px; padding:7px 11px; color:var(--navy-soft); font-weight:500}
+  .filter svg{width:14px;height:14px;color:var(--muted)}
+  .filter .k{color:var(--muted)} .filter b{color:var(--navy)}
+  .tb-spacer{flex:1}
+  .result-note{color:var(--faint); font-size:12px}
+
+  .card{background:#fff; border:1px solid var(--border); border-radius:10px; overflow:hidden}
+  table{width:100%; border-collapse:collapse}
+  thead th{text-align:left; font-size:11px; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--muted); font-weight:700; padding:11px 14px; background:var(--panel-tint);
+    border-bottom:1px solid var(--border); white-space:nowrap}
+  tbody td{padding:11px 14px; border-bottom:1px solid var(--border); color:var(--navy-soft); vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--row-hover)}
+  td.name{color:var(--navy); font-weight:600}
+  td.name .sub-id{display:block; font-weight:500; font-size:11.5px; color:var(--faint)}
+  .mono{font-variant-numeric:tabular-nums; letter-spacing:.02em; color:var(--navy-soft); font-weight:600}
+  .kv{color:var(--navy-soft)}
+  .v-tag{font-variant-numeric:tabular-nums; font-weight:600; color:var(--navy)}
+  .status{display:inline-flex; align-items:center; gap:7px; font-weight:600; font-size:12.5px}
+  .dot{width:8px;height:8px;border-radius:50%; flex:none}
+  .s-ok{color:var(--ok)} .s-ok .dot{background:var(--ok-dot)}
+  .s-warn{color:var(--warn)} .s-warn .dot{background:var(--warn-dot)}
+  .s-plan{color:var(--plan)} .s-plan .dot{background:var(--plan-dot)}
+  .s-idle{color:var(--idle)} .s-idle .dot{background:var(--idle-dot)}
+  .rowlink{color:var(--link); font-weight:600; text-decoration:none}
+
+  .tablefoot{display:flex; align-items:center; gap:12px; padding:10px 14px;
+    border-top:1px solid var(--border); background:var(--panel-tint); color:var(--muted); font-size:12px}
+  .pager{margin-left:auto; display:flex; align-items:center; gap:4px}
+  .pg{min-width:28px; height:28px; padding:0 7px; border:1px solid var(--border);
+    background:#fff; border-radius:7px; display:flex; align-items:center; justify-content:center;
+    color:var(--navy-soft); font-weight:600; font-size:12px}
+  .pg.active{background:var(--primary-wash); border-color:var(--border-strong); color:var(--primary-strong)}
+  .pg.ghost{border-color:transparent; background:transparent; color:var(--faint)}
+
+  /* ---------- Status : ambient-status role ---------- */
+  .status-bar{grid-area:status; background:var(--surface); border-top:1px solid var(--border);
+    display:flex; align-items:center; gap:18px; padding:0 18px; color:var(--muted); font-size:11.5px}
+  .status-bar .env{display:flex; align-items:center; gap:7px; font-weight:600; color:var(--navy-soft)}
+  .status-bar .live{width:7px;height:7px;border-radius:50%; background:var(--ok-dot)}
+  .st-item{display:flex; align-items:center; gap:7px}
+  .st-item svg{width:13px;height:13px;color:var(--muted)}
+  .st-item b{color:var(--navy-soft); font-weight:600}
+  .st-item.link b{color:var(--link)}
+  .st-spacer{flex:1}
+  .mini-progress{width:78px;height:5px;border-radius:3px;background:var(--border); overflow:hidden}
+  .mini-progress i{display:block;height:100%;width:62%;background:var(--primary); border-radius:3px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ HEADER (global-frame role) ============ -->
+  <header class="header">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" fill="none">
+        <path d="M16 2 4 6.5v8.7C4 23 9.2 28.3 16 30c6.8-1.7 12-7 12-14.8V6.5L16 2Z"
+              fill="#EEF2FE" stroke="#2540D8" stroke-width="1.8"/>
+        <path d="M16 8.5 11 22h2.6l.9-2.7h3l.9 2.7H21L16 8.5Zm-.9 6.9.9-2.8.9 2.8h-1.8Z" fill="#0F1E3D"/>
+        <path d="M12.5 12.5 16 10l3.5 2.5" stroke="#2540D8" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+      <div class="word"><b>GRID</b><span>DEFENCE</span></div>
+    </div>
+
+    <div class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2" stroke-linecap="round"/></svg>
+      <input placeholder="Search substations, equipment, schemes, buses…">
+      <span class="kbd">/</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="h-actions">
+      <div class="icon-btn" title="Engineering impacts">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" stroke-linecap="round"/>
+          <path d="M13.7 21a2 2 0 0 1-3.4 0" stroke-linecap="round"/></svg>
+        <span class="badge">3</span>
+      </div>
+      <div class="icon-btn" title="Help">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="9"/><path d="M9.5 9.5A2.6 2.6 0 0 1 14 11c0 1.7-2 2-2 3.2" stroke-linecap="round"/>
+          <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+      </div>
+      <div class="divider-v"></div>
+      <div class="user">
+        <div class="avatar">SP</div>
+        <div class="who">
+          <div class="n">System Planning</div>
+          <div class="r">System Planning Engineer</div>
+        </div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2">
+          <path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ SIDEBAR (navigation role) ============ -->
+  <aside class="sidebar">
+    <div class="nav-group">
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/>
+          <rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        Dashboard
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Engineering</div>
+      <div class="nav-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/>
+          <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+        Engineering Registry
+        <svg class="caret" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg>
+      </div>
+      <div class="sub">
+        <div class="nav-item active">Substation Registry <span class="nav-count">42</span></div>
+        <div class="nav-item">Equipment Registry <span class="nav-count">318</span></div>
+        <div class="nav-item">Relay / ALSF Registry <span class="nav-count">96</span></div>
+        <div class="nav-item">Sensitive Customer Registry <span class="nav-count">27</span></div>
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/>
+          <path d="M6.7 7.4 10.8 16M17.3 7.4 13.2 16M7 6h10" stroke-linecap="round"/></svg>
+        Network Model
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M12 3 5 5.7v5.6C5 16 8 19.4 12 21c4-1.6 7-5 7-9.7V5.7L12 3Z" stroke-linejoin="round"/>
+          <path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Defence Schemes
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M3 12h3l2.5 6 4-13L18 12h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Continuous Evaluation
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">System</div>
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/>
+          <path d="M14 3v6h6M9 13h6M9 17h6" stroke-linecap="round"/></svg>
+        Reports
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M19.4 13.5a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 7 2.6h.1A1.6 1.6 0 0 0 8.5 1.1V1a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 14 2.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.4 1.4Z"
+            transform="scale(.82) translate(2.6 2.6)"/></svg>
+        Administration
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN (context + workspace host) ============ -->
+  <div class="main">
+
+    <!-- active-context role -->
+    <div class="context-bar">
+      <nav class="crumbs">
+        <a>Engineering Registry</a><span class="sep">/</span>
+        <span class="here">Substation Registry</span>
+      </nav>
+      <div class="ctx-spacer"></div>
+      <span class="ctx-label">Engineering context</span>
+      <span class="chip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg>
+        <span class="k">GM Zone</span><b>Central</b>
+      </span>
+      <span class="chip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4" stroke-linecap="round"/></svg>
+        <span class="k">Snapshot</span><b>Peak · 2026-06-15</b>
+      </span>
+      <span class="chip"><span class="k">Registry</span><b>Current</b></span>
+    </div>
+
+    <!-- workspace host -->
+    <div class="workspace">
+      <div class="ws-head">
+        <div class="ws-title">
+          <h1>Substation Registry</h1>
+          <div class="meta"><b>42</b> substations · scoped to <b>GM Zone Central</b> · read scope: Current registry</div>
+        </div>
+        <div class="ws-actions">
+          <button class="btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Import
+          </button>
+          <button class="btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21V9m0 0-4 4m4-4 4 4M4 3h16" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Export
+          </button>
+          <button class="btn primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+            Register Substation
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="ws-search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2" stroke-linecap="round"/></svg>
+          <input placeholder="Filter this registry…">
+        </div>
+        <div class="filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" stroke-linejoin="round"/></svg><span class="k">Voltage:</span><b>All</b></div>
+        <div class="filter"><span class="k">Status:</span><b>All</b></div>
+        <div class="tb-spacer"></div>
+        <span class="result-note">Showing <b class="num">1–9</b> of <b class="num">42</b></span>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Substation</th><th>Mnemonic</th><th>Voltage</th>
+              <th>Region</th><th>State</th><th>Grid Owner</th>
+              <th>Operational Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">Kapar <span class="sub-id">KE Main Intake</span></td>
+              <td class="mono">KPAR</td><td class="v-tag num">500 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-ok"><span class="dot"></span>In Service</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Bukit Tarek</td>
+              <td class="mono">BTRK</td><td class="v-tag num">275 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-ok"><span class="dot"></span>In Service</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Serdang</td>
+              <td class="mono">SRDG</td><td class="v-tag num">275 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-ok"><span class="dot"></span>In Service</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Puchong</td>
+              <td class="mono">PCHG</td><td class="v-tag num">132 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-warn"><span class="dot"></span>Under Maintenance</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Klang</td>
+              <td class="mono">KLNG</td><td class="v-tag num">275 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-ok"><span class="dot"></span>In Service</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Sungai Besi</td>
+              <td class="mono">SGBS</td><td class="v-tag num">132 kV</td>
+              <td class="kv">Central</td><td class="kv">Kuala Lumpur</td><td class="kv">TNB</td>
+              <td><span class="status s-ok"><span class="dot"></span>In Service</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Damansara</td>
+              <td class="mono">DMSR</td><td class="v-tag num">275 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-ok"><span class="dot"></span>In Service</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Bangi</td>
+              <td class="mono">BNGI</td><td class="v-tag num">132 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-idle"><span class="dot"></span>Superseded record</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+            <tr>
+              <td class="name">Semenyih</td>
+              <td class="mono">SMYH</td><td class="v-tag num">132 kV</td>
+              <td class="kv">Central</td><td class="kv">Selangor</td><td class="kv">TNB</td>
+              <td><span class="status s-plan"><span class="dot"></span>Planned</span></td>
+              <td><a class="rowlink">Open</a></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="tablefoot">
+          <span>Read-only reflection of the <b>Substation Registry</b> — authoritative data owned by the registry domain.</span>
+          <div class="pager">
+            <span class="pg ghost">‹</span>
+            <span class="pg active">1</span><span class="pg">2</span><span class="pg">3</span>
+            <span class="pg ghost">…</span><span class="pg">5</span>
+            <span class="pg ghost">›</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ STATUS BAR (ambient-status role) ============ -->
+  <footer class="status-bar">
+    <span class="env"><span class="live"></span>GridDefence · Production</span>
+    <span class="st-item link">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <b>3</b>&nbsp;unread engineering impacts
+    </span>
+    <span class="st-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      PSS/E import · Batch&nbsp;<b>2026-07-B</b>
+      <span class="mini-progress"><i></i></span> <b class="num">62%</b>
+    </span>
+    <span class="st-spacer"></span>
+    <span class="st-item">Snapshot current as of&nbsp;<b>2026-06-15</b></span>
+    <span class="st-item">Session&nbsp;<b>System Planning Engineer</b></span>
+  </footer>
+
+</div>
+</body>
+</html>

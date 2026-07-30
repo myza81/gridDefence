@@ -3,6 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <!-- Minimal base reset (no framework): removes the default 8px body margin
+         that otherwise adds ~16px to document height, and establishes a 100%
+         height chain so full-viewport (100dvh) pages measure correctly. Page
+         scrolling is NOT disabled globally here — routes that need to scroll
+         still can; the login route locks its own overflow while mounted. -->
+    <style>
+      html, body, #root { height: 100%; }
+      body { margin: 0; }
+    </style>
     <title>GridDefence</title>
   </head>
   <body>

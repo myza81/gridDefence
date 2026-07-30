@@ -18,6 +18,7 @@ import type {
   TransformerUpdate,
   VoltageYardAuditLogPage,
   VoltageYardCreate,
+  VoltageYardRestore,
   VoltageYardSummary,
   VoltageYardUpdate,
 } from "./types";
@@ -92,6 +93,14 @@ export const equipmentRegistryApi = {
     apiClient.post<VoltageYardSummary>("/api/v1/voltage-yards", payload),
   updateVoltageYard: (voltageYardId: string, payload: VoltageYardUpdate) =>
     apiClient.patch<VoltageYardSummary>(`/api/v1/voltage-yards/${voltageYardId}`, payload),
+  // Dedicated lifecycle command (ADR-027) — restoration always targets ACTIVE,
+  // so no operational_status_id is sent and the closed transition allow-list
+  // cannot be bypassed from the client.
+  restoreVoltageYard: (voltageYardId: string, payload: VoltageYardRestore) =>
+    apiClient.post<VoltageYardSummary>(
+      `/api/v1/voltage-yards/${voltageYardId}/restore`,
+      payload,
+    ),
   listVoltageYardAuditLog: (voltageYardId: string, page = 1, pageSize = 50) =>
     apiClient.get<VoltageYardAuditLogPage>(
       `/api/v1/voltage-yards/${voltageYardId}/audit-log?page=${page}&page_size=${pageSize}`,

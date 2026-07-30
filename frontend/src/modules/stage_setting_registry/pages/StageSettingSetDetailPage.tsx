@@ -115,7 +115,7 @@ export function StageSettingSetDetailPage() {
         <StagesList
           detail={detail}
           canManage={canManage && isDraft}
-          regions={referenceData.regions.data ?? []}
+          regions={referenceData.regions}
           onChanged={invalidate}
         />
       )}
@@ -123,7 +123,7 @@ export function StageSettingSetDetailPage() {
       {isDraft && canManage && (
         <AddStageForm
           detail={detail}
-          regions={referenceData.regions.data ?? []}
+          regions={referenceData.regions}
           onAdded={invalidate}
         />
       )}

@@ -59,12 +59,10 @@ import { UflsSchemeListPage } from "../modules/ufls/pages/UflsSchemeListPage";
  */
 const router = createBrowserRouter([
   {
+    // The approved login mockup is a full-bleed page with its own branding —
+    // it is deliberately rendered outside AppShell (no app header/nav chrome).
     path: "/login",
-    element: (
-      <AppShell>
-        <LoginPage />
-      </AppShell>
-    ),
+    element: <LoginPage />,
   },
   {
     path: "/",

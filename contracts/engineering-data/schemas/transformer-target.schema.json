@@ -1,0 +1,99 @@
+{
+  "$id": "griddefence-engineering-data-contract/griddefence.transformer.target",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "GridDefence-facing Transformer target block produced by the workbench's transformer_target_preview(). Read/preview-only: the workbench does not currently import Transformers, so values may be null before resolution. Corresponds to TransformerCreate (hv_switchyard_id/lv_switchyard_id/transformer_number required at create time; operational_status carried here as a code).",
+  "properties": {
+    "capacity_mva": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commissioning_date": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hv_breaker_number": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hv_switchyard_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lv_breaker_number": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lv_switchyard_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "operational_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "remarks": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "substation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "substation_mnemonic": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transformer_number": {
+      "maxLength": 20,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transformer_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "substation_id",
+    "substation_mnemonic",
+    "transformer_number",
+    "hv_switchyard_id",
+    "hv_breaker_number",
+    "lv_switchyard_id",
+    "lv_breaker_number",
+    "capacity_mva",
+    "commissioning_date",
+    "operational_status",
+    "transformer_type",
+    "remarks"
+  ],
+  "title": "Transformer target (preview-only)",
+  "type": "object",
+  "x-workbench-preview-only": true
+}

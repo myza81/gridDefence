@@ -29,6 +29,10 @@ export interface VoltageYardUpdate {
   change_reason?: string | null;
 }
 
+export interface VoltageYardRestore {
+  change_reason: string;
+}
+
 export interface VoltageYardSummary {
   voltage_yard_id: string;
   substation_id: string;

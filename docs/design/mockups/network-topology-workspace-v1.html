@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<!--
+  GridDefence — Network Topology Workspace, VERSION 1 (VISUAL CONCEPT FOR REVIEW ONLY)
+  Status: PROPOSED — NOT YET APPROVED — NOT IMPLEMENTATION.
+  Purpose: design stress-test — host a non-tabular Network Topology workspace inside the
+           APPROVED Application Shell V2, unchanged, to check the shell stays calm and
+           recognisably GridDefence at higher visual complexity. Read-only inspection posture.
+  Static throwaway review mockup (placeholder markup + inline styles). NOT product frontend;
+  defines no components/tokens/CSS architecture. Shell V2 (application-shell-v2.*) preserved.
+  Grounded in: operational-correlation-architecture.md, EDR-007 (Operational Identity Mapping),
+               ADR-006 (connectivity registry vs PSS/E topology), ADR-008 (voltage yard / Switchyard),
+               network-model-module.md, EDR-006 (visualise, never a second analysis),
+               EDR-004 / ADR-010 (decision support, not automation),
+               griddefence-theme.md + docs/design/ (approved visual language, carried inward).
+  Terminology is authoritative-only; voltage COLOUR is provisional (no standard defined) — see legend.
+  Sample content illustrative only (Peninsular Malaysia / Central zone placeholders).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GridDefence — Network Topology Workspace (V1 Concept)</title>
+<style>
+  :root{
+    --navy:#0F1E3D; --navy-soft:#26364F; --muted:#5E6D88; --faint:#8B98AD;
+    --primary:#2540D8; --primary-strong:#1E36BE; --link:#2560E6;
+    --surface:#FFFFFF; --app-bg:#EFF3FA; --scope-band:#E9EFFB; --panel-tint:#F6F9FF;
+    --primary-wash:#E7ECFE; --border:#E2E7F1; --border-strong:#D2DAE8; --row-hover:#F4F7FE;
+    --ok:#1F8A54; --ok-dot:#22A45D; --warn:#B5730E; --warn-dot:#D9880F; --warn-strong:#A85B00;
+    --plan:#2560E6; --idle:#66738C; --idle-dot:#98A4BA; --draft-dot:#C98A1C;
+    /* provisional voltage ramp — single-hue family, NOT an approved standard */
+    --v500:#1E2A78; --v275:#2540D8; --v132:#6E8BE8;
+    --canvas:#FBFCFE;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0; background:var(--app-bg); color:var(--navy);
+    font-family:'Inter','Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
+    font-size:13px; line-height:1.42; -webkit-font-smoothing:antialiased}
+  .num,.mono{font-variant-numeric:tabular-nums}
+
+  .app{height:100vh; display:grid; grid-template-columns:250px 1fr;
+    grid-template-rows:24px 56px 1fr 30px;
+    grid-template-areas:"banner banner" "header header" "sidebar main" "status status"}
+
+  .banner{grid-area:banner; background:#E7EBF3; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:9px; padding:0 16px; font-size:11px; letter-spacing:.05em; color:#4C5A73; font-weight:600}
+  .banner .d{width:7px;height:7px;border-radius:50%;background:var(--draft-dot);flex:none}
+  .banner .sep{color:var(--faint); font-weight:500}
+
+  /* ===== APPROVED SHELL V2 (unchanged) ===== */
+  .header{grid-area:header; background:var(--surface); border-bottom:1px solid var(--border); box-shadow:0 1px 2px rgba(16,30,61,.04); display:flex; align-items:center; gap:20px; padding:0 18px; z-index:5}
+  .brand{display:flex; align-items:center; gap:10px; width:216px; flex:none}
+  .brand .mark{width:26px;height:26px;flex:none}
+  .brand .word{font-weight:800; letter-spacing:.3px; font-size:15px}
+  .brand .word b{color:var(--navy)} .brand .word span{color:var(--primary)}
+  .search{flex:1; max-width:520px; display:flex; align-items:center; gap:8px; background:var(--panel-tint); border:1px solid var(--border); border-radius:8px; padding:7px 11px; color:var(--faint)}
+  .search input{border:0;background:transparent;outline:0;width:100%;font:inherit;color:var(--navy-soft)}
+  .search .kbd{border:1px solid var(--border-strong);border-radius:4px;padding:1px 5px;font-size:11px;color:var(--faint);background:#fff}
+  .header .spacer{flex:1}
+  .h-actions{display:flex;align-items:center;gap:6px}
+  .icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid transparent;display:flex;align-items:center;justify-content:center;color:var(--navy-soft);position:relative;cursor:default}
+  .icon-btn:hover{background:var(--panel-tint);border-color:var(--border)}
+  .badge{position:absolute;top:3px;right:4px;min-width:15px;height:15px;background:var(--primary);color:#fff;border-radius:8px;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px;border:2px solid #fff}
+  .divider-v{width:1px;height:26px;background:var(--border);margin:0 4px}
+  .user{display:flex;align-items:center;gap:9px;padding:4px 6px 4px 4px;border-radius:8px;cursor:default}
+  .user:hover{background:var(--panel-tint)}
+  .avatar{width:30px;height:30px;border-radius:50%;flex:none;background:linear-gradient(180deg,#3D57E6,#2540D8);color:#fff;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center}
+  .user .who{line-height:1.15}
+  .user .who .n{font-weight:600;font-size:12.5px;color:var(--navy)}
+  .user .who .r{font-size:11px;color:var(--muted)}
+
+  .sidebar{grid-area:sidebar; background:var(--surface); border-right:1px solid var(--border); padding:10px 12px; overflow-y:auto}
+  .nav-label{font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:var(--faint); font-weight:700; padding:12px 10px 5px}
+  .nav-item{position:relative; display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; color:var(--navy-soft); font-weight:500; cursor:default; margin:1px 0}
+  .nav-item:hover{background:var(--panel-tint)}
+  .nav-item svg{width:17px;height:17px;flex:none;color:var(--muted)}
+  .nav-item.active{background:var(--primary-wash); color:var(--primary-strong); font-weight:600}
+  .nav-item.active svg{color:var(--primary)}
+  .nav-item.active::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:3px;border-radius:0 3px 3px 0;background:var(--primary)}
+  .nav-item .caret{margin-left:auto;color:var(--faint)}
+  .sub{margin:2px 0 4px 15px; border-left:1px solid var(--border); padding-left:9px}
+  .sub .nav-item{padding:6px 10px; font-size:12.5px}
+  .nav-count{margin-left:auto; font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums; font-weight:600}
+
+  .main{grid-area:main; display:flex; flex-direction:column; min-width:0; overflow:hidden}
+
+  /* SHELL engineering scope (read-only, tinted, non-interactive) */
+  .scope-bar{background:var(--scope-band); border-bottom:1px solid var(--border-strong); display:flex; align-items:center; gap:12px; padding:7px 20px; flex:none}
+  .crumbs{display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12.5px}
+  .crumbs .sep{color:var(--faint)} .crumbs .here{color:var(--navy); font-weight:600}
+  .scope-spacer{flex:1}
+  .scope-tag{display:inline-flex; align-items:center; gap:6px; font-size:10px; letter-spacing:.08em; text-transform:uppercase; font-weight:700; color:#3B4E77}
+  .scope-tag svg{width:13px;height:13px}
+  .scope-pill{display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid #C9D6F1; border-radius:7px; padding:4px 10px; color:var(--navy-soft); font-size:12px; font-weight:600}
+  .scope-pill .k{color:var(--muted); font-weight:500}
+
+  /* ===== TOPOLOGY WORKSPACE (the only thing that changes) ===== */
+  .workspace{flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden}
+
+  .topo-head{display:flex; align-items:flex-start; gap:16px; padding:14px 20px 10px}
+  .topo-head h1{margin:0; font-size:19px; font-weight:700; letter-spacing:-.2px; color:var(--navy)}
+  .topo-sum{margin-top:4px; display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; color:var(--muted); font-size:12px}
+  .topo-sum b{color:var(--navy-soft); font-weight:700}
+  .topo-sum .dotsep{width:3px;height:3px;border-radius:50%;background:var(--faint)}
+  .ro-badge{display:inline-flex; align-items:center; gap:6px; background:var(--panel-tint); border:1px solid var(--border-strong); border-radius:6px; padding:3px 9px; color:var(--muted); font-weight:600; font-size:11.5px}
+  .ro-badge svg{width:13px;height:13px}
+  .head-actions{margin-left:auto; display:flex; gap:8px}
+  .btn{display:inline-flex; align-items:center; gap:7px; height:32px; padding:0 12px; border-radius:8px; font:inherit; font-weight:600; font-size:12.5px; cursor:default; border:1px solid var(--border-strong); background:#fff; color:var(--navy-soft)}
+  .btn:hover{background:var(--panel-tint)} .btn svg{width:15px;height:15px}
+
+  /* view-only toolbar (presentation controls — NOT engineering filters) */
+  .topo-toolbar{display:flex; align-items:center; gap:8px; padding:0 20px 10px; flex-wrap:wrap}
+  .locate{display:flex; align-items:center; gap:8px; background:#fff; border:1px solid var(--border-strong); border-radius:8px; padding:7px 11px; width:264px; color:var(--faint)}
+  .locate input{border:0;outline:0;background:transparent;font:inherit;width:100%;color:var(--navy-soft)}
+  .vgroup{display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid var(--border-strong); border-radius:8px; padding:3px}
+  .vgroup .gk{color:var(--muted); font-weight:600; font-size:11px; padding:0 7px 0 8px}
+  .seg{display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border-radius:6px; font-weight:600; font-size:12px; color:var(--navy-soft)}
+  .seg .sw{width:9px;height:9px;border-radius:2px;flex:none}
+  .seg.on{background:var(--primary-wash); color:var(--primary-strong)}
+  .seg.off{color:var(--faint)}
+  .seg .strike{text-decoration:line-through}
+  .tbtn{display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid var(--border-strong); border-radius:8px; padding:7px 10px; color:var(--navy-soft); font-weight:600; font-size:12.5px}
+  .tbtn svg{width:14px;height:14px;color:var(--muted)}
+  .tbtn .k{color:var(--muted);font-weight:500}
+  .tb-spacer{flex:1}
+  .zoom{display:inline-flex; align-items:center; background:#fff; border:1px solid var(--border-strong); border-radius:8px; overflow:hidden}
+  .zoom span{padding:6px 10px; font-weight:700; color:var(--navy-soft); border-left:1px solid var(--border); border-right:1px solid var(--border); font-size:12px}
+  .zoom b{padding:6px 9px; color:var(--muted); font-weight:700}
+  .view-note{color:var(--faint); font-size:11px; padding:0 20px 8px; display:flex; align-items:center; gap:7px}
+  .view-note svg{width:13px;height:13px}
+
+  .topo-body{flex:1; display:flex; min-height:0; border-top:1px solid var(--border)}
+
+  /* dominant canvas */
+  .canvas-wrap{flex:1; position:relative; min-width:0; background:var(--canvas)}
+  .findings{position:absolute; top:12px; left:12px; right:12px; z-index:3; display:flex; align-items:center; gap:12px;
+    background:#FFFDF7; border:1px solid #EAD9B0; border-radius:9px; padding:8px 12px; color:#7A5A12; font-size:12px; box-shadow:0 1px 2px rgba(16,30,61,.05)}
+  .findings .ic{width:16px;height:16px;flex:none;color:#B5730E}
+  .findings b{color:#6B4E0C; font-weight:700}
+  .findings .f{display:inline-flex; align-items:center; gap:6px}
+  .findings .fsep{width:3px;height:3px;border-radius:50%;background:#D9C089}
+  .findings .review{margin-left:auto; color:var(--link); font-weight:700; white-space:nowrap}
+  .findings .note{color:#96793A; font-weight:500}
+
+  .svgcanvas{width:100%; height:100%; display:block}
+
+  /* legend (subordinate, collapsible look) */
+  .legend{position:absolute; left:12px; bottom:12px; z-index:3; width:250px; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:0 2px 6px rgba(16,30,61,.06); overflow:hidden}
+  .legend .lh{display:flex; align-items:center; gap:8px; padding:8px 11px; border-bottom:1px solid var(--border); font-weight:700; font-size:11.5px; color:var(--navy)}
+  .legend .lh svg{width:14px;height:14px;color:var(--muted)}
+  .legend .lh .car{margin-left:auto;color:var(--faint)}
+  .legend .lb{padding:9px 11px}
+  .legend .grp{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-weight:700;margin:2px 0 5px}
+  .legend .grp:not(:first-child){margin-top:9px}
+  .lrow{display:flex; align-items:center; gap:8px; margin:4px 0; font-size:11.5px; color:var(--navy-soft)}
+  .lrow .gl{width:22px;flex:none;display:flex;align-items:center;justify-content:center}
+  .vln{height:0;border-radius:2px;width:22px}
+  .prov{margin-top:8px; font-size:10.5px; color:var(--muted); font-style:italic; border-top:1px dashed var(--border-strong); padding-top:7px}
+
+  /* subordinate selection detail panel */
+  .detail{width:332px; flex:none; background:#fff; border-left:1px solid var(--border); overflow-y:auto}
+  .dt-head{padding:13px 15px 12px; border-bottom:1px solid var(--border)}
+  .dt-kicker{display:flex; align-items:center; gap:8px; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700}
+  .dt-kicker .close{margin-left:auto; color:var(--faint); font-weight:600; cursor:default}
+  .dt-title{margin-top:7px; display:flex; align-items:baseline; gap:9px}
+  .dt-title .mn{font-size:18px; font-weight:800; color:var(--navy); letter-spacing:.02em; font-variant-numeric:tabular-nums}
+  .dt-title .nm{font-size:13px; color:var(--muted); font-weight:500}
+  .dt-type{margin-top:6px; display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--navy-soft); font-weight:600}
+  .corr{display:inline-flex; align-items:center; gap:6px; border-radius:6px; padding:2px 8px; font-size:11.5px; font-weight:700}
+  .corr .g{width:8px;height:8px;border-radius:50%;flex:none}
+  .corr.ok{background:#EAF6EF; color:#1B7A49} .corr.ok .g{background:var(--ok-dot)}
+  .corr.warn{background:#FBF3E3; color:#96600B} .corr.warn .g{background:var(--warn-dot); border-radius:1px}
+  .corr.idle{background:#EEF1F6; color:#5A6980} .corr.idle .g{background:var(--idle-dot)}
+
+  .dt-sec{padding:12px 15px; border-bottom:1px solid var(--border)}
+  .dt-sec h4{margin:0 0 8px; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700}
+  .kv2{display:flex; justify-content:space-between; gap:12px; margin:6px 0; font-size:12.5px}
+  .kv2 .k{color:var(--muted)} .kv2 .v{color:var(--navy); font-weight:600; text-align:right; font-variant-numeric:tabular-nums}
+  .kv2 .v .sub2{display:block; color:var(--faint); font-weight:500; font-size:11px}
+  .idnote{margin-top:8px; font-size:11px; color:var(--muted); background:var(--panel-tint); border:1px solid var(--border); border-radius:7px; padding:7px 9px; line-height:1.4}
+  .idnote b{color:var(--navy-soft)}
+  .conn{display:flex; align-items:center; gap:9px; padding:7px 0; border-top:1px solid var(--border); font-size:12.5px}
+  .conn:first-of-type{border-top:0}
+  .conn .ci{width:16px;height:16px;flex:none;color:var(--muted)}
+  .conn .cmain{flex:1;min-width:0}
+  .conn .cmain .t{color:var(--navy); font-weight:600}
+  .conn .cmain .s{color:var(--faint); font-size:11px}
+  .conn .cst{font-size:10.5px; font-weight:700; padding:2px 6px; border-radius:5px}
+  .cst.ok{background:#EAF6EF;color:#1B7A49} .cst.idle{background:#EEF1F6;color:#5A6980} .cst.na{background:#F2EEE6;color:#8A6A2A}
+  .actions{padding:12px 15px}
+  .act{display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; color:var(--navy-soft); font-weight:600; font-size:12.5px; border:1px solid var(--border); margin:6px 0; background:#fff}
+  .act:hover{background:var(--panel-tint)} .act svg{width:15px;height:15px;color:var(--muted)}
+  .act.primary{color:var(--primary-strong); border-color:#C9D6F1; background:var(--panel-tint)} .act.primary svg{color:var(--primary)}
+  .inspect-note{margin:10px 15px 16px; font-size:11px; color:var(--muted); display:flex; gap:8px; align-items:flex-start; line-height:1.45}
+  .inspect-note svg{width:14px;height:14px;flex:none;color:var(--faint);margin-top:1px}
+
+  /* status bar (approved ambient pattern) */
+  .status-bar{grid-area:status; background:var(--surface); border-top:1px solid var(--border); display:flex; align-items:center; gap:18px; padding:0 18px; color:var(--muted); font-size:11.5px}
+  .status-bar .env{display:flex; align-items:center; gap:7px; font-weight:700; color:var(--navy-soft)}
+  .status-bar .live{width:7px;height:7px;border-radius:50%;background:var(--ok-dot)}
+  .st-item{display:flex; align-items:center; gap:7px}
+  .st-item svg{width:13px;height:13px;color:var(--muted)}
+  .st-item b{color:var(--navy-soft); font-weight:600}
+  .st-item.link b{color:var(--link)}
+  .st-spacer{flex:1}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="banner">
+    <span class="d"></span>PROPOSED — NOT YET APPROVED — NOT IMPLEMENTATION
+    <span class="sep">·</span> Network Topology Workspace V1 <span class="sep">·</span> hosted in approved Application Shell V2 <span class="sep">·</span> visual concept for review only
+  </div>
+
+  <!-- ===== APPROVED SHELL V2 HEADER (unchanged) ===== -->
+  <header class="header">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" fill="none">
+        <path d="M16 2 4 6.5v8.7C4 23 9.2 28.3 16 30c6.8-1.7 12-7 12-14.8V6.5L16 2Z" fill="#EEF2FE" stroke="#2540D8" stroke-width="1.8"/>
+        <path d="M16 8.5 11 22h2.6l.9-2.7h3l.9 2.7H21L16 8.5Zm-.9 6.9.9-2.8.9 2.8h-1.8Z" fill="#0F1E3D"/>
+        <path d="M12.5 12.5 16 10l3.5 2.5" stroke="#2540D8" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+      <div class="word"><b>GRID</b><span>DEFENCE</span></div>
+    </div>
+    <div class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2" stroke-linecap="round"/></svg>
+      <input placeholder="Search substations, equipment, schemes, buses…"><span class="kbd">/</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="h-actions">
+      <div class="icon-btn" title="Unread engineering impacts (3)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" stroke-linecap="round"/><path d="M13.7 21a2 2 0 0 1-3.4 0" stroke-linecap="round"/></svg>
+        <span class="badge">3</span>
+      </div>
+      <div class="icon-btn" title="Help"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5A2.6 2.6 0 0 1 14 11c0 1.7-2 2-2 3.2" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg></div>
+      <div class="divider-v"></div>
+      <div class="user"><div class="avatar">SP</div><div class="who"><div class="n">System Planning</div><div class="r">System Planning Engineer</div></div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2"><path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg></div>
+    </div>
+  </header>
+
+  <!-- ===== APPROVED SHELL V2 SIDEBAR (unchanged; Network Model active) ===== -->
+  <aside class="sidebar">
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</div>
+    <div class="nav-label">Engineering Domains</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Engineering Registry
+      <svg class="caret" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg></div>
+    <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M6.7 7.4 10.8 16M17.3 7.4 13.2 16M7 6h10" stroke-linecap="round"/></svg>Network Model</div>
+    <div class="sub">
+      <div class="nav-item active">Network Topology</div>
+      <div class="nav-item">Operational Snapshots <span class="nav-count">6</span></div>
+      <div class="nav-item">Correlation Review <span class="nav-count">3</span></div>
+    </div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 5 5.7v5.6C5 16 8 19.4 12 21c4-1.6 7-5 7-9.7V5.7L12 3Z" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>Defence Schemes</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2.5 6 4-13L18 12h3" stroke-linecap="round" stroke-linejoin="round"/></svg>Continuous Evaluation</div>
+    <div class="nav-label">System</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v6h6M9 13h6M9 17h6" stroke-linecap="round"/></svg>Reports</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4" stroke-linecap="round"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>Administration</div>
+  </aside>
+
+  <!-- ===== MAIN: scope (shell) + topology workspace ===== -->
+  <div class="main">
+
+    <!-- SHELL engineering scope + provenance (read-only, tinted) -->
+    <div class="scope-bar">
+      <nav class="crumbs"><span>Network Model</span><span class="sep">/</span><span class="here">Network Topology</span></nav>
+      <div class="scope-spacer"></div>
+      <span class="scope-tag">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke-linecap="round"/></svg>Engineering scope
+      </span>
+      <span class="scope-pill"><span class="k">GM Zone</span>Central</span>
+      <span class="scope-pill"><span class="k">Network Snapshot</span>Peak · 2026-06-15</span>
+      <span class="scope-pill"><span class="k">Topology</span>v18</span>
+      <span class="scope-pill"><span class="k">Registry</span>Current</span>
+    </div>
+
+    <div class="workspace">
+      <div class="topo-head">
+        <div>
+          <h1>Network Topology</h1>
+          <div class="topo-sum">
+            <span class="ro-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke-linecap="round"/></svg>Read-only inspection</span>
+            <span class="dotsep"></span><span>Correlated operational model · <b>Topology v18</b></span>
+            <span class="dotsep"></span><span>Focus <b>KLNG · Klang</b> + neighbours</span>
+            <span class="dotsep"></span><span><b>6</b> switchyards · <b>7</b> circuits shown</span>
+            <span class="dotsep"></span><span><b>3</b> findings</span>
+          </div>
+        </div>
+        <div class="head-actions">
+          <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 3h6v6M21 3l-9 9M9 21H3v-6M3 21l9-9" stroke-linecap="round" stroke-linejoin="round"/></svg>Fit to scope</button>
+          <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16" stroke-linecap="round" stroke-linejoin="round"/></svg>Export view</button>
+        </div>
+      </div>
+
+      <!-- VIEW-ONLY presentation controls (distinct from shell scope) -->
+      <div class="topo-toolbar">
+        <div class="locate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2" stroke-linecap="round"/></svg>
+          <input placeholder="Locate object — mnemonic, bus name, bus number…">
+        </div>
+        <div class="vgroup" title="Show / hide voltage levels (presentation only)">
+          <span class="gk">Voltage</span>
+          <span class="seg on"><span class="sw" style="background:var(--v500)"></span>500</span>
+          <span class="seg on"><span class="sw" style="background:var(--v275)"></span>275</span>
+          <span class="seg on"><span class="sw" style="background:var(--v132)"></span>132</span>
+        </div>
+        <div class="tbtn"><span class="k">Show</span>Labels<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg></div>
+        <div class="tbtn"><span class="k">Types</span>All<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg></div>
+        <div class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg>Issues shown</div>
+        <div class="tb-spacer"></div>
+        <div class="tbtn">Clear selection</div>
+        <div class="zoom"><b>−</b><span>100%</span><b>+</b></div>
+      </div>
+      <div class="view-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1" stroke-linecap="round"/></svg>
+        View controls change presentation only — hidden objects are not removed, and the correlated dataset is unchanged.
+      </div>
+
+      <div class="topo-body">
+        <!-- DOMINANT CANVAS -->
+        <div class="canvas-wrap">
+          <!-- validation / correlation awareness (non-dominating) -->
+          <div class="findings">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="f"><b>3</b>&nbsp;topology findings in scope</span><span class="fsep"></span>
+            <span class="f">1 Unmatched operational bus</span><span class="fsep"></span>
+            <span class="f">1 Inconsistent identity <b>· DMSR275</b></span><span class="fsep"></span>
+            <span class="f">1 detail Unavailable in this snapshot</span>
+            <span class="note">— surfaced for engineering review, not resolved automatically</span>
+            <span class="review">Open Correlation Review ›</span>
+          </div>
+
+          <svg class="svgcanvas" viewBox="0 0 1080 620" preserveAspectRatio="xMinYMid meet">
+            <defs>
+              <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+                <circle cx="1.4" cy="1.4" r="1.4" fill="#E5EBF5"/>
+              </pattern>
+              <marker id="tf" markerWidth="10" markerHeight="10" refX="5" refY="5"><circle cx="5" cy="5" r="3" fill="none" stroke="#26364F" stroke-width="1.4"/></marker>
+            </defs>
+            <rect x="0" y="0" width="1080" height="620" fill="url(#dots)"/>
+
+            <!-- ===================== EDGES (drawn first) ===================== -->
+            <!-- KPAR275 -> KLNG275 : 275kV double circuit -->
+            <line x1="290" y1="250" x2="450" y2="332" stroke="var(--v275)" stroke-width="3"/>
+            <line x1="290" y1="264" x2="450" y2="346" stroke="var(--v275)" stroke-width="3"/>
+            <rect x="330" y="286" width="86" height="18" rx="4" fill="#fff" stroke="#D2DAE8"/>
+            <text x="373" y="299" text-anchor="middle" font-size="11" font-weight="700" fill="#26364F">275 · Ckt 1·2</text>
+
+            <!-- KLNG275 -> Fictitious -> DMSR275 : tee -->
+            <line x1="662" y1="330" x2="742" y2="286" stroke="var(--v275)" stroke-width="3"/>
+            <line x1="826" y1="266" x2="852" y2="196" stroke="var(--v275)" stroke-width="3"/>
+            <rect x="690" y="300" width="70" height="18" rx="4" fill="#fff" stroke="#D2DAE8"/>
+            <text x="725" y="313" text-anchor="middle" font-size="11" font-weight="700" fill="#26364F">275 · tee</text>
+
+            <!-- KLNG132 -> Unmatched operational bus (dashed) -->
+            <line x1="520" y1="472" x2="470" y2="536" stroke="#C98A1C" stroke-width="2" stroke-dasharray="5 4"/>
+            <!-- KLNG132 -> T-series load (out of scope) -->
+            <line x1="620" y1="452" x2="712" y2="500" stroke="var(--v132)" stroke-width="2"/>
+            <!-- DMSR275 -> Unavailable stub (dashed grey) -->
+            <line x1="934" y1="168" x2="962" y2="214" stroke="#B4BECF" stroke-width="2" stroke-dasharray="4 4"/>
+
+            <!-- ===================== SUBSTATION CONTAINERS ===================== -->
+            <!-- KPAR -->
+            <rect x="40" y="70" width="250" height="212" rx="12" fill="#FFFFFF" stroke="#DCE3EF"/>
+            <text x="58" y="92" font-size="11" font-weight="800" fill="#0F1E3D" letter-spacing=".3">KPAR</text>
+            <text x="98" y="92" font-size="11" font-weight="500" fill="#8B98AD">· Kapar</text>
+            <text x="232" y="92" font-size="10" font-weight="700" fill="#1B7A49" text-anchor="end">Correlated</text>
+
+            <!-- DMSR -->
+            <rect x="820" y="72" width="224" height="132" rx="12" fill="#FFFFFF" stroke="#DCE3EF"/>
+            <text x="838" y="94" font-size="11" font-weight="800" fill="#0F1E3D">DMSR</text>
+            <text x="885" y="94" font-size="11" font-weight="500" fill="#8B98AD">· Damansara</text>
+
+            <!-- KLNG (focus/selected substation) -->
+            <rect x="416" y="288" width="286" height="232" rx="12" fill="#FFFFFF" stroke="#B9C6ED" stroke-width="2"/>
+            <rect x="416" y="288" width="286" height="26" rx="12" fill="#EEF2FE"/>
+            <text x="434" y="306" font-size="11.5" font-weight="800" fill="#1E36BE">KLNG</text>
+            <text x="478" y="306" font-size="11.5" font-weight="500" fill="#5E6D88">· Klang — in focus</text>
+
+            <!-- ===================== NODES ===================== -->
+            <!-- KPAR500 -->
+            <g>
+              <rect x="66" y="104" width="198" height="56" rx="9" fill="#fff" stroke="#D9E0EC"/>
+              <rect x="66" y="104" width="6" height="56" rx="3" fill="var(--v500)"/>
+              <text x="84" y="128" font-size="15" font-weight="800" fill="#0F1E3D" letter-spacing=".3">KPAR500</text>
+              <text x="252" y="123" font-size="11" font-weight="700" fill="#1E2A78" text-anchor="end">500 kV</text>
+              <text x="84" y="146" font-size="10.5" font-weight="600" fill="#1B7A49">● Correlated · Switchyard</text>
+            </g>
+            <!-- KPAR275 -->
+            <g>
+              <rect x="66" y="196" width="198" height="56" rx="9" fill="#fff" stroke="#D9E0EC"/>
+              <rect x="66" y="196" width="6" height="56" rx="3" fill="var(--v275)"/>
+              <text x="84" y="220" font-size="15" font-weight="800" fill="#0F1E3D">KPAR275</text>
+              <text x="252" y="215" font-size="11" font-weight="700" fill="#2540D8" text-anchor="end">275 kV</text>
+              <text x="84" y="238" font-size="10.5" font-weight="600" fill="#1B7A49">● Correlated · Switchyard</text>
+            </g>
+            <!-- KPAR inter-bus transformer 500/275 -->
+            <g>
+              <circle cx="165" cy="174" r="9" fill="#fff" stroke="#26364F" stroke-width="1.6"/>
+              <circle cx="165" cy="182" r="9" fill="#fff" stroke="#26364F" stroke-width="1.6"/>
+              <rect x="182" y="168" width="86" height="18" rx="4" fill="#F6F9FF" stroke="#D2DAE8"/>
+              <text x="225" y="181" text-anchor="middle" font-size="10" font-weight="700" fill="#26364F">IBT 500/275</text>
+            </g>
+
+            <!-- KLNG275 (SELECTED) -->
+            <g>
+              <rect x="446" y="322" width="226" height="58" rx="9" fill="#fff" stroke="#2540D8" stroke-width="2.5"/>
+              <rect x="446" y="322" width="6" height="58" rx="3" fill="var(--v275)"/>
+              <text x="464" y="347" font-size="15.5" font-weight="800" fill="#0F1E3D">KLNG275</text>
+              <text x="660" y="342" font-size="11" font-weight="700" fill="#2540D8" text-anchor="end">275 kV</text>
+              <text x="464" y="366" font-size="10.5" font-weight="600" fill="#1B7A49">● Correlated · Switchyard</text>
+              <rect x="590" y="352" width="74" height="18" rx="9" fill="#2540D8"/>
+              <text x="627" y="365" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">SELECTED</text>
+            </g>
+            <!-- KLNG132 -->
+            <g>
+              <rect x="446" y="424" width="226" height="58" rx="9" fill="#fff" stroke="#D9E0EC"/>
+              <rect x="446" y="424" width="6" height="58" rx="3" fill="var(--v132)"/>
+              <text x="464" y="449" font-size="15.5" font-weight="800" fill="#0F1E3D">KLNG132</text>
+              <text x="660" y="444" font-size="11" font-weight="700" fill="#4E6BD0" text-anchor="end">132 kV</text>
+              <text x="464" y="468" font-size="10.5" font-weight="600" fill="#1B7A49">● Correlated · Switchyard</text>
+            </g>
+            <!-- KLNG inter-bus transformer 275/132 -->
+            <g>
+              <circle cx="500" cy="396" r="9" fill="#fff" stroke="#26364F" stroke-width="1.6"/>
+              <circle cx="500" cy="404" r="9" fill="#fff" stroke="#26364F" stroke-width="1.6"/>
+              <rect x="518" y="391" width="86" height="18" rx="4" fill="#F6F9FF" stroke="#D2DAE8"/>
+              <text x="561" y="404" text-anchor="middle" font-size="10" font-weight="700" fill="#26364F">IBT 275/132</text>
+            </g>
+
+            <!-- DMSR275 (Inconsistent identity) -->
+            <g>
+              <rect x="840" y="104" width="188" height="64" rx="9" fill="#fff" stroke="#E6C98A" stroke-width="2"/>
+              <rect x="840" y="104" width="6" height="64" rx="3" fill="var(--v275)"/>
+              <text x="858" y="128" font-size="15" font-weight="800" fill="#0F1E3D">DMSR275</text>
+              <text x="1016" y="123" font-size="11" font-weight="700" fill="#2540D8" text-anchor="end">275 kV</text>
+              <text x="858" y="147" font-size="10.5" font-weight="700" fill="#96600B">▲ Inconsistent identity</text>
+              <text x="858" y="161" font-size="9.5" font-weight="500" fill="#8A6A2A">was correlated · now differs · review</text>
+            </g>
+
+            <!-- Fictitious Bus (intentionally not correlated) -->
+            <g>
+              <polygon points="742,252 806,252 826,272 806,292 742,292 722,272"
+                       fill="#F4F6FA" stroke="#98A4BA" stroke-width="1.6" stroke-dasharray="5 4"/>
+              <text x="774" y="270" text-anchor="middle" font-size="12.5" font-weight="800" fill="#3F4B60">TJGS·F1</text>
+              <text x="774" y="284" text-anchor="middle" font-size="9" font-weight="600" fill="#66738C">Fictitious · not correlated</text>
+            </g>
+
+            <!-- Unmatched operational bus -->
+            <g>
+              <rect x="392" y="536" width="180" height="52" rx="9" fill="#FFFDF7" stroke="#D9AE5C" stroke-width="1.6" stroke-dasharray="5 4"/>
+              <text x="410" y="558" font-size="13.5" font-weight="800" fill="#0F1E3D">Bus 40987</text>
+              <text x="560" y="556" font-size="10" font-weight="600" fill="#8A6A2A" text-anchor="end">op. only</text>
+              <text x="410" y="576" font-size="10.5" font-weight="700" fill="#96600B">◇ Unmatched — no registry object</text>
+            </g>
+
+            <!-- T-series load (out of current scope) -->
+            <g>
+              <rect x="708" y="474" width="168" height="52" rx="9" fill="#FBFCFE" stroke="#DCE3EF"/>
+              <path d="M792 486v10M786 500h12" stroke="#98A4BA" stroke-width="1.6" stroke-linecap="round"/>
+              <text x="726" y="496" font-size="12.5" font-weight="700" fill="#3F4B60">T-series load</text>
+              <text x="726" y="514" font-size="10" font-weight="600" fill="#66738C">Load Transformer · outside defence scope</text>
+            </g>
+
+            <!-- Unavailable stub -->
+            <g>
+              <rect x="902" y="214" width="126" height="44" rx="8" fill="#F4F6FA" stroke="#C6CFDD" stroke-width="1.4" stroke-dasharray="4 4"/>
+              <text x="965" y="235" text-anchor="middle" font-size="10.5" font-weight="700" fill="#66738C">▢ Unavailable</text>
+              <text x="965" y="248" text-anchor="middle" font-size="8.5" fill="#8B98AD">detail not in this snapshot</text>
+            </g>
+          </svg>
+
+          <!-- LEGEND (subordinate) -->
+          <div class="legend">
+            <div class="lh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round"/></svg>Legend
+              <svg class="car" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 15 6-6 6 6" stroke-linecap="round"/></svg></div>
+            <div class="lb">
+              <div class="grp">Correlation state</div>
+              <div class="lrow"><span class="gl" style="color:#1B7A49">●</span> Correlated</div>
+              <div class="lrow"><span class="gl" style="color:#96600B">◇</span> Unmatched — no registry object</div>
+              <div class="lrow"><span class="gl" style="color:#96600B">▲</span> Inconsistent identity</div>
+              <div class="lrow"><span class="gl" style="color:#66738C">⬡</span> Fictitious Bus — not correlated</div>
+              <div class="lrow"><span class="gl" style="color:#8B98AD">▢</span> Unavailable in this snapshot</div>
+              <div class="grp">Voltage level (provisional)</div>
+              <div class="lrow">
+                <span style="display:inline-flex;gap:12px;align-items:center;font-weight:600">
+                  <span style="display:inline-flex;gap:5px;align-items:center"><span class="vln" style="height:4px;width:16px;background:var(--v500)"></span>500</span>
+                  <span style="display:inline-flex;gap:5px;align-items:center"><span class="vln" style="height:3px;width:16px;background:var(--v275)"></span>275</span>
+                  <span style="display:inline-flex;gap:5px;align-items:center"><span class="vln" style="height:2px;width:16px;background:var(--v132)"></span>132 kV</span>
+                </span>
+              </div>
+              <div class="prov">Voltage colour is provisional — no formal standard is defined; distinction is also carried by kV label &amp; line weight.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SUBORDINATE SELECTION DETAIL -->
+        <aside class="detail">
+          <div class="dt-head">
+            <div class="dt-kicker">Selected object <span class="close">Clear ✕</span></div>
+            <div class="dt-title"><span class="mn">KLNG275</span><span class="nm">Klang</span></div>
+            <div class="dt-type">Switchyard (voltage yard)
+              <span class="corr ok"><span class="g"></span>Correlated</span></div>
+          </div>
+
+          <div class="dt-sec">
+            <h4>Engineering identity — registry</h4>
+            <div class="kv2"><span class="k">Substation</span><span class="v">Klang<span class="sub2">mnemonic KLNG</span></span></div>
+            <div class="kv2"><span class="k">Switchyard</span><span class="v">Klang 275 kV<span class="sub2">SubstationVoltageYard</span></span></div>
+            <div class="kv2"><span class="k">Voltage level</span><span class="v">275 kV</span></div>
+          </div>
+
+          <div class="dt-sec">
+            <h4>Operational identity — PSS/E</h4>
+            <div class="kv2"><span class="k">Bus Name</span><span class="v">KLNG275</span></div>
+            <div class="kv2"><span class="k">Bus Number</span><span class="v">40521</span></div>
+            <div class="kv2"><span class="k">Correlation</span><span class="v">Operational Switchyard</span></div>
+            <div class="idnote">Registry identity and PSS/E identity are <b>distinct</b>. The Bus Name (KLNG275) correlates this operational bus to the registry Switchyard; the Bus Number (40521) is the authoritative operational identity and is never merged with the registry record.</div>
+          </div>
+
+          <div class="dt-sec">
+            <h4>Connected objects (5)</h4>
+            <div class="conn"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><circle cx="12" cy="15" r="4"/></svg><div class="cmain"><div class="t">Inter-bus transformer 275/132</div><div class="s">→ KLNG132 · same substation</div></div><span class="cst ok">Correlated</span></div>
+            <div class="conn"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16" stroke-linecap="round"/></svg><div class="cmain"><div class="t">Circuit 1 → KPAR275</div><div class="s">275 kV · to Kapar</div></div><span class="cst ok">Correlated</span></div>
+            <div class="conn"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16" stroke-linecap="round"/></svg><div class="cmain"><div class="t">Circuit 2 → KPAR275</div><div class="s">275 kV · to Kapar</div></div><span class="cst ok">Correlated</span></div>
+            <div class="conn"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16M12 6v12" stroke-linecap="round"/></svg><div class="cmain"><div class="t">Circuit → DMSR275</div><div class="s">275 kV · via Fictitious Bus (tee)</div></div><span class="cst idle">via TJGS·F1</span></div>
+            <div class="conn"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 8v8M8 12h8" stroke-linecap="round"/></svg><div class="cmain"><div class="t">Reactor bay</div><div class="s">detail not in this snapshot</div></div><span class="cst na">Unavailable</span></div>
+          </div>
+
+          <div class="dt-sec">
+            <h4>Provenance</h4>
+            <div class="kv2"><span class="k">Source</span><span class="v">PSS/E RAW import</span></div>
+            <div class="kv2"><span class="k">Snapshot</span><span class="v">Peak · 2026-06-15</span></div>
+            <div class="kv2"><span class="k">Topology</span><span class="v">v18 · Current</span></div>
+            <div class="kv2"><span class="k">Model</span><span class="v">Correlated read model</span></div>
+          </div>
+
+          <div class="actions">
+            <h4 style="margin:0 0 8px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700">Inspect &amp; navigate</h4>
+            <div class="act primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>Open substation record</div>
+            <div class="act"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>Open switchyard record</div>
+            <div class="act"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v8M8 12h8" stroke-linecap="round"/></svg>View provenance &amp; history</div>
+            <div class="act"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2" stroke-linecap="round"/></svg>Locate on canvas</div>
+          </div>
+          <div class="inspect-note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1" stroke-linecap="round"/></svg>
+            Inspection only. This workspace changes no registry data, correlation, or topology; it accepts no matches and makes no engineering decision.
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== APPROVED SHELL V2 STATUS BAR (unchanged pattern) ===== -->
+  <footer class="status-bar">
+    <span class="env"><span class="live"></span>Environment · Production</span>
+    <span class="st-item link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg><b>3</b>&nbsp;unread engineering impacts</span>
+    <span class="st-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg>Correlated model · <b>up to date</b></span>
+    <span class="st-spacer"></span>
+    <span class="st-item">Topology&nbsp;<b>v18</b> · Snapshot&nbsp;<b>2026-06-15</b></span>
+    <span class="st-item">Session&nbsp;<b>System Planning Engineer</b></span>
+  </footer>
+
+</div>
+</body>
+</html>

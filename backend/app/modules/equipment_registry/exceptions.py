@@ -25,6 +25,9 @@ __all__ = [
     "SwitchyardEnteredInErrorError",
     "SwitchyardHasActiveReferencesError",
     "InsufficientActiveTerminalsForActivationError",
+    "InvalidVoltageYardStatusTransitionError",
+    "VoltageYardChangeReasonRequiredError",
+    "VoltageYardRestoreParentNotActiveError",
 ]
 
 
@@ -230,4 +233,43 @@ class InsufficientActiveTerminalsForActivationError(ValidationAppError):
             f"Circuit cannot be set to Active with fewer than two active terminals — currently "
             f"{active_terminal_count}. Correct or add terminals until at least two are active "
             "before activating this circuit (equipment-registry-module.md §9 rule 5)."
+        )
+
+
+class InvalidVoltageYardStatusTransitionError(ValidationAppError):
+    """A switchyard's lifecycle is a closed allow-list — `Active ⇄ Entered in
+    Error` and nothing else (ADR-027). Mirrors Substation Registry's own
+    `InvalidStatusTransitionError` precedent exactly, defined locally rather
+    than imported across modules (CLAUDE.md A1)."""
+
+    def __init__(self, from_code: str, to_code: str) -> None:
+        super().__init__(
+            f"Switchyard operational status cannot transition from '{from_code}' to "
+            f"'{to_code}' — this is not a defined transition (ADR-027)."
+        )
+
+
+class VoltageYardChangeReasonRequiredError(ValidationAppError):
+    """Both directions of a switchyard lifecycle change are consequential
+    corrections, so neither may be recorded without a stated reason
+    (ADR-027)."""
+
+    def __init__(self, from_code: str, to_code: str) -> None:
+        super().__init__(
+            f"A reason is required to change a switchyard from '{from_code}' to "
+            f"'{to_code}' — the audit trail must record why this correction was made."
+        )
+
+
+class VoltageYardRestoreParentNotActiveError(ValidationAppError):
+    """A switchyard cannot be returned to Active underneath a substation that
+    has itself reached a terminal lifecycle state (`operational_status.
+    is_terminal`) — restoring it would assert an active switchyard at a
+    substation that no longer operates (ADR-027)."""
+
+    def __init__(self, substation_mnemonic: str, substation_status_code: str) -> None:
+        super().__init__(
+            f"Switchyard cannot be restored while its substation "
+            f"'{substation_mnemonic}' is '{substation_status_code}' — restore or correct the "
+            "substation first."
         )

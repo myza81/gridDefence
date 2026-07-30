@@ -1,0 +1,36 @@
+{
+  "$id": "griddefence-engineering-data-contract/griddefence.validation-error",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Structured business-error body returned by GridDefence for a non-success response. (FastAPI request-shape 422 errors use FastAPI's own list-of-errors format and are out of scope.)",
+  "properties": {
+    "detail": {
+      "oneOf": [
+        {
+          "additionalProperties": true,
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "detail"
+  ],
+  "title": "GridDefence structured error",
+  "type": "object"
+}

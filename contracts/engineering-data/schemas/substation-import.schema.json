@@ -1,0 +1,196 @@
+{
+  "$id": "griddefence-engineering-data-contract/griddefence.substation.import",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Canonical Substation create/import payload in portable form: reference dimensions are carried as GridDefence reference-data codes/labels, resolved to surrogate ids live at write time. Corresponds to SubstationCreate (region_id/gm_zone_id/grid_owner_id/operational_status_id required; state_id optional, ADR-026).",
+  "properties": {
+    "commissioned_date": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gm_zone": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "label"
+      ],
+      "type": "object"
+    },
+    "grid_owner": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
+    "latitude": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "longitude": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mnemonic": {
+      "maxLength": 10,
+      "minLength": 1,
+      "type": "string"
+    },
+    "official_name": {
+      "maxLength": 150,
+      "minLength": 1,
+      "type": "string"
+    },
+    "operational_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "region": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "label"
+      ],
+      "type": "object"
+    },
+    "state": {
+      "description": "Null when no State is assigned (ADR-026).",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "voltage_yards": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "commissioning_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latitude": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "longitude": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "type": "string"
+          },
+          "transformer_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "voltage_level_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "voltage_level_label",
+          "origin",
+          "transformer_evidence",
+          "commissioning_date",
+          "latitude",
+          "longitude"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "mnemonic",
+    "official_name",
+    "region",
+    "gm_zone",
+    "state",
+    "grid_owner",
+    "operational_status",
+    "latitude",
+    "longitude",
+    "commissioned_date",
+    "voltage_yards"
+  ],
+  "title": "Substation import target (portable reference-data form)",
+  "type": "object"
+}

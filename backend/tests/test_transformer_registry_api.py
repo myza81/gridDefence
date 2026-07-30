@@ -527,6 +527,105 @@ def test_search_and_filter(client: TestClient, db_session: Session) -> None:
     assert filter_response.json()["total"] == 1
 
 
+def test_paginated_list_is_complete_and_repeatable_with_duplicate_transformer_numbers(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    ids = _create_substations_and_switchyards(db_session, ref, admin_id)
+    equipment_service = EquipmentRegistryService(db_session)
+    voltage_275_id = db_session.query(VoltageLevel).filter_by(label="275kV").one().voltage_level_id
+    for mnemonic in ("PKLG", "IGBK"):
+        yard = equipment_service.create_voltage_yard(
+            substation_id=uuid.UUID(ids[mnemonic]),
+            voltage_level_id=voltage_275_id,
+            actor_user_id=admin_id,
+        )
+        ids[f"{mnemonic}_275"] = str(yard.voltage_yard_id)
+    db_session.commit()
+
+    expected_ids: list[str] = []
+    for mnemonic in ("PKLG", "IGBK"):
+        for hv_yard, lv_yard in (
+            (ids[f"{mnemonic}_hv"], ids[f"{mnemonic}_275"]),
+            (ids[f"{mnemonic}_hv"], ids[f"{mnemonic}_lv"]),
+        ):
+            response = client.post(
+                "/api/v1/transformers",
+                headers=headers,
+                json=_transformer_payload(
+                    ref,
+                    ids,
+                    substation_id=ids[mnemonic],
+                    transformer_number="1",
+                    hv_switchyard_id=hv_yard,
+                    lv_switchyard_id=lv_yard,
+                ),
+            )
+            assert response.status_code == 201, response.text
+            expected_ids.append(response.json()["transformer_id"])
+
+    def traverse(**params) -> tuple[list[str], list[list[str]], int, list[dict]]:
+        ids_seen: list[str] = []
+        pages: list[list[str]] = []
+        first_body: list[dict] = []
+        total = 0
+        page = 1
+        while True:
+            response = client.get(
+                "/api/v1/transformers",
+                headers=headers,
+                params={"page": page, "page_size": 2, **params},
+            )
+            assert response.status_code == 200
+            body = response.json()
+            if page == 1:
+                first_body = body["items"]
+            page_ids = [item["transformer_id"] for item in body["items"]]
+            pages.append(page_ids)
+            ids_seen.extend(page_ids)
+            total = body["total"]
+            assert body["page"] == page
+            assert body["page_size"] == 2
+            if len(ids_seen) >= total:
+                return ids_seen, pages, total, first_body
+            page += 1
+
+    first_ids, first_pages, total, first_body = traverse()
+    second_ids, second_pages, second_total, _second_body = traverse()
+
+    assert total == len(expected_ids)
+    assert second_total == total
+    assert first_ids == sorted(expected_ids)
+    assert len(first_ids) == len(set(first_ids)) == total
+    assert first_ids == second_ids
+    assert first_pages == second_pages
+    assert [len(page) for page in first_pages] == [2, 2]
+    assert set(first_body[0]) == {
+        "transformer_id",
+        "substation_id",
+        "substation_mnemonic",
+        "substation_official_name",
+        "transformer_number",
+        "generated_short_name",
+        "hv_voltage_level_label",
+        "lv_voltage_level_label",
+        "capacity_mva",
+        "operational_status_id",
+    }
+
+    filtered_ids, _filtered_pages, filtered_total, _filtered_body = traverse(
+        operational_status_id=ref["operational_status_id"]
+    )
+    assert filtered_total == total
+    assert filtered_ids == first_ids
+
+    search_ids, _search_pages, search_total, _search_body = traverse(search="1")
+    assert search_total == total
+    assert search_ids == first_ids
+
+
 def test_filter_by_substation_id(client: TestClient, db_session: Session) -> None:
     """From a substation's own perspective: "which transformers are
     installed here" — the exact UAT-reported requirement, at the API

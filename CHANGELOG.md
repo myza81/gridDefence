@@ -11,6 +11,26 @@ Entries are added, never rewritten, as phases complete.
 
 ---
 
+## Equipment Registry - Deterministic Transformer Pagination
+
+**Scope:** Backend correctness fix for the Transformer Registry list endpoint.
+Paginated Transformer queries now keep the existing user-facing
+`transformer_number` ordering but add `transformer_id` as a stable unique
+tie-breaker, producing a deterministic total order for `OFFSET`/`LIMIT`
+pagination. The previous query ordered only by `transformer_number`, which is
+non-unique and could duplicate rows across pages while omitting legitimate
+records. Response schemas, filters, lifecycle semantics, authorization,
+page-size behavior, and total-count semantics are unchanged.
+
+**Tests:** Added service and API regression coverage that creates multiple
+Transformers sharing the same `transformer_number`, traverses all pages with a
+small page size, verifies every expected `transformer_id` is returned exactly
+once, confirms the unique count equals the reported total, repeats traversal to
+prove the ordered ID sequence is stable, and covers search/status filtering plus
+`ENTERED_IN_ERROR` visibility behavior.
+
+---
+
 ## Reference Data — Add Thailand and Singapore as State Options
 
 **Scope:** Reference-data refinement only. Extends the existing flat `state`

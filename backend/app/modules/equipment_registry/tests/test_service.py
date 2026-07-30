@@ -26,16 +26,20 @@ from app.modules.equipment_registry.exceptions import (
     InsufficientTerminalsError,
     InvalidGeolocationPairError,
     InvalidInitialStatusError,
+    InvalidVoltageYardStatusTransitionError,
     NotFoundError,
     ReferenceDataNotFoundError,
     SubstationNotFoundError,
     SwitchyardEnteredInErrorError,
     SwitchyardHasActiveReferencesError,
     TerminalVoltageLevelMismatchError,
+    VoltageYardChangeReasonRequiredError,
     VoltageYardNotFoundError,
+    VoltageYardRestoreParentNotActiveError,
 )
 from app.modules.equipment_registry.service import EquipmentRegistryService, TerminalInput
 from app.modules.equipment_registry.tests.conftest import ReferenceIds
+from app.modules.substation_registry.service import SubstationService
 from app.reference_data.models import LineType
 
 
@@ -1440,6 +1444,7 @@ class TestSwitchyardCorrection:
             service.update_voltage_yard(
                 voltage_yard_ids["PKLG"],
                 operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+                change_reason="Created in error during test setup",
                 actor_user_id=actor_user_id,
             )
 
@@ -1474,6 +1479,7 @@ class TestSwitchyardCorrection:
             service.update_voltage_yard(
                 lv_voltage_yard_ids["PKLG"],
                 operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+                change_reason="Created in error during test setup",
                 actor_user_id=actor_user_id,
             )
 
@@ -1490,6 +1496,7 @@ class TestSwitchyardCorrection:
         yard = service.update_voltage_yard(
             yard_id,
             operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Created in error during test setup",
             actor_user_id=actor_user_id,
         )
         db_session.commit()
@@ -1507,6 +1514,7 @@ class TestSwitchyardCorrection:
         service.update_voltage_yard(
             yard_id,
             operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Created in error during test setup",
             actor_user_id=actor_user_id,
         )
         db_session.commit()
@@ -1530,6 +1538,7 @@ class TestSwitchyardCorrection:
         service.update_voltage_yard(
             voltage_yard_ids["NKST"],
             operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Created in error during test setup",
             actor_user_id=actor_user_id,
         )
         db_session.commit()
@@ -1559,6 +1568,7 @@ class TestSwitchyardCorrection:
         service.update_voltage_yard(
             voltage_yard_ids["NKST"],
             operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason="Created in error during test setup",
             actor_user_id=actor_user_id,
         )
         db_session.commit()
@@ -1823,3 +1833,286 @@ class TestEnteredInErrorListFiltering:
         )
         assert total == 1
         assert items[0].circuit_id == circuit.circuit_id
+
+
+class TestSwitchyardRestoration:
+    """Voltage Yard lifecycle governance and restoration (ADR-027).
+
+    A switchyard's identity is `(substation_id, voltage_level_id)` and the
+    uniqueness rule protecting it is status-blind, so a corrected yard
+    permanently occupies its identity slot and can never be replaced. The
+    closed allow-list therefore includes `ENTERED_IN_ERROR -> ACTIVE` — the one
+    documented exception to that status's terminality in GridDefence.
+    """
+
+    def _correct(
+        self,
+        service: EquipmentRegistryService,
+        yard_id: uuid.UUID,
+        reference_ids: ReferenceIds,
+        actor_user_id: uuid.UUID,
+        reason: str = "Created against the wrong substation",
+    ) -> None:
+        service.update_voltage_yard(
+            yard_id,
+            operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+            change_reason=reason,
+            actor_user_id=actor_user_id,
+        )
+
+    def test_active_to_entered_in_error_and_back_to_active(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+
+        self._correct(service, yard_id, reference_ids, actor_user_id)
+        db_session.commit()
+
+        restored = service.restore_voltage_yard(
+            yard_id,
+            change_reason="Correction was applied to the wrong yard",
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        assert restored.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
+
+    def test_restoration_requires_a_change_reason(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        self._correct(service, yard_id, reference_ids, actor_user_id)
+        db_session.commit()
+
+        for blank in (None, "", "   "):
+            with pytest.raises(VoltageYardChangeReasonRequiredError):
+                service.restore_voltage_yard(
+                    yard_id, change_reason=blank, actor_user_id=actor_user_id
+                )
+
+    def test_marking_entered_in_error_also_requires_a_change_reason(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        with pytest.raises(VoltageYardChangeReasonRequiredError):
+            service.update_voltage_yard(
+                voltage_yard_ids["NKST"],
+                operational_status_id=reference_ids.status_id_by_code["ENTERED_IN_ERROR"],
+                change_reason="  ",
+                actor_user_id=actor_user_id,
+            )
+
+    def test_restoration_appends_audit_entry_and_preserves_the_original(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        self._correct(service, yard_id, reference_ids, actor_user_id, reason="Wrong voltage level")
+        db_session.commit()
+
+        service.restore_voltage_yard(
+            yard_id, change_reason="Marked in error by mistake", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        entries, total = service.list_voltage_yard_audit_log(yard_id, page=1, page_size=50)
+        assert total == 2
+        by_new_value = {e.new_value: e for e in entries}
+        # The original correction entry is untouched...
+        original = by_new_value["ENTERED_IN_ERROR"]
+        assert original.old_value == "ACTIVE"
+        assert original.change_reason == "Wrong voltage level"
+        # ...and the restoration is a new, appended entry.
+        restoration = by_new_value["ACTIVE"]
+        assert restoration.old_value == "ENTERED_IN_ERROR"
+        assert restoration.change_reason == "Marked in error by mistake"
+        assert restoration.field_name == "operational_status_id"
+
+    def test_restoration_records_the_acting_user(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        self._correct(service, yard_id, reference_ids, actor_user_id)
+        db_session.commit()
+        service.restore_voltage_yard(
+            yard_id, change_reason="Restoring", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        entries, _total = service.list_voltage_yard_audit_log(yard_id, page=1, page_size=50)
+        restoration = next(e for e in entries if e.new_value == "ACTIVE")
+        assert restoration.changed_by is not None
+        assert restoration.changed_by.user_id == actor_user_id
+        assert restoration.changed_at is not None
+
+    @pytest.mark.parametrize("parent_status_code", ["ENTERED_IN_ERROR", "DECOMMISSIONED"])
+    def test_restoration_rejected_when_parent_substation_is_terminal(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+        parent_status_code: str,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        self._correct(service, yard_id, reference_ids, actor_user_id)
+        db_session.commit()
+
+        SubstationService(db_session).change_status(
+            substation_ids["NKST"],
+            operational_status_id=reference_ids.status_id_by_code[parent_status_code],
+            change_reason="Parent reached a terminal state",
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        with pytest.raises(VoltageYardRestoreParentNotActiveError):
+            service.restore_voltage_yard(
+                yard_id, change_reason="Attempted restore", actor_user_id=actor_user_id
+            )
+
+    @pytest.mark.parametrize(
+        ("from_code", "to_code"),
+        [
+            ("ACTIVE", "MOTHBALLED"),
+            ("ACTIVE", "DECOMMISSIONED"),
+            ("ACTIVE", "RETIRED"),
+            ("ENTERED_IN_ERROR", "DECOMMISSIONED"),
+            ("ENTERED_IN_ERROR", "RETIRED"),
+            ("ENTERED_IN_ERROR", "MOTHBALLED"),
+        ],
+    )
+    def test_arbitrary_status_transitions_are_rejected(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+        from_code: str,
+        to_code: str,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        if from_code == "ENTERED_IN_ERROR":
+            self._correct(service, yard_id, reference_ids, actor_user_id)
+            db_session.commit()
+
+        with pytest.raises(InvalidVoltageYardStatusTransitionError):
+            service.update_voltage_yard(
+                yard_id,
+                operational_status_id=reference_ids.status_id_by_code[to_code],
+                change_reason="Should never be permitted",
+                actor_user_id=actor_user_id,
+            )
+
+    def test_same_status_update_is_a_noop_with_no_audit_row(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        """Mirrors SubstationService.change_status' established convention."""
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+
+        service.update_voltage_yard(
+            yard_id,
+            operational_status_id=reference_ids.status_id_by_code["ACTIVE"],
+            change_reason=None,
+            actor_user_id=actor_user_id,
+        )
+        db_session.commit()
+
+        _entries, total = service.list_voltage_yard_audit_log(yard_id, page=1, page_size=50)
+        assert total == 0
+
+    def test_restore_resolves_active_through_reference_data_not_a_hardcoded_id(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        """The caller supplies no status id at all — the service resolves
+        ACTIVE by code, so seed insertion order is never depended upon."""
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        self._correct(service, yard_id, reference_ids, actor_user_id)
+        db_session.commit()
+
+        restored = service.restore_voltage_yard(
+            yard_id, change_reason="Resolved by code", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+        assert restored.operational_status_id == reference_ids.status_id_by_code["ACTIVE"]
+
+    def test_restored_yard_returns_to_the_default_list_view(
+        self,
+        db_session: Session,
+        reference_ids: ReferenceIds,
+        substation_ids: dict[str, uuid.UUID],
+        voltage_yard_ids: dict[str, uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        service = EquipmentRegistryService(db_session)
+        yard_id = voltage_yard_ids["NKST"]
+        self._correct(service, yard_id, reference_ids, actor_user_id)
+        db_session.commit()
+        assert not [
+            y
+            for y in service.list_voltage_yards(substation_id=substation_ids["NKST"])
+            if y.voltage_yard_id == yard_id
+        ]
+
+        service.restore_voltage_yard(
+            yard_id, change_reason="Restoring", actor_user_id=actor_user_id
+        )
+        db_session.commit()
+
+        assert [
+            y
+            for y in service.list_voltage_yards(substation_id=substation_ids["NKST"])
+            if y.voltage_yard_id == yard_id
+        ]
+
+    def test_restore_endpoint_requires_equipment_registry_write_permission(self) -> None:
+        """API gating is unchanged: the dedicated endpoint sits behind the same
+        permission as every other Equipment Registry write."""
+        import inspect
+
+        from app.modules.equipment_registry.router import restore_voltage_yard
+
+        actor_param = inspect.signature(restore_voltage_yard).parameters["actor"]
+        dependency = actor_param.default.dependency
+        closed_over = [
+            cell.cell_contents
+            for cell in (dependency.__closure__ or ())
+            if isinstance(cell.cell_contents, str)
+        ]
+        assert "equipment_registry.write" in closed_over

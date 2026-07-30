@@ -1,4 +1,4 @@
-import { createColumnHelper } from "@tanstack/react-table";
+import type { ColumnDef } from "@tanstack/react-table";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -10,9 +10,14 @@ interface Row {
   name: string;
 }
 
-const columns = [
-  createColumnHelper<Row>().accessor("id", { header: "ID" }),
-  createColumnHelper<Row>().accessor("name", { header: "Name" }),
+// Annotated ColumnDef<Row>[] object-literal array — the same idiom the real
+// DataTable callers use (e.g. BoundaryPocketEvaluatorPage). This contextually
+// types each column to ColumnDef<Row, unknown>, avoiding the mixed-accessor
+// value-type union (number | string) that createColumnHelper().accessor()
+// infers, which is not assignable to DataTable's ColumnDef<Row>[] prop.
+const columns: ColumnDef<Row>[] = [
+  { accessorKey: "id", header: "ID" },
+  { accessorKey: "name", header: "Name" },
 ];
 
 const ROWS: Row[] = [

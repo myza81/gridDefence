@@ -55,6 +55,7 @@ from app.modules.equipment_registry.exceptions import (
     InvalidInitialStatusError,
     InvalidTransformerInitialStatusError,
     InvalidTransformerVoltageOrderError,
+    InvalidVoltageYardStatusTransitionError,
     NotFoundError,
     ReferenceDataNotFoundError,
     SameSwitchyardTerminalsError,
@@ -63,7 +64,9 @@ from app.modules.equipment_registry.exceptions import (
     SwitchyardHasActiveReferencesError,
     TerminalVoltageLevelMismatchError,
     TransformerYardSubstationMismatchError,
+    VoltageYardChangeReasonRequiredError,
     VoltageYardNotFoundError,
+    VoltageYardRestoreParentNotActiveError,
 )
 from app.modules.equipment_registry.models import (
     Circuit,
@@ -114,6 +117,24 @@ _MINIMUM_TERMINALS = 2
 # since seed insertion order is not part of this module's contract.
 _ENTERED_IN_ERROR_STATUS_CODE = "ENTERED_IN_ERROR"
 _ACTIVE_STATUS_CODE = "ACTIVE"
+
+# Closed allow-list of legal switchyard operational_status transitions, keyed
+# by reference-data `code` (ADR-027). Exactly two edges are legal; every other
+# transition — including from any status not listed here — is rejected. This
+# mirrors Substation Registry's own `_STATUS_TRANSITIONS` precedent (ADR-014).
+#
+# `ENTERED_IN_ERROR -> ACTIVE` is the single, entity-specific exception to that
+# status's terminality across GridDefence: a switchyard's identity is
+# (substation_id, voltage_level_id) and the uniqueness rule protecting it is
+# status-blind, so a corrected yard permanently occupies its identity slot and
+# no replacement can ever be created. Without this edge an accidental
+# correction would leave GridDefence unable to represent a switchyard that
+# physically exists. Restoration is an audited forward transition, never a
+# delete reversal — the original correction entry is always preserved.
+_VOLTAGE_YARD_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    _ACTIVE_STATUS_CODE: {_ENTERED_IN_ERROR_STATUS_CODE},
+    _ENTERED_IN_ERROR_STATUS_CODE: {_ACTIVE_STATUS_CODE},
+}
 
 # TNB engineering short-name prefix convention, keyed by the HV terminal's
 # nominal voltage (Transformer Registry spec, Phase 3.5). Deliberately does
@@ -604,10 +625,21 @@ class EquipmentRegistryService:
             operational_status_id is not None
             and operational_status_id != yard.operational_status_id
         ):
+            # A same-status update never reaches here — it is an idempotent
+            # no-op with no audit row, mirroring SubstationService.change_status.
             old_code = self._require_operational_status(yard.operational_status_id)
             new_code = self._require_operational_status(operational_status_id)
+            # Closed allow-list (ADR-027) — enforced in the service so both
+            # PATCH and the dedicated restore endpoint are equally governed and
+            # no client can bypass it with an arbitrary operational_status_id.
+            if new_code not in _VOLTAGE_YARD_STATUS_TRANSITIONS.get(old_code, set()):
+                raise InvalidVoltageYardStatusTransitionError(old_code, new_code)
+            if not (change_reason or "").strip():
+                raise VoltageYardChangeReasonRequiredError(old_code, new_code)
             if new_code == _ENTERED_IN_ERROR_STATUS_CODE:
                 self._require_no_active_references_to_voltage_yard(yard)
+            if new_code == _ACTIVE_STATUS_CODE:
+                self._require_parent_substation_allows_active_yard(yard)
             self._audit_voltage_yard_field_change(
                 voltage_yard_id=voltage_yard_id,
                 field_name="operational_status_id",
@@ -624,6 +656,52 @@ class EquipmentRegistryService:
             self.db.flush()
 
         return yard
+
+    def _require_parent_substation_allows_active_yard(
+        self, yard: SubstationVoltageYard
+    ) -> None:
+        """A switchyard may not be Active underneath a substation that has
+        itself reached a terminal lifecycle state (ADR-027).
+
+        Terminality is read from the shared `operational_status.is_terminal`
+        reference-data flag rather than a hardcoded list of codes or ids, so
+        this stays correct if the status catalogue changes (CLAUDE.md §11.3).
+        Today that flag covers DECOMMISSIONED, RETIRED and ENTERED_IN_ERROR.
+        """
+        substation = self.repo.get_substation_by_id(yard.substation_id)
+        if substation is None:
+            raise SubstationNotFoundError(yard.substation_id)
+        status = self.reference_data.get_operational_status(substation.operational_status_id)
+        if status is None:
+            raise ReferenceDataNotFoundError(
+                "operational_status_id", substation.operational_status_id
+            )
+        if status.is_terminal:
+            raise VoltageYardRestoreParentNotActiveError(substation.mnemonic, status.code)
+
+    def restore_voltage_yard(
+        self,
+        voltage_yard_id: uuid.UUID,
+        *,
+        change_reason: str | None,
+        actor_user_id: uuid.UUID,
+    ) -> SubstationVoltageYard:
+        """Restore an Entered-in-Error switchyard to Active (ADR-027).
+
+        A deterministic lifecycle command, not a general status editor: the
+        target is always ACTIVE, resolved by code from reference data. It
+        delegates to `update_voltage_yard` so the closed transition allow-list,
+        the mandatory reason, the parent-substation precondition and the audit
+        entry are applied by exactly one code path. The original Entered-in-
+        Error audit row is never modified — restoration appends a new one.
+        """
+        active_status_id = self._require_active_operational_status_id()
+        return self.update_voltage_yard(
+            voltage_yard_id,
+            operational_status_id=active_status_id,
+            change_reason=change_reason,
+            actor_user_id=actor_user_id,
+        )
 
     def list_voltage_yards(
         self,

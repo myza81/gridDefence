@@ -28,7 +28,10 @@ interface VoltageYardRowProps {
  * "Mark as Entered in Error" (deletion/correction policy, Phase 3
  * follow-up) corrects a mistakenly-created switchyard — never a delete
  * button, since no hard delete exists for engineering registry records
- * (CLAUDE.md §11.6). Hidden once the yard is already corrected. */
+ * (CLAUDE.md §11.6). Hidden once the yard is already corrected, where it is
+ * replaced by "Restore Voltage Yard" (ADR-027): the two lifecycle actions
+ * are mutually exclusive, each requires a reason and an explicit
+ * confirmation, and neither is ever presented as a delete/undelete. */
 function VoltageYardRow({
   yard,
   canWrite,
@@ -41,6 +44,10 @@ function VoltageYardRow({
   const [longitude, setLongitude] = useState(yard.longitude === null ? "" : String(yard.longitude));
   const [error, setError] = useState<string | null>(null);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [restoreReason, setRestoreReason] = useState("");
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setCommissioningDate(yard.commissioning_date ?? "");
@@ -69,9 +76,12 @@ function VoltageYardRow({
     mutationFn: () =>
       equipmentRegistryApi.updateVoltageYard(yard.voltage_yard_id, {
         operational_status_id: enteredInErrorStatusId,
+        // Mandatory in both lifecycle directions (ADR-027).
+        change_reason: correctionReason,
       }),
     onSuccess: () => {
       setCorrectionError(null);
+      setCorrectionReason("");
       onSaved();
     },
     onError: (err: unknown) =>
@@ -80,18 +90,109 @@ function VoltageYardRow({
       ),
   });
 
+  /* Restoration (ADR-027) — a switchyard's identity is
+     (substation, voltage level) and the uniqueness rule protecting it is
+     status-blind, so a corrected yard can never be replaced. An accidental
+     correction is therefore reversed with this explicit, audited command
+     rather than being permanent. It always targets Active; it is never a
+     delete reversal, and it never removes the original correction entry. */
+  const restoreMutation = useMutation({
+    mutationFn: () =>
+      equipmentRegistryApi.restoreVoltageYard(yard.voltage_yard_id, {
+        change_reason: restoreReason,
+      }),
+    onSuccess: () => {
+      setRestoreError(null);
+      setRestoreReason("");
+      setRestoreMessage(`${yard.voltage_level_label} switchyard restored to Active.`);
+      onSaved();
+    },
+    onError: (err: unknown) =>
+      setRestoreError(
+        err instanceof ApiError ? err.message : "Failed to restore switchyard.",
+      ),
+  });
+
+  /* Exactly one lifecycle action is offered at a time: an active yard can be
+     corrected, an entered-in-error yard can be restored. Never both. */
   const correctionControl =
     canWrite && !isEnteredInError && enteredInErrorStatusId !== undefined ? (
-      <>
+      <div>
+        <label htmlFor={`yard-correction-reason-${yard.voltage_yard_id}`}>
+          Reason for marking {yard.voltage_level_label} as Entered in Error
+        </label>
+        <br />
+        <input
+          id={`yard-correction-reason-${yard.voltage_yard_id}`}
+          aria-label={`Reason for marking ${yard.voltage_level_label} as Entered in Error`}
+          value={correctionReason}
+          onChange={(e) => setCorrectionReason(e.target.value)}
+        />
         <button
           type="button"
-          onClick={() => correctionMutation.mutate()}
+          onClick={() => {
+            if (!correctionReason.trim()) {
+              setCorrectionError("A reason is required to mark this switchyard as Entered in Error.");
+              return;
+            }
+            if (
+              !window.confirm(
+                `Mark the ${yard.voltage_level_label} switchyard as Entered in Error? ` +
+                  "It will be hidden from active views. This is recorded in the audit log.",
+              )
+            ) {
+              return;
+            }
+            correctionMutation.mutate();
+          }}
           disabled={correctionMutation.isPending}
         >
           Mark as Entered in Error
         </button>
         {correctionError && <p role="alert">{correctionError}</p>}
-      </>
+      </div>
+    ) : null;
+
+  const restoreControl =
+    canWrite && isEnteredInError ? (
+      <div>
+        <p>
+          This switchyard is marked Entered in Error. Restoring it returns it to{" "}
+          <strong>Active</strong>. Its audit history is preserved.
+        </p>
+        <label htmlFor={`yard-restore-reason-${yard.voltage_yard_id}`}>
+          Reason for restoring {yard.voltage_level_label}
+        </label>
+        <br />
+        <input
+          id={`yard-restore-reason-${yard.voltage_yard_id}`}
+          aria-label={`Reason for restoring ${yard.voltage_level_label}`}
+          value={restoreReason}
+          onChange={(e) => setRestoreReason(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            if (!restoreReason.trim()) {
+              setRestoreError("A reason is required to restore this switchyard.");
+              return;
+            }
+            if (
+              !window.confirm(
+                `Restore the ${yard.voltage_level_label} switchyard to Active? ` +
+                  "This is recorded in the audit log; the original correction entry is kept.",
+              )
+            ) {
+              return;
+            }
+            restoreMutation.mutate();
+          }}
+          disabled={restoreMutation.isPending}
+        >
+          Restore Voltage Yard
+        </button>
+        {restoreError && <p role="alert">{restoreError}</p>}
+      </div>
     ) : null;
 
   if (!canWrite) {
@@ -159,7 +260,9 @@ function VoltageYardRow({
         Save
       </button>
       {error && <p role="alert">{error}</p>}
+      {restoreMessage && <p role="status">{restoreMessage}</p>}
       {correctionControl}
+      {restoreControl}
     </li>
   );
 }

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<!--
+  GridDefence — Engineering Operations Centre (Dashboard), VERSION 1 (VISUAL CONCEPT FOR REVIEW ONLY)
+  Status: PROPOSED — NOT YET APPROVED — NOT IMPLEMENTATION.
+  Purpose: the engineer's primary landing page after login. Answers "what engineering work
+           needs attention today?" — an engineering workspace, NOT a management/KPI dashboard.
+  Hosted in the approved Application Shell V2 (unchanged). Static review mockup — NOT product
+  frontend; no components/tokens/CSS architecture. Consistent with network-model-visualisation-v2.
+  Grounded in: 01-engineering-philosophy.md, 03-system-workflow.md, continuous-evaluation-architecture.md,
+               findings-and-publication-governance-architecture.md, operational-correlation-architecture.md,
+               EDR-004/EDR-006 (decision support, present-not-conclude), workspace/navigation/shell/theme docs.
+  Engineering honesty: unavailable / not-yet-done states are stated plainly; planned modules marked planned.
+  Sample content illustrative only.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GridDefence — Engineering Operations Centre (V1 Concept)</title>
+<style>
+  :root{
+    --navy:#0F1E3D; --navy-soft:#26364F; --muted:#5E6D88; --faint:#8B98AD;
+    --primary:#2540D8; --primary-strong:#1E36BE; --link:#2560E6;
+    --surface:#FFFFFF; --app-bg:#EFF3FA; --scope-band:#E9EFFB; --panel-tint:#F6F9FF;
+    --primary-wash:#E7ECFE; --border:#E2E7F1; --border-strong:#D2DAE8; --row-hover:#F5F8FE;
+    --ok:#1F8A54; --ok-dot:#22A45D; --warn:#B5730E; --warn-dot:#D9880F; --warn-strong:#96600B;
+    --crit:#C2410C; --info:#2560E6; --idle:#66738C; --idle-dot:#98A4BA; --draft-dot:#C98A1C;
+    --v500:#1E2A78; --v275:#2540D8; --v132:#6E8BE8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--app-bg); color:var(--navy);
+    font-family:'Inter','Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif; font-size:13px; line-height:1.42; -webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums}
+
+  .app{height:1566px; display:grid; grid-template-columns:250px 1fr; grid-template-rows:24px 56px 1fr 30px;
+    grid-template-areas:"banner banner" "header header" "sidebar main" "status status"}
+
+  .banner{grid-area:banner; background:#E7EBF3; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:9px; padding:0 16px; font-size:11px; letter-spacing:.05em; color:#4C5A73; font-weight:600}
+  .banner .d{width:7px;height:7px;border-radius:50%;background:var(--draft-dot);flex:none}
+  .banner .sep{color:var(--faint); font-weight:500}
+
+  /* ===== APPROVED SHELL V2 (unchanged) ===== */
+  .header{grid-area:header; background:var(--surface); border-bottom:1px solid var(--border); box-shadow:0 1px 2px rgba(16,30,61,.04); display:flex; align-items:center; gap:20px; padding:0 18px; z-index:5}
+  .brand{display:flex; align-items:center; gap:10px; width:216px; flex:none}
+  .brand .mark{width:26px;height:26px;flex:none}
+  .brand .word{font-weight:800; letter-spacing:.3px; font-size:15px}
+  .brand .word b{color:var(--navy)} .brand .word span{color:var(--primary)}
+  .search{flex:1; max-width:500px; display:flex; align-items:center; gap:8px; background:var(--panel-tint); border:1px solid var(--border); border-radius:8px; padding:7px 11px; color:var(--faint)}
+  .search input{border:0;background:transparent;outline:0;width:100%;font:inherit;color:var(--navy-soft)}
+  .search .kbd{border:1px solid var(--border-strong);border-radius:4px;padding:1px 5px;font-size:11px;color:var(--faint);background:#fff}
+  .header .spacer{flex:1}
+  .h-actions{display:flex;align-items:center;gap:6px}
+  .icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid transparent;display:flex;align-items:center;justify-content:center;color:var(--navy-soft);position:relative}
+  .badge{position:absolute;top:3px;right:4px;min-width:15px;height:15px;background:var(--primary);color:#fff;border-radius:8px;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px;border:2px solid #fff}
+  .divider-v{width:1px;height:26px;background:var(--border);margin:0 4px}
+  .user{display:flex;align-items:center;gap:9px;padding:4px 6px 4px 4px;border-radius:8px}
+  .avatar{width:30px;height:30px;border-radius:50%;flex:none;background:linear-gradient(180deg,#3D57E6,#2540D8);color:#fff;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center}
+  .user .who .n{font-weight:600;font-size:12.5px;color:var(--navy)}
+  .user .who .r{font-size:11px;color:var(--muted)}
+
+  .sidebar{grid-area:sidebar; background:var(--surface); border-right:1px solid var(--border); padding:10px 12px; overflow:hidden}
+  .nav-label{font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:var(--faint); font-weight:700; padding:12px 10px 5px}
+  .nav-item{position:relative; display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; color:var(--navy-soft); font-weight:500; margin:1px 0}
+  .nav-item svg{width:17px;height:17px;flex:none;color:var(--muted)}
+  .nav-item.active{background:var(--primary-wash); color:var(--primary-strong); font-weight:600}
+  .nav-item.active svg{color:var(--primary)}
+  .nav-item.active::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:3px;border-radius:0 3px 3px 0;background:var(--primary)}
+  .nav-item .caret{margin-left:auto;color:var(--faint)}
+  .sub{margin:2px 0 4px 15px; border-left:1px solid var(--border); padding-left:9px}
+  .sub .nav-item{padding:6px 10px; font-size:12.5px}
+  .nav-count{margin-left:auto; font-size:11px; color:var(--faint); font-weight:600}
+
+  .main{grid-area:main; display:flex; flex-direction:column; min-width:0; overflow:hidden}
+  .scope-bar{background:var(--scope-band); border-bottom:1px solid var(--border-strong); display:flex; align-items:center; gap:12px; padding:7px 20px; flex:none}
+  .crumbs{display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12.5px}
+  .crumbs .here{color:var(--navy); font-weight:600}
+  .scope-spacer{flex:1}
+  .scope-tag{display:inline-flex; align-items:center; gap:6px; font-size:10px; letter-spacing:.08em; text-transform:uppercase; font-weight:700; color:#3B4E77}
+  .scope-tag svg{width:13px;height:13px}
+  .scope-pill{display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid #C9D6F1; border-radius:7px; padding:4px 10px; color:var(--navy-soft); font-size:12px; font-weight:600}
+  .scope-pill .k{color:var(--muted); font-weight:500}
+
+  /* ===== DASHBOARD WORKSPACE ===== */
+  .dash{flex:1; overflow:auto; padding:16px 20px 20px; display:flex; flex-direction:column; gap:14px}
+  .dash-top{display:flex; align-items:flex-end; gap:16px}
+  .dash-top h1{margin:0; font-size:20px; font-weight:700; letter-spacing:-.2px; color:var(--navy)}
+  .dash-top .sub{margin-top:3px; color:var(--muted); font-size:12.5px}
+  .dash-top .clock{margin-left:auto; text-align:right; color:var(--muted); font-size:12px}
+  .dash-top .clock b{color:var(--navy-soft)}
+
+  .actions-row{display:flex; gap:8px; flex-wrap:wrap}
+  .ebtn{display:inline-flex; align-items:center; gap:8px; height:36px; padding:0 14px; border-radius:9px; font:inherit; font-weight:600; font-size:12.5px; border:1px solid var(--border-strong); background:#fff; color:var(--navy-soft)}
+  .ebtn svg{width:15px;height:15px;color:var(--muted)}
+  .ebtn.primary{background:var(--primary); border-color:var(--primary); color:#fff} .ebtn.primary svg{color:#fff}
+
+  .dash-main{display:grid; grid-template-columns:1.62fr 1fr; gap:14px; align-items:start}
+  .col{display:flex; flex-direction:column; gap:14px}
+
+  .card{background:#fff; border:1px solid var(--border); border-radius:11px; overflow:hidden}
+  .card.attn{border-color:#E7CFA6}
+  .card-h{display:flex; align-items:center; gap:9px; padding:10px 14px; border-bottom:1px solid var(--border)}
+  .card-h .ic{width:24px;height:24px;border-radius:7px;background:var(--primary-wash);display:flex;align-items:center;justify-content:center;color:var(--primary)}
+  .card-h.warm .ic{background:#FBF1DF;color:#B5730E}
+  .card-h .ic svg{width:14px;height:14px}
+  .card-h .t{font-weight:700; color:var(--navy); font-size:13px}
+  .card-h .ct{margin-left:auto; display:flex; align-items:center; gap:9px}
+  .card-h .pill{font-size:11px; font-weight:700; color:var(--muted); background:#EEF1F7; border:1px solid var(--border); border-radius:6px; padding:2px 8px}
+  .card-h .more{color:var(--link); font-weight:600; font-size:12px}
+
+  /* attention items */
+  .att{display:flex; align-items:flex-start; gap:11px; padding:10px 14px}
+  .att + .att{border-top:1px solid var(--border)}
+  .att:hover{background:var(--row-hover)}
+  .sev{flex:none; margin-top:1px; width:70px; display:flex; align-items:center; gap:6px; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.03em}
+  .sev .mk{width:12px;height:12px;flex:none;display:flex;align-items:center;justify-content:center}
+  .sev.c{color:var(--crit)} .sev.w{color:var(--warn-strong)} .sev.i{color:var(--info)}
+  .att .body{flex:1; min-width:0}
+  .att .body .h{color:var(--navy); font-weight:600; font-size:12.5px}
+  .att .body .m{color:var(--muted); font-size:11.5px; margin-top:1px}
+  .att .act{flex:none; align-self:center; color:var(--link); font-weight:700; font-size:12px; white-space:nowrap}
+  .att-sum{display:flex; gap:14px; padding:8px 14px; background:var(--panel-tint); border-top:1px solid var(--border); font-size:11.5px; color:var(--muted)}
+  .att-sum b{color:var(--navy-soft)}
+
+  /* context rows */
+  .ctx{display:flex; justify-content:space-between; gap:12px; padding:9px 14px; font-size:12.5px}
+  .ctx + .ctx{border-top:1px solid var(--border)}
+  .ctx .k{color:var(--muted)}
+  .ctx .v{color:var(--navy); font-weight:600; text-align:right; font-variant-numeric:tabular-nums}
+  .ctx .v .s{display:block; color:var(--faint); font-weight:500; font-size:11px}
+  .ctx .v.warnv{color:var(--warn-strong)}
+  .prog{width:120px; height:6px; border-radius:3px; background:var(--border); overflow:hidden; display:inline-block; vertical-align:middle; margin-right:8px}
+  .prog i{display:block; height:100%; background:var(--primary); border-radius:3px}
+
+  /* mini severity bars (continuous eval) */
+  .ce-b{padding:10px 14px}
+  .ce-row{display:flex; align-items:center; gap:9px; margin:7px 0; font-size:12.5px}
+  .ce-row .lab{width:74px; color:var(--navy-soft); font-weight:600; display:flex; align-items:center; gap:6px}
+  .ce-row .bar{flex:1; height:8px; border-radius:4px; background:#EEF1F7; overflow:hidden}
+  .ce-row .bar i{display:block;height:100%;border-radius:4px}
+  .ce-row .n{width:18px; text-align:right; font-weight:700; color:var(--navy); font-variant-numeric:tabular-nums}
+
+  /* notices */
+  .notice{display:flex; align-items:flex-start; gap:10px; padding:9px 14px; font-size:12.5px}
+  .notice + .notice{border-top:1px solid var(--border)}
+  .notice svg{width:15px;height:15px;flex:none;margin-top:1px}
+  .notice .tx{flex:1;color:var(--navy-soft)} .notice .tx b{color:var(--navy)}
+  .notice .lk{color:var(--link);font-weight:600;white-space:nowrap}
+  .n-warn svg{color:var(--warn)} .n-info svg{color:var(--idle)} .n-ok svg{color:var(--ok)}
+
+  /* work-in-progress rows */
+  .wip{display:flex; align-items:center; gap:11px; padding:9px 14px; font-size:12.5px}
+  .wip + .wip{border-top:1px solid var(--border)}
+  .wip .ic{width:15px;height:15px;flex:none;color:var(--muted)}
+  .wip .b{flex:1;min-width:0}
+  .wip .b .t{color:var(--navy);font-weight:600}
+  .wip .b .m{color:var(--faint);font-size:11px}
+  .wip .st{font-size:10.5px;font-weight:700;border-radius:5px;padding:2px 7px}
+  .st.draft{background:#FBF1DF;color:#96600B} .st.edit{background:#EEF1F7;color:#5A6980}
+  .wip .go{color:var(--link);font-weight:700;font-size:12px}
+
+  /* activity timeline */
+  .act-row{display:flex; gap:11px; padding:8px 14px; font-size:12.5px}
+  .act-row + .act-row{border-top:1px solid var(--border)}
+  .act-row .tm{width:74px; flex:none; color:var(--faint); font-variant-numeric:tabular-nums; font-size:11.5px}
+  .act-row .tx{flex:1; color:var(--navy-soft)} .act-row .tx b{color:var(--navy); font-weight:600}
+  .act-row .who{color:var(--faint); font-size:11px; margin-top:1px}
+
+  /* quick access module grid */
+  .modwrap{margin-top:2px}
+  .mod-grid{display:grid; grid-template-columns:repeat(5,1fr); gap:11px}
+  .mod{border:1px solid var(--border); border-radius:10px; padding:12px 13px; background:#fff; display:flex; flex-direction:column; gap:7px; min-height:88px}
+  .mod:hover{background:var(--panel-tint)}
+  .mod .top{display:flex; align-items:center; gap:9px}
+  .mod .mi{width:30px;height:30px;border-radius:8px;background:var(--primary-wash);display:flex;align-items:center;justify-content:center;color:var(--primary)}
+  .mod .mi svg{width:16px;height:16px}
+  .mod .nm{font-weight:700; color:var(--navy); font-size:12.5px; line-height:1.2}
+  .mod .meta{color:var(--muted); font-size:11px; margin-top:auto}
+  .mod .meta b{color:var(--navy-soft); font-weight:700}
+  .mod.planned{background:#FAFBFD; border-style:dashed; opacity:.85}
+  .mod.planned .mi{background:#EEF1F7; color:var(--faint)}
+  .mod.planned .nm{color:var(--navy-soft)}
+  .mod .tag{align-self:flex-start; font-size:9.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--faint); background:#EEF1F7; border:1px solid var(--border); border-radius:5px; padding:1px 6px}
+
+  .status-bar{grid-area:status; background:var(--surface); border-top:1px solid var(--border); display:flex; align-items:center; gap:18px; padding:0 18px; color:var(--muted); font-size:11.5px}
+  .status-bar .env{display:flex;align-items:center;gap:7px;font-weight:700;color:var(--navy-soft)}
+  .status-bar .live{width:7px;height:7px;border-radius:50%;background:var(--ok-dot)}
+  .st-item{display:flex;align-items:center;gap:7px} .st-item svg{width:13px;height:13px;color:var(--muted)} .st-item b{color:var(--navy-soft);font-weight:600}
+  .st-item.link b{color:var(--link)} .st-spacer{flex:1}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="banner"><span class="d"></span>PROPOSED — NOT YET APPROVED — NOT IMPLEMENTATION <span class="sep">·</span> Engineering Operations Centre V1 <span class="sep">·</span> hosted in approved Application Shell V2 <span class="sep">·</span> visual concept for review only</div>
+
+  <header class="header">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" fill="none"><path d="M16 2 4 6.5v8.7C4 23 9.2 28.3 16 30c6.8-1.7 12-7 12-14.8V6.5L16 2Z" fill="#EEF2FE" stroke="#2540D8" stroke-width="1.8"/><path d="M16 8.5 11 22h2.6l.9-2.7h3l.9 2.7H21L16 8.5Zm-.9 6.9.9-2.8.9 2.8h-1.8Z" fill="#0F1E3D"/><path d="M12.5 12.5 16 10l3.5 2.5" stroke="#2540D8" stroke-width="1.3" stroke-linecap="round"/></svg>
+      <div class="word"><b>GRID</b><span>DEFENCE</span></div>
+    </div>
+    <div class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2" stroke-linecap="round"/></svg><input placeholder="Search substations, equipment, schemes, buses…"><span class="kbd">/</span></div>
+    <div class="spacer"></div>
+    <div class="h-actions">
+      <div class="icon-btn" title="Unread engineering impacts (3)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" stroke-linecap="round"/><path d="M13.7 21a2 2 0 0 1-3.4 0" stroke-linecap="round"/></svg><span class="badge">3</span></div>
+      <div class="icon-btn" title="Help"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5A2.6 2.6 0 0 1 14 11c0 1.7-2 2-2 3.2" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg></div>
+      <div class="divider-v"></div>
+      <div class="user"><div class="avatar">SP</div><div class="who"><div class="n">System Planning</div><div class="r">System Planning Engineer</div></div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2"><path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg></div>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</div>
+    <div class="nav-label">Engineering Domains</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Engineering Registry<svg class="caret" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" stroke-linecap="round"/></svg></div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M6.7 7.4 10.8 16M17.3 7.4 13.2 16M7 6h10" stroke-linecap="round"/></svg>Network Model</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 5 5.7v5.6C5 16 8 19.4 12 21c4-1.6 7-5 7-9.7V5.7L12 3Z" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>Defence Schemes</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2.5 6 4-13L18 12h3" stroke-linecap="round" stroke-linejoin="round"/></svg>Continuous Evaluation</div>
+    <div class="nav-label">System</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v6h6" stroke-linecap="round"/></svg>Reports</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4" stroke-linecap="round"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>Administration</div>
+  </aside>
+
+  <div class="main">
+    <div class="scope-bar">
+      <nav class="crumbs"><span class="here">Engineering Operations Centre</span></nav>
+      <div class="scope-spacer"></div>
+      <span class="scope-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke-linecap="round"/></svg>Engineering scope</span>
+      <span class="scope-pill"><span class="k">GM Zone</span>All</span>
+      <span class="scope-pill"><span class="k">Snapshot</span>Peak · 2026-06-15</span>
+      <span class="scope-pill"><span class="k">Topology</span>v18</span>
+      <span class="scope-pill"><span class="k">Registry</span>Current</span>
+    </div>
+
+    <div class="dash">
+      <div class="dash-top">
+        <div>
+          <h1>Engineering Operations Centre</h1>
+          <div class="sub">What engineering work needs attention today — for <b>System Planning Engineer</b></div>
+        </div>
+        <div class="clock">Monday, 27 Jul 2026 · <b>09:41</b><br>Last import activated <b>2026-06-15 09:12</b></div>
+      </div>
+
+      <!-- ENGINEERING ACTIONS -->
+      <div class="actions-row">
+        <button class="ebtn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16" stroke-linecap="round" stroke-linejoin="round"/></svg>Import latest PSS/E</button>
+        <button class="ebtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6.6 7.6 11 16M17.4 7.6 13 16" stroke-linecap="round"/></svg>Open Network Model</button>
+        <button class="ebtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9M3 20l1-4 11-11 3 3-11 11-4 1Z" stroke-linecap="round" stroke-linejoin="round"/></svg>Continue draft scheme</button>
+        <button class="ebtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2.5 6 4-13L18 12h3" stroke-linecap="round" stroke-linejoin="round"/></svg>Review Continuous Evaluation</button>
+        <button class="ebtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" stroke-linecap="round"/></svg>Browse Registries</button>
+        <button class="ebtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v6h6M9 13h6M9 17h4" stroke-linecap="round"/></svg>Generate Engineering Report</button>
+      </div>
+
+      <div class="dash-main">
+        <!-- LEFT COLUMN -->
+        <div class="col">
+          <!-- TIER 1 — REQUIRES ATTENTION -->
+          <div class="card attn">
+            <div class="card-h warm">
+              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span class="t">Requires attention</span>
+              <span class="ct"><span class="pill">5 items</span><span class="more">View all ›</span></span>
+            </div>
+            <div class="att">
+              <span class="sev c"><span class="mk"><svg viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="2" fill="#C2410C"/></svg></span>Critical</span>
+              <div class="body"><div class="h">Transformer KLNG&nbsp;T2 removed in Topology v18 — invalidates a UFLS v4 Stage 2 assignment</div><div class="m">Continuous Evaluation · detected on import activation · engineer decides whether a new draft is needed</div></div>
+              <span class="act">Review finding ›</span>
+            </div>
+            <div class="att">
+              <span class="sev w"><span class="mk"><svg viewBox="0 0 12 12"><path d="M6 1 11 11 H1 Z" fill="#B5730E"/></svg></span>Warning</span>
+              <div class="body"><div class="h">DMSR275 — inconsistent identity (was correlated, now differs)</div><div class="m">Operational Correlation · routed for engineering review, not auto-resolved</div></div>
+              <span class="act">Open review ›</span>
+            </div>
+            <div class="att">
+              <span class="sev w"><span class="mk"><svg viewBox="0 0 12 12"><path d="M6 1 11 11 H1 Z" fill="#B5730E"/></svg></span>Warning</span>
+              <div class="body"><div class="h">1 unmatched operational bus (Bus 40987) — no registry object</div><div class="m">Operational Correlation · absence of match, not confirmed absence of asset</div></div>
+              <span class="act">Open review ›</span>
+            </div>
+            <div class="att">
+              <span class="sev i"><span class="mk"><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#2560E6"/></svg></span>Info</span>
+              <div class="body"><div class="h">UFLS v5 draft incomplete — Stage 3 has no shedding action</div><div class="m">Publication prerequisite unmet · your working draft · last edited 2h ago</div></div>
+              <span class="act">Continue draft ›</span>
+            </div>
+            <div class="att">
+              <span class="sev i"><span class="mk"><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#2560E6"/></svg></span>Info</span>
+              <div class="body"><div class="h">Import Batch 2026-07-B running (62%) — 1 earlier batch failed validation</div><div class="m">PSS/E Integration · Batch 2026-07-A did not pass structural validation</div></div>
+              <span class="act">View import ›</span>
+            </div>
+            <div class="att-sum"><span><b>1</b> critical</span><span><b>2</b> warnings</span><span><b>2</b> informational</span><span style="margin-left:auto;color:var(--faint)">Severity reflects authoritative findings — GridDefence reports; the engineer decides.</span></div>
+          </div>
+
+          <!-- TIER 3 — WORK IN PROGRESS -->
+          <div class="card">
+            <div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M3 20l1-4 11-11 3 3-11 11-4 1Z" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t">Work in progress</span><span class="ct"><span class="pill">4</span></span></div>
+            <div class="wip"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 5 5.7v5.6C5 16 8 19.4 12 21c4-1.6 7-5 7-9.7V5.7L12 3Z"/></svg><div class="b"><div class="t">UFLS scheme — v5</div><div class="m">Draft · last edited 2h ago · by you · Stage 3 incomplete</div></div><span class="st draft">Draft</span><span class="go">Continue ›</span></div>
+            <div class="wip"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 5 5.7v5.6C5 16 8 19.4 12 21c4-1.6 7-5 7-9.7V5.7L12 3Z"/></svg><div class="b"><div class="t">EMLS scheme — v2</div><div class="m">Draft · last edited yesterday · by you</div></div><span class="st draft">Draft</span><span class="go">Continue ›</span></div>
+            <div class="wip"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6"/></svg><div class="b"><div class="t">Substation Registry</div><div class="m">4 edits today · by you</div></div><span class="st edit">Edited</span><span class="go">View ›</span></div>
+            <div class="wip"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6"/></svg><div class="b"><div class="t">Equipment Registry</div><div class="m">2 edits today · by A. Rahman</div></div><span class="st edit">Edited</span><span class="go">View ›</span></div>
+          </div>
+
+          <!-- TIER 3 — RECENT ACTIVITY -->
+          <div class="card">
+            <div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 2M21 12a9 9 0 1 1-3-6.7" stroke-linecap="round"/></svg></span><span class="t">Recent engineering activity</span><span class="ct"><span class="more">Full audit ›</span></span></div>
+            <div class="act-row"><span class="tm">09:12</span><div class="tx"><b>Operational Snapshot activated</b> — Topology v18 · Peak 2026-06-15<div class="who">PSS/E Integration · System</div></div></div>
+            <div class="act-row"><span class="tm">08:40</span><div class="tx"><b>UFLS v4 published</b> — supersedes v3 (auto)<div class="who">Defence Schemes · System Planning Engineer</div></div></div>
+            <div class="act-row"><span class="tm">Yesterday</span><div class="tx"><b>Manual override created</b> — island analysis · Klang pocket<div class="who">Network Model · reason recorded</div></div></div>
+            <div class="act-row"><span class="tm">Yesterday</span><div class="tx"><b>Correlation review</b> — DMSR275 flagged inconsistent<div class="who">Operational Correlation</div></div></div>
+            <div class="act-row"><span class="tm">2 days ago</span><div class="tx"><b>Substation registered</b> — SMYH (Semenyih) · Planned<div class="who">Substation Registry · System Planning Engineer</div></div></div>
+          </div>
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div class="col">
+          <!-- TIER 2 — OPERATIONAL CONTEXT -->
+          <div class="card">
+            <div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l2.5 2.5M16.5 16.5 19 19M19 5l-2.5 2.5M7.5 16.5 5 19" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5"/></svg></span><span class="t">Operational context</span></div>
+            <div class="ctx"><span class="k">Engineering scope</span><span class="v">GM Zone: All</span></div>
+            <div class="ctx"><span class="k">Topology snapshot</span><span class="v">Peak · 2026-06-15<span class="s">v18 · Current</span></span></div>
+            <div class="ctx"><span class="k">Last successful import</span><span class="v">2026-06-15 09:12<span class="s">Batch 2026-06-A</span></span></div>
+            <div class="ctx"><span class="k">Import in progress</span><span class="v"><span class="prog"><i style="width:62%"></i></span>62%<span class="s">Batch 2026-07-B</span></span></div>
+            <div class="ctx"><span class="k">Correlation coverage</span><span class="v warnv">94%<span class="s">3 objects await review</span></span></div>
+            <div class="ctx"><span class="k">Registry version</span><span class="v">Current</span></div>
+          </div>
+
+          <!-- CONTINUOUS EVALUATION -->
+          <div class="card">
+            <div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h3l2.5 6 4-13L18 12h3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t">Continuous Evaluation</span><span class="ct"><span class="more">Open ›</span></span></div>
+            <div class="ce-b">
+              <div class="ce-row"><span class="lab"><span style="width:9px;height:9px;background:#C2410C;border-radius:2px;display:inline-block"></span>Critical</span><span class="bar"><i style="width:20%;background:#C2410C"></i></span><span class="n">1</span></div>
+              <div class="ce-row"><span class="lab"><span style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:9px solid #B5730E;display:inline-block"></span>Warning</span><span class="bar"><i style="width:40%;background:#D9880F"></i></span><span class="n">2</span></div>
+              <div class="ce-row"><span class="lab"><span style="width:9px;height:9px;background:#2560E6;border-radius:50%;display:inline-block"></span>Info</span><span class="bar"><i style="width:0%;background:#2560E6"></i></span><span class="n">0</span></div>
+              <div style="margin-top:8px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:7px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1F8A54" stroke-width="2"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>Detectors active · last run on import <b style="color:var(--navy-soft)">&nbsp;09:12</b></div>
+            </div>
+          </div>
+
+          <!-- ENGINEERING NOTICES -->
+          <div class="card">
+            <div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8h.01M11 12h1v4h1M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t">Engineering notices</span></div>
+            <div class="notice n-warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="tx"><b>1 import batch failed validation</b> — Batch 2026-07-A (structural)</span><span class="lk">View ›</span></div>
+            <div class="notice n-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3Z" stroke-linecap="round" stroke-linejoin="round" transform="scale(.9) translate(1.2 1.2)"/></svg><span class="tx"><b>1 substation without registry coordinates</b> — cannot appear on Geographic Map</span><span class="lk">Fix ›</span></div>
+            <div class="notice n-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01" stroke-linecap="round"/></svg><span class="tx"><b>Sensitive Customer Registry</b> — planned, not yet available</span></div>
+            <div class="notice n-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="tx">No missing required data in the active snapshot.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TIER 4 — QUICK ACCESS / NAVIGATION -->
+      <div class="modwrap">
+        <div class="card-h" style="border:0;padding:2px 2px 8px"><span class="t" style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Quick access — engineering modules</span></div>
+        <div class="mod-grid">
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/></svg></span><span class="nm">Substation<br>Registry</span></div><div class="meta"><b>46</b> substations</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/><path d="M11 7h6v6" stroke-linecap="round"/></svg></span><span class="nm">Equipment<br>Registry</span></div><div class="meta"><b>318</b> items</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6.6 7.6 11 16M17.4 7.6 13 16" stroke-linecap="round"/></svg></span><span class="nm">Network<br>Model</span></div><div class="meta">Topology <b>v18</b></div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" stroke-linejoin="round"/></svg></span><span class="nm">UFLS</span></div><div class="meta"><b>v4</b> · Active</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M5 10l7-7 7 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">UVLS</span></div><div class="meta">— No active version</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 5 5.7v5.6C5 16 8 19.4 12 21c4-1.6 7-5 7-9.7V5.7L12 3Z"/></svg></span><span class="nm">EMLS</span></div><div class="meta"><b>v1</b> · Active</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2.5 6 4-13L18 12h3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="nm">Continuous<br>Evaluation</span></div><div class="meta"><b>3</b> findings</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v6h6" stroke-linecap="round"/></svg></span><span class="nm">Reports</span></div><div class="meta">Engineering reports</div></div>
+          <div class="mod"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M8 9V6a4 4 0 0 1 8 0v3" stroke-linecap="round"/></svg></span><span class="nm">Relay / ALSF<br>Registry</span></div><div class="meta"><b>96</b> functions</div></div>
+          <div class="mod planned"><div class="top"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg></span><span class="nm">Sensitive<br>Customers</span></div><span class="tag">Planned</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="status-bar">
+    <span class="env"><span class="live"></span>Environment · Production</span>
+    <span class="st-item link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg><b>3</b>&nbsp;unread engineering impacts</span>
+    <span class="st-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg>PSS/E import · Batch <b>2026-07-B</b> · 62%</span>
+    <span class="st-spacer"></span>
+    <span class="st-item">Topology <b>v18</b> · Snapshot <b>2026-06-15</b></span>
+    <span class="st-item">Session <b>System Planning Engineer</b></span>
+  </footer>
+
+</div>
+</body>
+</html>

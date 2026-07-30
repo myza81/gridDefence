@@ -486,7 +486,14 @@ class EquipmentRegistryRepository:
             )
         ).scalar_one()
 
-        stmt = stmt.order_by(Transformer.transformer_number).offset(offset).limit(limit)
+        stmt = (
+            stmt.order_by(
+                Transformer.transformer_number,
+                Transformer.transformer_id,
+            )
+            .offset(offset)
+            .limit(limit)
+        )
         items = list(self.db.execute(stmt).scalars().all())
         return items, total
 

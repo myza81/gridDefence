@@ -869,7 +869,10 @@ def test_correcting_a_referenced_switchyard_returns_400(
     response = client.patch(
         f"/api/v1/voltage-yards/{voltage_yard_ids['PKLG']}",
         headers=headers,
-        json={"operational_status_id": entered_in_error_id},
+        json={
+            "operational_status_id": entered_in_error_id,
+            "change_reason": "Created against the wrong substation",
+        },
     )
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "validation_error"
@@ -1025,3 +1028,117 @@ def test_list_circuit_terminal_identities_empty_registry_returns_empty_list(
     response = client.get("/api/v1/circuit-terminals", headers=headers)
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_restore_switchyard_returns_it_to_active_and_to_the_default_list(
+    client: TestClient, db_session: Session
+) -> None:
+    """ADR-027: the dedicated restoration command. A switchyard's identity is
+    status-blind-unique, so a corrected yard can never be replaced — restoring
+    is the controlled way back."""
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    yard_id = voltage_yard_ids["IGBK"]
+    correction = client.patch(
+        f"/api/v1/voltage-yards/{yard_id}",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id, "change_reason": "Wrong site"},
+    )
+    assert correction.status_code == 200, correction.text
+
+    restored = client.post(
+        f"/api/v1/voltage-yards/{yard_id}/restore",
+        headers=headers,
+        json={"change_reason": "Marked in error by mistake"},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["operational_status_id"] != entered_in_error_id
+
+    default_list = client.get(
+        f"/api/v1/voltage-yards?substation_id={substation_ids['IGBK']}", headers=headers
+    )
+    assert len(default_list.json()) == 1
+
+    # The restoration is appended; the original correction entry is preserved.
+    entries = client.get(
+        f"/api/v1/voltage-yards/{yard_id}/audit-log", headers=headers
+    ).json()["items"]
+    assert len(entries) == 2
+    reasons = {e["change_reason"] for e in entries}
+    assert reasons == {"Wrong site", "Marked in error by mistake"}
+    transitions = {(e["old_value"], e["new_value"]) for e in entries}
+    assert ("ACTIVE", "ENTERED_IN_ERROR") in transitions
+    assert ("ENTERED_IN_ERROR", "ACTIVE") in transitions
+
+
+def test_restore_requires_a_change_reason(client: TestClient, db_session: Session) -> None:
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    entered_in_error_id = _entered_in_error_status_id(db_session)
+
+    yard_id = voltage_yard_ids["IGBK"]
+    client.patch(
+        f"/api/v1/voltage-yards/{yard_id}",
+        headers=headers,
+        json={"operational_status_id": entered_in_error_id, "change_reason": "Wrong site"},
+    )
+
+    blank = client.post(
+        f"/api/v1/voltage-yards/{yard_id}/restore", headers=headers, json={"change_reason": ""}
+    )
+    assert blank.status_code == 422  # rejected by the request contract itself
+
+    missing = client.post(
+        f"/api/v1/voltage-yards/{yard_id}/restore", headers=headers, json={}
+    )
+    assert missing.status_code == 422
+
+
+def test_patch_cannot_bypass_the_switchyard_transition_allow_list(
+    client: TestClient, db_session: Session
+) -> None:
+    """An API client may not submit an arbitrary operational_status_id — the
+    closed allow-list is enforced in the service, so PATCH is governed too."""
+    ref = _seed_reference_data(db_session)
+    token, admin_id = _admin_setup(client, db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+    decommissioned_id = (
+        db_session.query(OperationalStatus)
+        .filter(OperationalStatus.code == "DECOMMISSIONED")
+        .one()
+        .operational_status_id
+    )
+
+    response = client.patch(
+        f"/api/v1/voltage-yards/{voltage_yard_ids['IGBK']}",
+        headers=headers,
+        json={
+            "operational_status_id": decommissioned_id,
+            "change_reason": "Attempting an undefined transition",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "validation_error"
+    assert "not a defined transition" in response.json()["detail"]["message"]
+
+
+def test_restore_requires_equipment_registry_write_permission(
+    client: TestClient, db_session: Session
+) -> None:
+    ref = _seed_reference_data(db_session)
+    _token, admin_id = _admin_setup(client, db_session)
+    _substation_ids, voltage_yard_ids = _create_substations_and_yards(db_session, ref, admin_id)
+
+    # No Authorization header: the endpoint must refuse before doing any work.
+    unauthenticated = client.post(
+        f"/api/v1/voltage-yards/{voltage_yard_ids['IGBK']}/restore",
+        json={"change_reason": "No token"},
+    )
+    assert unauthenticated.status_code in (401, 403)

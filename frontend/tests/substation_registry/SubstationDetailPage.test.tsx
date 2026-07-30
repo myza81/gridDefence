@@ -535,12 +535,22 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const reason = await screen.findByLabelText(
+      "Reason for marking 500kV as Entered in Error",
+    );
+    await user.type(reason, "Created against the wrong substation");
     const button = await screen.findByRole("button", { name: "Mark as Entered in Error" });
     await user.click(button);
 
     await waitFor(() => {
-      expect(updatePayload).toMatchObject({ operational_status_id: 7 });
+      expect(updatePayload).toMatchObject({
+        operational_status_id: 7,
+        change_reason: "Created against the wrong substation",
+      });
     });
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
     // Never a "Delete" button anywhere for a switchyard (CLAUDE.md §11.6 —
     // no hard delete for engineering registry records).
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -608,6 +618,189 @@ describe("SubstationDetailPage", () => {
         ),
       ).toHaveLength(1);
     });
+  });
+
+
+  /* Voltage Yard restoration (ADR-027). The two lifecycle actions are mutually
+     exclusive: an active yard offers "Mark as Entered in Error", an
+     entered-in-error yard offers "Restore Voltage Yard". Neither is ever
+     presented as a delete/undelete. */
+  const ENTERED_IN_ERROR_YARD = {
+    voltage_yard_id: "yard-1",
+    substation_id: SUBSTATION_ID,
+    substation_mnemonic: "SUB1",
+    substation_official_name: "Substation One",
+    voltage_level_id: 1,
+    voltage_level_label: "500kV",
+    display_label: "SUB1 — 500kV",
+    operational_status_id: 7,
+  };
+
+  it("offers Restore Voltage Yard only for an entered-in-error switchyard", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["equipment_registry.write"], [ENTERED_IN_ERROR_YARD]);
+
+    renderDetailPage();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText(/show entered-in-error/i));
+
+    expect(
+      await screen.findByRole("button", { name: "Restore Voltage Yard" }),
+    ).toBeInTheDocument();
+    // Mutually exclusive with the correction action, and never a delete/undelete.
+    expect(
+      screen.queryByRole("button", { name: "Mark as Entered in Error" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /undelete/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+  });
+
+  it("does not offer Restore Voltage Yard for an active switchyard", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["equipment_registry.write"], [
+      { ...ENTERED_IN_ERROR_YARD, operational_status_id: 1 },
+    ]);
+
+    renderDetailPage();
+
+    expect(
+      await screen.findByRole("button", { name: "Mark as Entered in Error" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restore Voltage Yard" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer Restore Voltage Yard without equipment_registry.write", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(["substation_registry.write"], [ENTERED_IN_ERROR_YARD]);
+
+    renderDetailPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voltage-yards-list")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Restore Voltage Yard" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("requires a reason and a confirmation before restoring", async () => {
+    authStorage.setToken("token");
+    let restoreCalls = 0;
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [ENTERED_IN_ERROR_YARD],
+      [
+        {
+          method: "POST",
+          pattern: /\/api\/v1\/voltage-yards\/yard-1\/restore$/,
+          respond: () => {
+            restoreCalls += 1;
+            return { status: 200, body: { ...ENTERED_IN_ERROR_YARD, operational_status_id: 1 } };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText(/show entered-in-error/i));
+
+    // No reason -> refused client-side, nothing sent.
+    await user.click(await screen.findByRole("button", { name: "Restore Voltage Yard" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/reason is required/i);
+    expect(restoreCalls).toBe(0);
+
+    // Reason present but confirmation declined -> still nothing sent.
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.type(
+      await screen.findByLabelText("Reason for restoring 500kV"),
+      "Marked in error by mistake",
+    );
+    await user.click(screen.getByRole("button", { name: "Restore Voltage Yard" }));
+    expect(restoreCalls).toBe(0);
+    confirmSpy.mockRestore();
+  });
+
+  it("restores an entered-in-error switchyard to Active and confirms success", async () => {
+    authStorage.setToken("token");
+    let restorePayload: unknown = null;
+    let restoreUrl = "";
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [ENTERED_IN_ERROR_YARD],
+      [
+        {
+          method: "POST",
+          pattern: /\/api\/v1\/voltage-yards\/yard-1\/restore$/,
+          respond: (url, init) => {
+            restoreUrl = url;
+            restorePayload = init?.body ? JSON.parse(init.body as string) : null;
+            return { status: 200, body: { ...ENTERED_IN_ERROR_YARD, operational_status_id: 1 } };
+          },
+        },
+      ],
+    );
+
+    renderDetailPage();
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(await screen.findByLabelText(/show entered-in-error/i));
+    await user.type(
+      await screen.findByLabelText("Reason for restoring 500kV"),
+      "Marked in error by mistake",
+    );
+    await user.click(screen.getByRole("button", { name: "Restore Voltage Yard" }));
+
+    await waitFor(() => {
+      expect(restorePayload).toEqual({ change_reason: "Marked in error by mistake" });
+    });
+    // A dedicated lifecycle command — no operational_status_id is ever sent.
+    expect(restoreUrl).toMatch(/\/voltage-yards\/yard-1\/restore$/);
+    expect(restorePayload).not.toHaveProperty("operational_status_id");
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(await screen.findByRole("status")).toHaveTextContent(/restored to Active/i);
+    confirmSpy.mockRestore();
+  });
+
+  it("surfaces a backend lifecycle error such as an incompatible parent substation", async () => {
+    authStorage.setToken("token");
+    stubVoltageYardSession(
+      ["equipment_registry.write"],
+      [ENTERED_IN_ERROR_YARD],
+      [
+        {
+          method: "POST",
+          pattern: /\/api\/v1\/voltage-yards\/yard-1\/restore$/,
+          respond: () => ({
+            status: 400,
+            body: {
+              detail: {
+                code: "validation_error",
+                message:
+                  "Switchyard cannot be restored while its substation 'SUB1' is " +
+                  "'DECOMMISSIONED' — restore or correct the substation first.",
+              },
+            },
+          }),
+        },
+      ],
+    );
+
+    renderDetailPage();
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(await screen.findByLabelText(/show entered-in-error/i));
+    await user.type(
+      await screen.findByLabelText("Reason for restoring 500kV"),
+      "Attempting restore",
+    );
+    await user.click(screen.getByRole("button", { name: "Restore Voltage Yard" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/DECOMMISSIONED/);
+    confirmSpy.mockRestore();
   });
 
   it("submits commissioning date, latitude, and longitude when adding a voltage yard", async () => {
