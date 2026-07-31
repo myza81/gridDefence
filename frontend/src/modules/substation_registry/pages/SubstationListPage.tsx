@@ -257,7 +257,7 @@ function RegistryTable({ items, referenceData, voltageLabelsBySubstation }: Rows
       <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: tokens.typography.fontFamily, fontSize: "13px" }}>
         <thead>
           <tr>
-            {["Mnemonic", "Substation", "Switchyards", "Region", "GM Zone", "Grid Owner", "Status"].map((heading) => (
+            {["Mnemonic", "Substation", "Voltage", "Region", "GM Zone", "Grid Owner", "Status"].map((heading) => (
               <th key={heading} scope="col" style={thStyle}>
                 {heading}
               </th>
@@ -274,7 +274,10 @@ function RegistryTable({ items, referenceData, voltageLabelsBySubstation }: Rows
               <td style={tdStyle}>{(voltageLabelsBySubstation.get(substation.substation_id) ?? []).join(", ") || "—"}</td>
               <td style={tdStyle}>{referenceData.regionsById.get(substation.region_id)?.label ?? substation.region_id}</td>
               <td style={tdStyle}>{referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? substation.gm_zone_id}</td>
-              <td style={tdStyle}>{referenceData.gridOwnersById.get(substation.grid_owner_id)?.label ?? substation.grid_owner_id}</td>
+              {/* Registry list shows the compact engineering abbreviation (the
+                  reference-data `code`, e.g. "TNB"); the detail page keeps the
+                  full engineering label. Presentation only — no data change. */}
+              <td style={tdStyle}>{referenceData.gridOwnersById.get(substation.grid_owner_id)?.code ?? substation.grid_owner_id}</td>
               <td style={tdStyle}><StatusCell referenceData={referenceData} statusId={substation.operational_status_id} /></td>
             </tr>
           ))}

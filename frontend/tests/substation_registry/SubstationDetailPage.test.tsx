@@ -1309,6 +1309,9 @@ describe("SubstationDetailPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Alor Setar")).toBeInTheDocument();
     });
+    // The detail workspace keeps the FULL engineering label for Grid Owner
+    // (the compact abbreviation is a registry-list presentation choice only).
+    expect(screen.getByText("Tenaga Nasional Berhad (TNB)")).toBeInTheDocument();
   });
 
   it("requires GM Zone in the edit form", async () => {

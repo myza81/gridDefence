@@ -159,6 +159,22 @@ describe("SubstationListPage", () => {
     expect(within(row!).getByText("Active")).toBeInTheDocument();
   });
 
+  it("labels the voltage column 'Voltage' and shows the compact grid-owner abbreviation", async () => {
+    authStorage.setToken("token");
+    stubSession([]);
+
+    renderWithProviders(<SubstationListPage />, { route: "/substations" });
+
+    await screen.findByText("SUB1");
+    // Column renamed Switchyards -> Voltage (presentation only).
+    expect(screen.getByRole("columnheader", { name: "Voltage" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Switchyards" })).toBeNull();
+    // Grid Owner shows the engineering abbreviation (code), not the full label.
+    const row = screen.getByText("SUB1").closest("tr")!;
+    expect(within(row).getByText("TNB")).toBeInTheDocument();
+    expect(within(row).queryByText("Tenaga Nasional Berhad (TNB)")).toBeNull();
+  });
+
   it("displays a substation's voltage yards, not a single legacy voltage level (ADR-009)", async () => {
     authStorage.setToken("token");
     stubSession([]);
