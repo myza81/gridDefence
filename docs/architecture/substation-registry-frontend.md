@@ -55,6 +55,26 @@ The detail page is the intended UX standard for every GridDefence registry recor
 
 Reusable pieces that carry this pattern forward: `PageHeader` (title/description/actions), `DetailSection` + `MetadataList`, `Badge` (`size="md"` for a focal status), `ConfirmActionDialog`, and the shared module `…Form` in an `mode="edit"` disclosure. A future registry composes the same, swapping only its own fields, lifecycle mirror, and equipment sections.
 
+### Composition: 2×2 summary grid + grouped lower workspace
+
+The detail page is composed, not monolithic — the page owns the header, the summary grid, the edit disclosure and the status dialog; each lower section is a self-contained component under [`components/detail/`](../../frontend/src/modules/substation_registry/components/detail/) that owns its own query/mutations. This is the "one coherent workspace" structure:
+
+- **Stable 2×2 summary grid.** The four cards use `grid-template-columns: repeat(2, minmax(0, 1fr))` on desktop (Identity · Engineering Classification / Lifecycle · Audit & Revision) and a single-column stack below `tokens.shellBreakpoint` (via `useIsMobile`). Deterministic — the Audit card never floats alone into a third row.
+- **Grouped lower workspace.** A `WorkspaceGroup` heading precedes each group: **Engineering Information** (Switchyards, Transformers, Engineering Connectivity), **Engineering History** (Alias History), **Governance** (Audit Log). Section cards render at heading level 3 under the group's level-2 label.
+- **One design language.** Every section shares the same card chrome (`DetailSection`), table styling (`components/detail/styles.ts`), `Badge`, `EmptyState`/`ErrorState`, form controls and `ConfirmActionDialog`. No browser-default `<ul>`/`<input>`/`<select>` remain, and no `window.confirm`.
+
+**Switchyards (modernised, ADR-009/ADR-027).** One structured record card per voltage level: label + lifecycle `Badge`, read-only Commissioned/Latitude/Longitude, and — with `equipment_registry.write` — an intentional per-yard **Edit** disclosure, **Add switchyard** disclosure, and audited **Mark as Entered in Error** / **Restore** via `ConfirmActionDialog` (reason required; never a delete/undelete; Restore always → Active). Entered-in-error yards are hidden by default behind a toggle and shown with a distinct badge.
+
+**Transformers (substation-local view).** A concise table (desktop) / cards (mobile) — short name, HV↔LV windings, capacity, lifecycle badge — with the primary action opening the full Transformer record in its own registry. This is *not* the Transformer Registry embedded whole.
+
+**Engineering Connectivity.** A relationship table (circuit · bay · voltage · line type · lifecycle badge · other connected substations · open) over the manually-maintained Circuit/CircuitTerminal baseline — explicitly **not** PSS/E operational topology.
+
+**Alias History (Engineering History).** A compact historical table: each former mnemonic with its valid period and a Current/Retired badge (identity history is never overwritten).
+
+**Audit Log (Governance).** A read-only governance table (when · actor · field change · reason), verbatim and newest-first per the API — deliberately distinct from the Audit & Revision summary card (which shows only created/updated accountability). No editing controls.
+
+**Query invalidation.** Each section owns its query with stable keys (`["substation", id, "voltage-yards"|"transformers"|"circuits"]`, plus the substation alias/audit hooks). Switchyard mutations invalidate only the switchyard query (which drives the voltage summary); no unrelated modules are invalidated; consequential mutations are not auto-retried.
+
 ## Lifecycle action (status change)
 
 `ConfirmActionDialog` — offers only the legal target states for the current status (reflecting rules, not relying on rejection), requires a deliberate confirm, takes an audited reason, uses a danger tone for "Entered in Error", disables repeat submission while pending, and surfaces the backend's own rejection message in place. Cancel makes no request.

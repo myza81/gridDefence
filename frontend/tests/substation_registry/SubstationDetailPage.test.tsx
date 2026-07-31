@@ -417,6 +417,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add switchyard" }));
     const yardSelect = await screen.findByLabelText("New switchyard voltage level");
     await waitFor(() => {
       expect(yardSelect.querySelectorAll("option").length).toBeGreaterThan(1);
@@ -424,7 +426,7 @@ describe("SubstationDetailPage", () => {
     const optionLabels = Array.from(yardSelect.querySelectorAll("option")).map((o) =>
       o.textContent?.trim(),
     );
-    expect(optionLabels).toEqual(["Select voltage level...", "132kV"]);
+    expect(optionLabels).toEqual(["Select voltage level…", "132kV"]);
     expect(optionLabels).not.toContain("500kV");
   });
 
@@ -475,24 +477,13 @@ describe("SubstationDetailPage", () => {
     // (which determines canManageVoltageYards) and the voltage-yards fetch
     // resolve independently, so waiting on yard content alone can race
     // ahead of the permission-derived form rendering.
-    await waitFor(() => {
-      expect(screen.getByLabelText("New switchyard voltage level")).toBeInTheDocument();
-    });
-    // Scope to the voltage yards list specifically — voltage level is no
-    // longer shown anywhere else on this page (ADR-009). Matched via a
-    // function matcher (not a plain string) since the yard row now also
-    // shows its status inline ("500kV (Active)"), and via getAllByText
-    // since "500kV" also appears inside the field labels below it.
-    expect(
-      within(screen.getByTestId("voltage-yards-list")).getAllByText((_, element) =>
-        element?.tagName.toLowerCase() === "li" && (element.textContent ?? "").includes("500kV"),
-      ),
-    ).toHaveLength(1);
-
     const user = userEvent.setup();
-    // Only "132kV" is offered — the substation's existing "500kV" yard is
-    // correctly excluded (see the regression test above).
-    await user.selectOptions(screen.getByLabelText("New switchyard voltage level"), "2");
+    // The existing 500kV switchyard renders as a record card.
+    expect(within(await screen.findByTestId("voltage-yards-list")).getByText("500kV")).toBeInTheDocument();
+
+    // Add is an intentional disclosure; open it, then only "132kV" is offered.
+    await user.click(await screen.findByRole("button", { name: "Add switchyard" }));
+    await user.selectOptions(await screen.findByLabelText("New switchyard voltage level"), "2");
     await user.click(screen.getByRole("button", { name: "Add switchyard" }));
 
     await waitFor(() => {
@@ -548,13 +539,10 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const reason = await screen.findByLabelText(
-      "Reason for marking 500kV as Entered in Error",
-    );
-    await user.type(reason, "Created against the wrong substation");
-    const button = await screen.findByRole("button", { name: "Mark as Entered in Error" });
-    await user.click(button);
+    await user.click(await screen.findByRole("button", { name: "Mark 500kV switchyard as entered in error" }));
+    const dialog = screen.getByRole("dialog", { name: "Mark switchyard as Entered in Error" });
+    await user.type(within(dialog).getByLabelText("Reason"), "Created against the wrong substation");
+    await user.click(within(dialog).getByRole("button", { name: "Mark as Entered in Error" }));
 
     await waitFor(() => {
       expect(updatePayload).toMatchObject({
@@ -562,8 +550,6 @@ describe("SubstationDetailPage", () => {
         change_reason: "Created against the wrong substation",
       });
     });
-    expect(confirmSpy).toHaveBeenCalled();
-    confirmSpy.mockRestore();
     // Never a "Delete" button anywhere for a switchyard (CLAUDE.md §11.6 —
     // no hard delete for engineering registry records).
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -614,23 +600,16 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     await waitFor(() => {
-      expect(screen.getByText("No switchyards registered yet.")).toBeInTheDocument();
+      expect(screen.getByText("No switchyards registered")).toBeInTheDocument();
     });
 
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Show entered-in-error switchyards"));
 
-    // Matched via a function matcher, not a plain regex, since "500kV"
-    // also appears inside this row's own field labels once it renders
-    // editable (canWrite=true here).
-    await waitFor(() => {
-      expect(
-        within(screen.getByTestId("voltage-yards-list")).getAllByText((_, element) =>
-          element?.tagName.toLowerCase() === "li" &&
-          (element.textContent ?? "").includes("Entered in Error"),
-        ),
-      ).toHaveLength(1);
-    });
+    // The corrected yard now shows as a card with an "Entered in Error" badge.
+    expect(
+      await within(screen.getByTestId("voltage-yards-list")).findByText("Entered in Error"),
+    ).toBeInTheDocument();
   });
 
 
@@ -659,11 +638,11 @@ describe("SubstationDetailPage", () => {
     await user.click(await screen.findByLabelText(/show entered-in-error/i));
 
     expect(
-      await screen.findByRole("button", { name: "Restore Voltage Yard" }),
+      await screen.findByRole("button", { name: "Restore 500kV switchyard" }),
     ).toBeInTheDocument();
     // Mutually exclusive with the correction action, and never a delete/undelete.
     expect(
-      screen.queryByRole("button", { name: "Mark as Entered in Error" }),
+      screen.queryByRole("button", { name: /mark .* as entered in error/i }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /undelete/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -678,10 +657,10 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     expect(
-      await screen.findByRole("button", { name: "Mark as Entered in Error" }),
+      await screen.findByRole("button", { name: "Mark 500kV switchyard as entered in error" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Restore Voltage Yard" }),
+      screen.queryByRole("button", { name: /restore .* switchyard/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -695,7 +674,7 @@ describe("SubstationDetailPage", () => {
       expect(screen.getByTestId("voltage-yards-list")).toBeInTheDocument();
     });
     expect(
-      screen.queryByRole("button", { name: "Restore Voltage Yard" }),
+      screen.queryByRole("button", { name: /restore .* switchyard/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -720,21 +699,17 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
     const user = userEvent.setup();
     await user.click(await screen.findByLabelText(/show entered-in-error/i));
+    await user.click(await screen.findByRole("button", { name: "Restore 500kV switchyard" }));
+    const dialog = screen.getByRole("dialog", { name: "Restore switchyard" });
 
-    // No reason -> refused client-side, nothing sent.
-    await user.click(await screen.findByRole("button", { name: "Restore Voltage Yard" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/reason is required/i);
+    // No reason -> confirm disabled, nothing sent.
+    expect(within(dialog).getByRole("button", { name: "Restore switchyard" })).toBeDisabled();
     expect(restoreCalls).toBe(0);
 
-    // Reason present but confirmation declined -> still nothing sent.
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await user.type(
-      await screen.findByLabelText("Reason for restoring 500kV"),
-      "Marked in error by mistake",
-    );
-    await user.click(screen.getByRole("button", { name: "Restore Voltage Yard" }));
+    // Reason present but cancelled -> still nothing sent.
+    await user.type(within(dialog).getByLabelText("Reason"), "Marked in error by mistake");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(restoreCalls).toBe(0);
-    confirmSpy.mockRestore();
   });
 
   it("restores an entered-in-error switchyard to Active and confirms success", async () => {
@@ -759,13 +734,11 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
     const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     await user.click(await screen.findByLabelText(/show entered-in-error/i));
-    await user.type(
-      await screen.findByLabelText("Reason for restoring 500kV"),
-      "Marked in error by mistake",
-    );
-    await user.click(screen.getByRole("button", { name: "Restore Voltage Yard" }));
+    await user.click(await screen.findByRole("button", { name: "Restore 500kV switchyard" }));
+    const dialog = screen.getByRole("dialog", { name: "Restore switchyard" });
+    await user.type(within(dialog).getByLabelText("Reason"), "Marked in error by mistake");
+    await user.click(within(dialog).getByRole("button", { name: "Restore switchyard" }));
 
     await waitFor(() => {
       expect(restorePayload).toEqual({ change_reason: "Marked in error by mistake" });
@@ -773,9 +746,7 @@ describe("SubstationDetailPage", () => {
     // A dedicated lifecycle command — no operational_status_id is ever sent.
     expect(restoreUrl).toMatch(/\/voltage-yards\/yard-1\/restore$/);
     expect(restorePayload).not.toHaveProperty("operational_status_id");
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(await screen.findByRole("status")).toHaveTextContent(/restored to Active/i);
-    confirmSpy.mockRestore();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Restore switchyard" })).toBeNull());
   });
 
   it("surfaces a backend lifecycle error such as an incompatible parent substation", async () => {
@@ -804,16 +775,13 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
     const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     await user.click(await screen.findByLabelText(/show entered-in-error/i));
-    await user.type(
-      await screen.findByLabelText("Reason for restoring 500kV"),
-      "Attempting restore",
-    );
-    await user.click(screen.getByRole("button", { name: "Restore Voltage Yard" }));
+    await user.click(await screen.findByRole("button", { name: "Restore 500kV switchyard" }));
+    const dialog = screen.getByRole("dialog", { name: "Restore switchyard" });
+    await user.type(within(dialog).getByLabelText("Reason"), "Attempting restore");
+    await user.click(within(dialog).getByRole("button", { name: "Restore switchyard" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/DECOMMISSIONED/);
-    confirmSpy.mockRestore();
+    expect(await within(dialog).findByText(/DECOMMISSIONED/)).toBeInTheDocument();
   });
 
   it("submits commissioning date, latitude, and longitude when adding a voltage yard", async () => {
@@ -865,12 +833,9 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByLabelText("New switchyard voltage level")).toBeInTheDocument();
-    });
-
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText("New switchyard voltage level"), "2");
+    await user.click(await screen.findByRole("button", { name: "Add switchyard" }));
+    await user.selectOptions(await screen.findByLabelText("New switchyard voltage level"), "2");
     await user.type(
       screen.getByLabelText("New switchyard commissioning date"),
       "2020-06-01",
@@ -941,18 +906,22 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    const commissioningDateInput = await screen.findByLabelText("Commissioning date for 500kV");
-    expect(commissioningDateInput).toHaveValue("2018-01-01");
-    expect(screen.getByLabelText("Latitude for 500kV")).toHaveValue(3);
-    expect(screen.getByLabelText("Longitude for 500kV")).toHaveValue(101);
+    // Metadata is shown read-only first; editing is intentionally invoked.
+    expect(await within(await screen.findByTestId("voltage-yards-list")).findByText("2018-01-01")).toBeInTheDocument();
 
     const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit 500kV switchyard" }));
+    const commissioningDateInput = await screen.findByLabelText("Commissioning date");
+    expect(commissioningDateInput).toHaveValue("2018-01-01");
+    expect(screen.getByLabelText("Latitude")).toHaveValue("3");
+    expect(screen.getByLabelText("Longitude")).toHaveValue("101");
+
     await user.clear(commissioningDateInput);
     await user.type(commissioningDateInput, "2021-03-15");
-    const latitudeInput = screen.getByLabelText("Latitude for 500kV");
+    const latitudeInput = screen.getByLabelText("Latitude");
     await user.clear(latitudeInput);
     await user.type(latitudeInput, "3.5");
-    const longitudeInput = screen.getByLabelText("Longitude for 500kV");
+    const longitudeInput = screen.getByLabelText("Longitude");
     await user.clear(longitudeInput);
     await user.type(longitudeInput, "101.5");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -989,10 +958,11 @@ describe("SubstationDetailPage", () => {
 
     await waitFor(() => {
       expect(
-        within(screen.getByTestId("voltage-yards-list")).getByText(/2018-01-01/),
+        within(screen.getByTestId("voltage-yards-list")).getByText("2018-01-01"),
       ).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText("Commissioning date for 500kV")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Commissioning date")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit .* switchyard/i })).not.toBeInTheDocument();
   });
 
   it("shows a clear message instead of the form when every voltage level already has a yard", async () => {
@@ -1072,7 +1042,7 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     await waitFor(() => {
-      expect(screen.getByText("No switchyards registered yet.")).toBeInTheDocument();
+      expect(screen.getByText("No switchyards registered")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Add switchyard" })).not.toBeInTheDocument();
   });
@@ -1142,7 +1112,7 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     await waitFor(() => {
-      expect(screen.getByText("No transformers installed here yet.")).toBeInTheDocument();
+      expect(screen.getByText("No transformers registered at this substation")).toBeInTheDocument();
     });
   });
 
@@ -1195,10 +1165,7 @@ describe("SubstationDetailPage", () => {
     expect(within(table).getByText("Active")).toBeInTheDocument();
     // "Other Connected Substations" excludes this substation's own mnemonic (SUB1).
     expect(within(table).getByText("IGBK")).toBeInTheDocument();
-    expect(within(table).getByRole("link", { name: "View" })).toHaveAttribute(
-      "href",
-      "/circuits/circuit-1",
-    );
+    expect(within(table).getByRole("link", { name: /Open circuit/ })).toHaveAttribute("href", "/circuits/circuit-1");
   });
 
   it("shows the empty-state message when no circuits are connected to this substation", async () => {
@@ -1957,5 +1924,57 @@ describe("SubstationDetailPage", () => {
 
     // The misleading singular PSS/E bus number row is removed (no value fabricated).
     expect(screen.queryByText("PSS/E bus number")).toBeNull();
+  });
+
+  it("composes the summary cards and groups the lower workspace coherently", async () => {
+    authStorage.setToken("token");
+    stubActiveWriteSession();
+    renderDetailPage();
+
+    // The four summary cards are all present…
+    for (const heading of ["Identity", "Engineering Classification", "Lifecycle", "Audit & Revision"]) {
+      expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+    }
+    // …the lower workspace is grouped…
+    expect(screen.getByRole("heading", { name: "Engineering Information" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Engineering History" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Governance" })).toBeInTheDocument();
+    // …and every embedded section renders inside it.
+    for (const heading of ["Switchyards", "Transformers", "Engineering Connectivity", "Alias history", "Audit log"]) {
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    }
+  });
+
+  it("renders alias history and the governance audit log with real content", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      { method: "GET", pattern: /\/api\/v1\/users\/me$/, respond: () => ({ status: 200, body: CURRENT_USER }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`), respond: () => ({ status: 200, body: [] }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`), respond: () => ({ status: 200, body: SUBSTATION_DETAIL }) },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`),
+        respond: () => ({ status: 200, body: [{ alias_id: 1, alias_mnemonic: "OLDX", alias_name: null, valid_from: "2004-05-01T00:00:00Z", valid_to: "2012-01-01T00:00:00Z" }] }),
+      },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`),
+        respond: () => ({ status: 200, body: { items: [{ log_id: 1, field_name: "official_name", old_value: "Sub One", new_value: "Substation One", changed_at: "2026-06-12T09:12:00Z", changed_by: CURRENT_USER, change_reason: "Naming standardisation" }], page: 1, page_size: 50, total: 1 } }),
+      },
+      { method: "GET", pattern: /\/api\/v1\/voltage-yards\?/, respond: () => ({ status: 200, body: [] }) },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderDetailPage();
+
+    // Alias history: the retired mnemonic with a "Retired" state marker.
+    expect(await screen.findByText("OLDX")).toBeInTheDocument();
+    expect(screen.getByText("Retired")).toBeInTheDocument();
+    // Governance audit log: field change + actor + reason (verbatim, read-only).
+    expect(screen.getByText("official_name")).toBeInTheDocument();
+    expect(screen.getByText("Naming standardisation")).toBeInTheDocument();
+    // No editing controls in the governance view.
+    const auditHeading = screen.getByRole("heading", { name: "Audit log" });
+    expect(within(auditHeading.closest("div")!.parentElement!).queryByRole("button")).toBeNull();
   });
 });

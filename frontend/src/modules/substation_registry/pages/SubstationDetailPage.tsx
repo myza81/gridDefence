@@ -1,5 +1,3 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -13,261 +11,39 @@ import { MetadataList } from "../../../components/ui/MetadataList";
 import { PageHeader } from "../../../components/ui/PageHeader";
 import { SelectField } from "../../../components/ui/SelectField";
 import { TextField } from "../../../components/ui/TextField";
+import { useIsMobile } from "../../../components/layout/useIsMobile";
 import { tokens } from "../../../theme/tokens";
 import { useAuth } from "../../iam/AuthContext";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
-import { equipmentRegistryApi } from "../../equipment_registry/api";
-import type { VoltageYardSummary } from "../../equipment_registry/types";
 import { SubstationForm } from "../components/SubstationForm";
-import { useChangeStatusMutation, useSubstationAliasesQuery, useSubstationAuditLogQuery, useSubstationQuery, useUpdateSubstationMutation } from "../hooks";
+import { AliasHistorySection } from "../components/detail/AliasHistorySection";
+import { AuditLogSection } from "../components/detail/AuditLogSection";
+import { ConnectivitySection } from "../components/detail/ConnectivitySection";
+import { SwitchyardsSection } from "../components/detail/SwitchyardsSection";
+import { TransformersSection } from "../components/detail/TransformersSection";
+import { WorkspaceGroup } from "../components/detail/shared";
+import { useChangeStatusMutation, useSubstationQuery, useUpdateSubstationMutation } from "../hooks";
 import { allowedTargetStatuses, toneForStatusCode } from "../lifecycle";
 import type { SubstationCreate, SubstationUpdate } from "../types";
 
-interface VoltageYardRowProps {
-  yard: VoltageYardSummary;
-  canWrite: boolean;
-  onSaved: () => void;
-  statusLabel: string;
-  enteredInErrorStatusId: number | undefined;
-}
-
-/** One switchyard's editable metadata — RETAINED verbatim from Phase 3
- * (Equipment Registry, ADR-008/ADR-027): out of scope for Phase E to redesign.
- * commissioning_date/latitude/longitude belong to the switchyard, not the
- * parent Substation. "Mark as Entered in Error" / "Restore Voltage Yard" are
- * mutually-exclusive audited lifecycle actions, never a delete/undelete. */
-function VoltageYardRow({ yard, canWrite, onSaved, statusLabel, enteredInErrorStatusId }: VoltageYardRowProps) {
-  const [commissioningDate, setCommissioningDate] = useState(yard.commissioning_date ?? "");
-  const [latitude, setLatitude] = useState(yard.latitude === null ? "" : String(yard.latitude));
-  const [longitude, setLongitude] = useState(yard.longitude === null ? "" : String(yard.longitude));
-  const [error, setError] = useState<string | null>(null);
-  const [correctionError, setCorrectionError] = useState<string | null>(null);
-  const [correctionReason, setCorrectionReason] = useState("");
-  const [restoreReason, setRestoreReason] = useState("");
-  const [restoreError, setRestoreError] = useState<string | null>(null);
-  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    setCommissioningDate(yard.commissioning_date ?? "");
-    setLatitude(yard.latitude === null ? "" : String(yard.latitude));
-    setLongitude(yard.longitude === null ? "" : String(yard.longitude));
-  }, [yard.commissioning_date, yard.latitude, yard.longitude]);
-
-  const updateMutation = useMutation({
-    mutationFn: () =>
-      equipmentRegistryApi.updateVoltageYard(yard.voltage_yard_id, {
-        commissioning_date: commissioningDate || null,
-        latitude: latitude === "" ? null : Number(latitude),
-        longitude: longitude === "" ? null : Number(longitude),
-      }),
-    onSuccess: () => {
-      setError(null);
-      onSaved();
-    },
-    onError: (err: unknown) => setError(err instanceof ApiError ? err.message : "Failed to update switchyard."),
-  });
-
-  const isEnteredInError = yard.operational_status_id === enteredInErrorStatusId;
-
-  const correctionMutation = useMutation({
-    mutationFn: () =>
-      equipmentRegistryApi.updateVoltageYard(yard.voltage_yard_id, {
-        operational_status_id: enteredInErrorStatusId,
-        change_reason: correctionReason,
-      }),
-    onSuccess: () => {
-      setCorrectionError(null);
-      setCorrectionReason("");
-      onSaved();
-    },
-    onError: (err: unknown) => setCorrectionError(err instanceof ApiError ? err.message : "Failed to correct switchyard."),
-  });
-
-  const restoreMutation = useMutation({
-    mutationFn: () => equipmentRegistryApi.restoreVoltageYard(yard.voltage_yard_id, { change_reason: restoreReason }),
-    onSuccess: () => {
-      setRestoreError(null);
-      setRestoreReason("");
-      setRestoreMessage(`${yard.voltage_level_label} switchyard restored to Active.`);
-      onSaved();
-    },
-    onError: (err: unknown) => setRestoreError(err instanceof ApiError ? err.message : "Failed to restore switchyard."),
-  });
-
-  const correctionControl =
-    canWrite && !isEnteredInError && enteredInErrorStatusId !== undefined ? (
-      <div>
-        <label htmlFor={`yard-correction-reason-${yard.voltage_yard_id}`}>
-          Reason for marking {yard.voltage_level_label} as Entered in Error
-        </label>
-        <br />
-        <input
-          id={`yard-correction-reason-${yard.voltage_yard_id}`}
-          aria-label={`Reason for marking ${yard.voltage_level_label} as Entered in Error`}
-          value={correctionReason}
-          onChange={(e) => setCorrectionReason(e.target.value)}
-        />
-        <button
-          type="button"
-          onClick={() => {
-            if (!correctionReason.trim()) {
-              setCorrectionError("A reason is required to mark this switchyard as Entered in Error.");
-              return;
-            }
-            if (
-              !window.confirm(
-                `Mark the ${yard.voltage_level_label} switchyard as Entered in Error? ` +
-                  "It will be hidden from active views. This is recorded in the audit log.",
-              )
-            ) {
-              return;
-            }
-            correctionMutation.mutate();
-          }}
-          disabled={correctionMutation.isPending}
-        >
-          Mark as Entered in Error
-        </button>
-        {correctionError && <p role="alert">{correctionError}</p>}
-      </div>
-    ) : null;
-
-  const restoreControl =
-    canWrite && isEnteredInError ? (
-      <div>
-        <p>
-          This switchyard is marked Entered in Error. Restoring it returns it to <strong>Active</strong>. Its audit history is preserved.
-        </p>
-        <label htmlFor={`yard-restore-reason-${yard.voltage_yard_id}`}>Reason for restoring {yard.voltage_level_label}</label>
-        <br />
-        <input
-          id={`yard-restore-reason-${yard.voltage_yard_id}`}
-          aria-label={`Reason for restoring ${yard.voltage_level_label}`}
-          value={restoreReason}
-          onChange={(e) => setRestoreReason(e.target.value)}
-        />
-        <button
-          type="button"
-          onClick={() => {
-            if (!restoreReason.trim()) {
-              setRestoreError("A reason is required to restore this switchyard.");
-              return;
-            }
-            if (
-              !window.confirm(
-                `Restore the ${yard.voltage_level_label} switchyard to Active? ` +
-                  "This is recorded in the audit log; the original correction entry is kept.",
-              )
-            ) {
-              return;
-            }
-            restoreMutation.mutate();
-          }}
-          disabled={restoreMutation.isPending}
-        >
-          Restore Voltage Yard
-        </button>
-        {restoreError && <p role="alert">{restoreError}</p>}
-      </div>
-    ) : null;
-
-  if (!canWrite) {
-    return (
-      <li>
-        {yard.voltage_level_label} ({statusLabel}) — commissioned {yard.commissioning_date ?? "—"}, at {yard.latitude ?? "—"}, {yard.longitude ?? "—"}
-      </li>
-    );
-  }
-
-  return (
-    <li>
-      {yard.voltage_level_label} ({statusLabel})
-      <div>
-        <label htmlFor={`yard-commissioning-date-${yard.voltage_yard_id}`}>Commissioning date for {yard.voltage_level_label}</label>
-        <br />
-        <input
-          id={`yard-commissioning-date-${yard.voltage_yard_id}`}
-          aria-label={`Commissioning date for ${yard.voltage_level_label}`}
-          type="date"
-          value={commissioningDate}
-          onChange={(e) => setCommissioningDate(e.target.value)}
-        />
-      </div>
-      <div>
-        <label htmlFor={`yard-latitude-${yard.voltage_yard_id}`}>Latitude for {yard.voltage_level_label}</label>
-        <br />
-        <input
-          id={`yard-latitude-${yard.voltage_yard_id}`}
-          aria-label={`Latitude for ${yard.voltage_level_label}`}
-          type="number"
-          step="any"
-          min={-90}
-          max={90}
-          value={latitude}
-          onChange={(e) => setLatitude(e.target.value)}
-        />
-      </div>
-      <div>
-        <label htmlFor={`yard-longitude-${yard.voltage_yard_id}`}>Longitude for {yard.voltage_level_label}</label>
-        <br />
-        <input
-          id={`yard-longitude-${yard.voltage_yard_id}`}
-          aria-label={`Longitude for ${yard.voltage_level_label}`}
-          type="number"
-          step="any"
-          min={-180}
-          max={180}
-          value={longitude}
-          onChange={(e) => setLongitude(e.target.value)}
-        />
-      </div>
-      <button type="button" onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
-        Save
-      </button>
-      {error && <p role="alert">{error}</p>}
-      {restoreMessage && <p role="status">{restoreMessage}</p>}
-      {correctionControl}
-      {restoreControl}
-    </li>
-  );
-}
-
+/**
+ * Substation Detail — one coherent engineering workspace. A stable 2×2 summary
+ * grid, an accessible collapsed-by-default edit disclosure, and three grouped
+ * lower sections (Engineering Information / History / Governance) whose embedded
+ * Equipment-Registry and history views share the same modern design language.
+ * The detail page composes the sections; each section owns its own data and
+ * behaviour (see components/detail/*). This is the reference workspace pattern
+ * for future GridDefence registries (substation-registry-frontend.md).
+ */
 export function SubstationDetailPage() {
   const { substationId } = useParams<{ substationId: string }>();
   const id = substationId ?? "";
   const { permissions } = useAuth();
   const canWrite = permissions.has("substation_registry.write");
-  const canManageVoltageYards = permissions.has("equipment_registry.write");
   const referenceData = useReferenceData();
-  const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
 
   const substationQuery = useSubstationQuery(substationId);
-  const aliasesQuery = useSubstationAliasesQuery(substationId);
-  const auditLogQuery = useSubstationAuditLogQuery(substationId);
-
-  // --- Retained Equipment Registry sections (verbatim data logic) ---
-  const [showEnteredInErrorYards, setShowEnteredInErrorYards] = useState(false);
-  const voltageYardsQuery = useQuery({
-    queryKey: ["substation", substationId, "voltage-yards"],
-    queryFn: () => equipmentRegistryApi.listVoltageYards({ substation_id: id, include_entered_in_error: true }),
-    enabled: substationId !== undefined,
-  });
-  const enteredInErrorStatusId = referenceData.operationalStatuses.find((s) => s.code === "ENTERED_IN_ERROR")?.operational_status_id;
-  const visibleVoltageYards = (voltageYardsQuery.data ?? []).filter(
-    (yard) => showEnteredInErrorYards || yard.operational_status_id !== enteredInErrorStatusId,
-  );
-
-  const transformersQuery = useQuery({
-    queryKey: ["substation", substationId, "transformers"],
-    queryFn: () => equipmentRegistryApi.listTransformers({ substation_id: id, page_size: 200 }),
-    enabled: substationId !== undefined,
-  });
-
-  const connectedCircuitsQuery = useQuery({
-    queryKey: ["substation", substationId, "circuits"],
-    queryFn: () => equipmentRegistryApi.listCircuits({ substation_id: id, page_size: 200 }),
-    enabled: substationId !== undefined,
-  });
 
   // --- Substation edit (disclosure — collapsed by default) ---
   const [editError, setEditError] = useState<string | null>(null);
@@ -278,8 +54,6 @@ export function SubstationDetailPage() {
   const lifecycleButtonRef = useRef<HTMLButtonElement>(null);
   const updateMutation = useUpdateSubstationMutation(id);
 
-  // Accessible disclosure focus management: opening moves focus into the edit
-  // region; closing (cancel/save) restores focus to the disclosure trigger.
   useEffect(() => {
     if (editOpen && !editWasOpen.current) {
       editPanelRef.current?.focus();
@@ -292,7 +66,7 @@ export function SubstationDetailPage() {
   function handleEditSubmit(payload: SubstationCreate | SubstationUpdate): void {
     setEditError(null);
     updateMutation.mutate(payload as SubstationUpdate, {
-      onSuccess: () => setEditOpen(false), // a successful save collapses the form
+      onSuccess: () => setEditOpen(false),
       onError: (err: unknown) => setEditError(err instanceof ApiError ? err.message : "Failed to update substation."),
     });
   }
@@ -300,9 +74,9 @@ export function SubstationDetailPage() {
   function focusLifecycle(): void {
     const button = lifecycleButtonRef.current;
     if (!button) return;
-    button.focus(); // focus is the essential behaviour…
+    button.focus();
     try {
-      button.scrollIntoView({ behavior: "smooth", block: "center" }); // …scroll is best-effort
+      button.scrollIntoView({ behavior: "smooth", block: "center" });
     } catch {
       /* jsdom / unsupported environments: no-op */
     }
@@ -314,41 +88,6 @@ export function SubstationDetailPage() {
   const [changeReason, setChangeReason] = useState("");
   const [statusError, setStatusError] = useState<string | null>(null);
   const changeStatusMutation = useChangeStatusMutation(id);
-
-  const [newYardVoltageLevelId, setNewYardVoltageLevelId] = useState("");
-  const [newYardCommissioningDate, setNewYardCommissioningDate] = useState("");
-  const [newYardLatitude, setNewYardLatitude] = useState("");
-  const [newYardLongitude, setNewYardLongitude] = useState("");
-  const [newYardError, setNewYardError] = useState<string | null>(null);
-
-  const invalidateVoltageYards = () => {
-    void queryClient.invalidateQueries({ queryKey: ["substation", substationId, "voltage-yards"] });
-  };
-
-  const addVoltageYardMutation = useMutation({
-    mutationFn: () =>
-      equipmentRegistryApi.createVoltageYard({
-        substation_id: id,
-        voltage_level_id: Number(newYardVoltageLevelId),
-        commissioning_date: newYardCommissioningDate || null,
-        latitude: newYardLatitude === "" ? null : Number(newYardLatitude),
-        longitude: newYardLongitude === "" ? null : Number(newYardLongitude),
-      }),
-    onSuccess: () => {
-      setNewYardError(null);
-      setNewYardVoltageLevelId("");
-      setNewYardCommissioningDate("");
-      setNewYardLatitude("");
-      setNewYardLongitude("");
-      invalidateVoltageYards();
-    },
-    onError: (err: unknown) => setNewYardError(err instanceof ApiError ? err.message : "Failed to add switchyard."),
-  });
-
-  function handleAddVoltageYardSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    addVoltageYardMutation.mutate();
-  }
 
   if (substationQuery.isPending) {
     return <p style={{ fontFamily: tokens.typography.fontFamily, color: tokens.color.textSecondary }}>Loading substation…</p>;
@@ -377,8 +116,6 @@ export function SubstationDetailPage() {
   const substation = substationQuery.data;
   const currentStatus = referenceData.operationalStatusesById.get(substation.operational_status_id);
   const targetStatusOptions = allowedTargetStatuses(substation.operational_status_id, referenceData.operationalStatuses);
-  const usedVoltageLevelIds = new Set((voltageYardsQuery.data ?? []).map((y) => y.voltage_level_id));
-  const availableVoltageLevelsForNewYard = referenceData.voltageLevels.filter((level) => !usedVoltageLevelIds.has(level.voltage_level_id));
 
   const displayOrDash = (value: string | undefined) => (value && value.length > 0 ? value : "—");
 
@@ -427,15 +164,9 @@ export function SubstationDetailPage() {
         }
       />
 
-      {/* align-items: start so each summary card sizes to its own content (no
-          stretch), avoiding empty space now that the descriptions are gone. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: tokens.space[3], marginBottom: tokens.space[3], alignItems: "start" }}>
-        {/* PSS/E bus correlation is snapshot-scoped and one-to-many
-            (TopologyBus.substation_id, per TopologyVersion — ADR-006/ADR-003),
-            owned by PSS/E Integration / Network Model. The registry's singular
-            psse_bus_number would misrepresent that as a permanent 1:1 identity,
-            and this page has no snapshot context — so it is not shown here (see
-            substation-registry-frontend.md). No value is inferred or fetched. */}
+      {/* Stable 2×2 summary grid on desktop (single column on mobile) — the four
+          cards always align predictably; Audit never floats alone in a 3rd row. */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: tokens.space[3], marginBottom: tokens.space[3] }}>
         <DetailSection title="Identity">
           <MetadataList
             items={[
@@ -485,10 +216,10 @@ export function SubstationDetailPage() {
       </div>
 
       {/* Edit is an accessible disclosure — collapsed by default so an engineer
-          can inspect the record without facing a large form; editing is
-          intentionally invoked (from here or the header "Edit" action). */}
+          can inspect without facing a large form; editing is intentionally
+          invoked (here or via the header "Edit" action). */}
       {canWrite && (
-        <div style={{ marginBottom: tokens.space[4], paddingTop: tokens.space[4], borderTop: `1px solid ${tokens.color.borderDivider}` }}>
+        <div style={{ marginBottom: tokens.space[5], paddingTop: tokens.space[4], borderTop: `1px solid ${tokens.color.borderDivider}` }}>
           {!editOpen && (
             <Button ref={editTriggerRef} variant="secondary" fullWidth aria-expanded={false} aria-controls="substation-edit-panel" onClick={() => setEditOpen(true)} leadingIcon={<PencilIcon />}>
               Edit substation
@@ -504,144 +235,21 @@ export function SubstationDetailPage() {
         </div>
       )}
 
-      {/* ---- Retained Equipment Registry sections ---- */}
-      <div style={{ display: "flex", flexDirection: "column", gap: tokens.space[4] }}>
-        <DetailSection
-          title="Switchyards"
-          description="The authoritative representation of this substation's voltage level(s) (ADR-009): one row per voltage level. Circuit terminals connect to a specific switchyard, not the substation as a whole."
-        >
-          <label htmlFor="show-entered-in-error-yards" style={{ display: "inline-flex", alignItems: "center", gap: tokens.space[2], fontFamily: tokens.typography.fontFamily, fontSize: tokens.typography.size.small }}>
-            <input id="show-entered-in-error-yards" type="checkbox" checked={showEnteredInErrorYards} onChange={(e) => setShowEnteredInErrorYards(e.target.checked)} /> Show entered-in-error switchyards
-          </label>
-          <ul data-testid="voltage-yards-list">
-            {visibleVoltageYards.map((yard) => (
-              <VoltageYardRow
-                key={yard.voltage_yard_id}
-                yard={yard}
-                canWrite={canManageVoltageYards}
-                onSaved={invalidateVoltageYards}
-                statusLabel={referenceData.operationalStatusesById.get(yard.operational_status_id)?.label ?? ""}
-                enteredInErrorStatusId={enteredInErrorStatusId}
-              />
-            ))}
-            {visibleVoltageYards.length === 0 && <li>No switchyards registered yet.</li>}
-          </ul>
-          {canManageVoltageYards && voltageYardsQuery.data !== undefined && (
-            <>
-              {availableVoltageLevelsForNewYard.length > 0 ? (
-                <form onSubmit={handleAddVoltageYardSubmit}>
-                  <div>
-                    <label htmlFor="new-yard-voltage-level">New switchyard voltage level</label>
-                    <br />
-                    <select id="new-yard-voltage-level" aria-label="New switchyard voltage level" value={newYardVoltageLevelId} onChange={(e) => setNewYardVoltageLevelId(e.target.value)} required>
-                      <option value="">Select voltage level...</option>
-                      {availableVoltageLevelsForNewYard.map((level) => (
-                        <option key={level.voltage_level_id} value={level.voltage_level_id}>{level.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="new-yard-commissioning-date">New switchyard commissioning date (optional)</label>
-                    <br />
-                    <input id="new-yard-commissioning-date" aria-label="New switchyard commissioning date" type="date" value={newYardCommissioningDate} onChange={(e) => setNewYardCommissioningDate(e.target.value)} />
-                  </div>
-                  <div>
-                    <label htmlFor="new-yard-latitude">New switchyard latitude (optional)</label>
-                    <br />
-                    <input id="new-yard-latitude" aria-label="New switchyard latitude" type="number" step="any" min={-90} max={90} value={newYardLatitude} onChange={(e) => setNewYardLatitude(e.target.value)} />
-                  </div>
-                  <div>
-                    <label htmlFor="new-yard-longitude">New switchyard longitude (optional)</label>
-                    <br />
-                    <input id="new-yard-longitude" aria-label="New switchyard longitude" type="number" step="any" min={-180} max={180} value={newYardLongitude} onChange={(e) => setNewYardLongitude(e.target.value)} />
-                  </div>
-                  <button type="submit" disabled={addVoltageYardMutation.isPending}>Add switchyard</button>
-                  {newYardError && <p role="alert">{newYardError}</p>}
-                </form>
-              ) : (
-                <p>This substation already has a switchyard at every known voltage level.</p>
-              )}
-            </>
-          )}
-        </DetailSection>
+      {/* ---- Lower workspace: grouped, consistently-styled sections ---- */}
+      <div style={{ display: "flex", flexDirection: "column", gap: tokens.space[6] }}>
+        <WorkspaceGroup title="Engineering Information">
+          <SwitchyardsSection substationId={id} />
+          <TransformersSection substationId={id} />
+          <ConnectivitySection substationId={id} substationMnemonic={substation.mnemonic} />
+        </WorkspaceGroup>
 
-        <DetailSection title="Transformers" description="Transformers are substation-owned equipment — every transformer installed here connects two of this substation's own switchyards (HV and LV).">
-          <ul data-testid="transformers-list">
-            {(transformersQuery.data?.items ?? []).map((transformer) => (
-              <li key={transformer.transformer_id}>
-                <Link to={`/transformers/${transformer.transformer_id}`}>{transformer.generated_short_name}</Link> ({transformer.hv_voltage_level_label} ↔ {transformer.lv_voltage_level_label})
-              </li>
-            ))}
-            {transformersQuery.data?.items.length === 0 && <li>No transformers installed here yet.</li>}
-          </ul>
-        </DetailSection>
+        <WorkspaceGroup title="Engineering History">
+          <AliasHistorySection substationId={id} />
+        </WorkspaceGroup>
 
-        <DetailSection title="Engineering Connectivity" description="Circuits connected to this substation, derived from the Circuit Registry's own Circuit/CircuitTerminal records — the manually maintained engineering baseline, not PSS/E-derived operational topology.">
-          <p data-testid="connected-circuits-count" style={{ margin: 0, fontFamily: tokens.typography.fontFamily, fontWeight: tokens.typography.weight.semibold }}>
-            Connected Circuits: {connectedCircuitsQuery.data?.total ?? 0}
-          </p>
-          {(connectedCircuitsQuery.data?.items.length ?? 0) === 0 ? (
-            <p>No connected circuits recorded in the engineering registry.</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table data-testid="engineering-connectivity-table" style={{ width: "100%", borderCollapse: "collapse", fontFamily: tokens.typography.fontFamily, fontSize: "13px" }}>
-                <thead>
-                  <tr>
-                    <th style={connThStyle}>Circuit</th>
-                    <th style={connThStyle}>Bay Number</th>
-                    <th style={connThStyle}>Voltage Level</th>
-                    <th style={connThStyle}>Line Type</th>
-                    <th style={connThStyle}>Status</th>
-                    <th style={connThStyle}>Other Connected Substations</th>
-                    <th style={connThStyle}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(connectedCircuitsQuery.data?.items ?? []).map((circuit) => {
-                    const otherSubstations = circuit.circuit_name
-                      .split("–")
-                      .map((m) => m.trim())
-                      .filter((m) => m !== "" && m !== substation.mnemonic);
-                    return (
-                      <tr key={circuit.circuit_id} style={{ borderTop: `1px solid ${tokens.color.borderDivider}` }}>
-                        <td style={connTdStyle}>{circuit.circuit_name}</td>
-                        <td style={connTdStyle}>{circuit.bay_number}</td>
-                        <td style={connTdStyle}>{referenceData.voltageLevelsById.get(circuit.voltage_level_id)?.label}</td>
-                        <td style={connTdStyle}>{referenceData.lineTypesById.get(circuit.line_type_id)?.label}</td>
-                        <td style={connTdStyle}>{referenceData.operationalStatusesById.get(circuit.operational_status_id)?.label}</td>
-                        <td style={connTdStyle}>{otherSubstations.length > 0 ? otherSubstations.join(", ") : "—"}</td>
-                        <td style={connTdStyle}><Link to={`/circuits/${circuit.circuit_id}`}>View</Link></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </DetailSection>
-
-        <DetailSection title="Alias history" description="Retired mnemonics preserved when this substation was renamed (identity history is never overwritten).">
-          <ul>
-            {(aliasesQuery.data ?? []).map((alias) => (
-              <li key={alias.alias_id}>
-                {alias.alias_mnemonic ?? alias.alias_name} (valid {formatDateTime(alias.valid_from)} – {alias.valid_to ? formatDateTime(alias.valid_to) : "present"})
-              </li>
-            ))}
-            {aliasesQuery.data?.length === 0 && <li>No prior aliases.</li>}
-          </ul>
-        </DetailSection>
-
-        <DetailSection title="Audit log" description="Field-level change history for this record.">
-          <ul>
-            {(auditLogQuery.data?.items ?? []).map((entry) => (
-              <li key={entry.log_id}>
-                {entry.field_name}: {entry.old_value ?? "—"} → {entry.new_value ?? "—"} ({entry.changed_by?.display_name ?? entry.changed_by?.username ?? "unknown"}, {formatDateTime(entry.changed_at)})
-                {entry.change_reason ? ` — ${entry.change_reason}` : ""}
-              </li>
-            ))}
-            {auditLogQuery.data?.items.length === 0 && <li>No changes recorded yet.</li>}
-          </ul>
-        </DetailSection>
+        <WorkspaceGroup title="Governance">
+          <AuditLogSection substationId={id} />
+        </WorkspaceGroup>
       </div>
 
       <ConfirmActionDialog
@@ -673,13 +281,7 @@ export function SubstationDetailPage() {
   );
 }
 
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-/** Compact audit value: date · time on one line, actor beneath — avoids the
- *  long wrapped "date, time · actor" line while showing the same information. */
+/** Compact audit value: date · time on one line, actor beneath. */
 function AuditValue({ at, actor }: { at: string; actor: string }) {
   const date = new Date(at);
   const valid = !Number.isNaN(date.getTime());
@@ -710,7 +312,6 @@ const backLinkStyle = {
   fontWeight: tokens.typography.weight.semibold,
 } as const;
 
-/** Mnemonic shown as the authoritative engineering identifier under the name. */
 const identityMnemonicStyle = {
   fontFamily: tokens.typography.fontFamily,
   fontVariantNumeric: "tabular-nums",
@@ -733,22 +334,4 @@ const mutedSmall = {
   fontFamily: tokens.typography.fontFamily,
   fontSize: tokens.typography.size.small,
   color: tokens.color.textSecondary,
-} as const;
-
-const connThStyle = {
-  padding: "8px 12px",
-  textAlign: "left",
-  fontSize: "10.5px",
-  letterSpacing: "0.05em",
-  textTransform: "uppercase",
-  color: tokens.color.textSecondary,
-  fontWeight: tokens.typography.weight.bold,
-  background: tokens.color.surfaceSubtle,
-  whiteSpace: "nowrap",
-} as const;
-
-const connTdStyle = {
-  padding: "8px 12px",
-  color: tokens.color.textPrimary,
-  whiteSpace: "nowrap",
 } as const;

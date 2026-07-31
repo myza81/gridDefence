@@ -108,8 +108,24 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     return Promise.resolve(json({ items, page: 1, page_size: 20, total: items.length }));
   }
   if (/\/api\/v1\/voltage-yards/.test(path)) return Promise.resolve(json(YARDS));
-  if (/\/api\/v1\/transformers\?/.test(path)) return Promise.resolve(json({ items: [], page: 1, page_size: 200, total: 0 }));
-  if (/\/api\/v1\/circuits\?/.test(path)) return Promise.resolve(json({ items: [], page: 1, page_size: 200, total: 0 }));
+  if (/\/api\/v1\/transformers\?/.test(path)) {
+    const items = /PREVIEW-1/.test(path)
+      ? [
+          { transformer_id: "txf-1", substation_id: "PREVIEW-1", substation_mnemonic: "AMPG", substation_official_name: "Ampang", transformer_number: "1", generated_short_name: "AMPG-GT1", hv_voltage_level_label: "275kV", lv_voltage_level_label: "132kV", capacity_mva: 240, operational_status_id: 2 },
+          { transformer_id: "txf-2", substation_id: "PREVIEW-1", substation_mnemonic: "AMPG", substation_official_name: "Ampang", transformer_number: "2", generated_short_name: "AMPG-GT2", hv_voltage_level_label: "275kV", lv_voltage_level_label: "132kV", capacity_mva: 240, operational_status_id: 2 },
+        ]
+      : [];
+    return Promise.resolve(json({ items, page: 1, page_size: 200, total: items.length }));
+  }
+  if (/\/api\/v1\/circuits\?/.test(path)) {
+    const items = /PREVIEW-1/.test(path)
+      ? [
+          { circuit_id: "c-1", bay_number: "1", circuit_name: "AMPG–KLNG", voltage_level_id: 2, line_type_id: 1, operational_status_id: 2, is_interconnector: false, terminal_count: 2 },
+          { circuit_id: "c-2", bay_number: "2", circuit_name: "AMPG–BTRK", voltage_level_id: 3, line_type_id: 1, operational_status_id: 2, is_interconnector: false, terminal_count: 2 },
+        ]
+      : [];
+    return Promise.resolve(json({ items, page: 1, page_size: 200, total: items.length }));
+  }
   return realFetch(input as RequestInfo, init);
 }) as typeof window.fetch;
 
