@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { ApiError } from "../../../api/client";
@@ -269,15 +269,43 @@ export function SubstationDetailPage() {
     enabled: substationId !== undefined,
   });
 
-  // --- Substation edit (shared form) ---
+  // --- Substation edit (disclosure — collapsed by default) ---
   const [editError, setEditError] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const editTriggerRef = useRef<HTMLButtonElement>(null);
+  const editPanelRef = useRef<HTMLDivElement>(null);
+  const editWasOpen = useRef(false);
+  const lifecycleButtonRef = useRef<HTMLButtonElement>(null);
   const updateMutation = useUpdateSubstationMutation(id);
+
+  // Accessible disclosure focus management: opening moves focus into the edit
+  // region; closing (cancel/save) restores focus to the disclosure trigger.
+  useEffect(() => {
+    if (editOpen && !editWasOpen.current) {
+      editPanelRef.current?.focus();
+    } else if (!editOpen && editWasOpen.current) {
+      editTriggerRef.current?.focus();
+    }
+    editWasOpen.current = editOpen;
+  }, [editOpen]);
 
   function handleEditSubmit(payload: SubstationCreate | SubstationUpdate): void {
     setEditError(null);
     updateMutation.mutate(payload as SubstationUpdate, {
+      onSuccess: () => setEditOpen(false), // a successful save collapses the form
       onError: (err: unknown) => setEditError(err instanceof ApiError ? err.message : "Failed to update substation."),
     });
+  }
+
+  function focusLifecycle(): void {
+    const button = lifecycleButtonRef.current;
+    if (!button) return;
+    button.focus(); // focus is the essential behaviour…
+    try {
+      button.scrollIntoView({ behavior: "smooth", block: "center" }); // …scroll is best-effort
+    } catch {
+      /* jsdom / unsupported environments: no-op */
+    }
   }
 
   // --- Lifecycle status change (confirm dialog offering only legal transitions) ---
@@ -374,21 +402,34 @@ export function SubstationDetailPage() {
 
   return (
     <div style={{ maxWidth: "1100px", margin: "0 auto" }}>
+      <div style={{ marginBottom: tokens.space[3] }}>
+        <Link to="/substations" style={backLinkStyle}>← Back to Registry</Link>
+      </div>
       <PageHeader
         title={substation.official_name}
         description={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: tokens.space[2], flexWrap: "wrap" }}>
-            <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: tokens.typography.weight.semibold, color: tokens.color.textPrimary }}>{substation.mnemonic}</span>
-            <span>·</span>
-            <Badge label={currentStatus?.label ?? String(substation.operational_status_id)} tone={toneForStatusCode(currentStatus?.code)} />
+          <span style={{ display: "inline-flex", flexDirection: "column", gap: tokens.space[2], alignItems: "flex-start" }}>
+            <span style={identityMnemonicStyle}>{substation.mnemonic}</span>
+            <Badge label={currentStatus?.label ?? String(substation.operational_status_id)} tone={toneForStatusCode(currentStatus?.code)} size="md" />
           </span>
         }
-        meta={<Link to="/substations" style={{ color: tokens.color.link, textDecoration: "none" }}>← Substation Registry</Link>}
+        actions={
+          canWrite ? (
+            <>
+              <Button variant="secondary" aria-expanded={editOpen} aria-controls="substation-edit-panel" onClick={() => setEditOpen((open) => !open)} leadingIcon={<PencilIcon />}>
+                Edit
+              </Button>
+              {targetStatusOptions.length > 0 && (
+                <Button variant="secondary" onClick={focusLifecycle}>Change status</Button>
+              )}
+            </>
+          ) : undefined
+        }
       />
 
       {/* align-items: start so each summary card sizes to its own content (no
           stretch), avoiding empty space now that the descriptions are gone. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: tokens.space[4], marginBottom: tokens.space[4], alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: tokens.space[3], marginBottom: tokens.space[3], alignItems: "start" }}>
         {/* PSS/E bus correlation is snapshot-scoped and one-to-many
             (TopologyBus.substation_id, per TopologyVersion — ADR-006/ADR-003),
             owned by PSS/E Integration / Network Model. The registry's singular
@@ -398,7 +439,7 @@ export function SubstationDetailPage() {
         <DetailSection title="Identity">
           <MetadataList
             items={[
-              { term: "Mnemonic", value: <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: tokens.typography.weight.semibold }}>{substation.mnemonic}</span> },
+              { term: "Mnemonic", value: <span style={identityMnemonicValueStyle}>{substation.mnemonic}</span> },
               { term: "Official name", value: substation.official_name },
             ]}
           />
@@ -419,13 +460,13 @@ export function SubstationDetailPage() {
           title="Lifecycle"
           actions={
             canWrite && targetStatusOptions.length > 0 ? (
-              <Button variant="secondary" onClick={() => setStatusDialogOpen(true)}>Change status</Button>
+              <Button ref={lifecycleButtonRef} variant="secondary" onClick={() => setStatusDialogOpen(true)}>Change status</Button>
             ) : undefined
           }
         >
           <MetadataList
             items={[
-              { term: "Current status", value: <Badge label={currentStatus?.label ?? String(substation.operational_status_id)} tone={toneForStatusCode(currentStatus?.code)} /> },
+              { term: "Current status", value: <Badge label={currentStatus?.label ?? String(substation.operational_status_id)} tone={toneForStatusCode(currentStatus?.code)} size="md" /> },
             ]}
           />
           {canWrite && targetStatusOptions.length === 0 && (
@@ -436,18 +477,30 @@ export function SubstationDetailPage() {
         <DetailSection title="Audit & Revision">
           <MetadataList
             items={[
-              { term: "Created", value: `${formatDateTime(substation.created_at)} · ${substation.created_by?.display_name ?? substation.created_by?.username ?? "—"}` },
-              { term: "Last updated", value: `${formatDateTime(substation.updated_at)} · ${substation.updated_by?.display_name ?? substation.updated_by?.username ?? "—"}` },
+              { term: "Created", value: <AuditValue at={substation.created_at} actor={substation.created_by?.display_name ?? substation.created_by?.username ?? "—"} /> },
+              { term: "Last updated", value: <AuditValue at={substation.updated_at} actor={substation.updated_by?.display_name ?? substation.updated_by?.username ?? "—"} /> },
             ]}
           />
         </DetailSection>
       </div>
 
+      {/* Edit is an accessible disclosure — collapsed by default so an engineer
+          can inspect the record without facing a large form; editing is
+          intentionally invoked (from here or the header "Edit" action). */}
       {canWrite && (
-        <div style={{ marginBottom: tokens.space[4] }}>
-          <DetailSection title="Edit">
-            <SubstationForm mode="edit" referenceData={referenceData} initial={substation} submitting={updateMutation.isPending} error={editError} onSubmit={handleEditSubmit} />
-          </DetailSection>
+        <div style={{ marginBottom: tokens.space[4], paddingTop: tokens.space[4], borderTop: `1px solid ${tokens.color.borderDivider}` }}>
+          {!editOpen && (
+            <Button ref={editTriggerRef} variant="secondary" fullWidth aria-expanded={false} aria-controls="substation-edit-panel" onClick={() => setEditOpen(true)} leadingIcon={<PencilIcon />}>
+              Edit substation
+            </Button>
+          )}
+          <div id="substation-edit-panel" ref={editPanelRef} tabIndex={-1} role="region" aria-label="Edit substation" hidden={!editOpen} style={{ outline: "none" }}>
+            {editOpen && (
+              <DetailSection title="Edit substation">
+                <SubstationForm mode="edit" referenceData={referenceData} initial={substation} submitting={updateMutation.isPending} error={editError} onSubmit={handleEditSubmit} onCancel={() => setEditOpen(false)} />
+              </DetailSection>
+            )}
+          </div>
         </div>
       )}
 
@@ -624,6 +677,56 @@ function formatDateTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+
+/** Compact audit value: date · time on one line, actor beneath — avoids the
+ *  long wrapped "date, time · actor" line while showing the same information. */
+function AuditValue({ at, actor }: { at: string; actor: string }) {
+  const date = new Date(at);
+  const valid = !Number.isNaN(date.getTime());
+  const day = valid ? date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : at;
+  const time = valid ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : "";
+  return (
+    <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.4 }}>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>{time ? `${day} · ${time}` : day}</span>
+      <span style={{ color: tokens.color.textSecondary, fontSize: tokens.typography.size.small }}>{actor}</span>
+    </span>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z" strokeLinejoin="round" />
+      <path d="M13.5 6.5l3 3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+const backLinkStyle = {
+  color: tokens.color.link,
+  textDecoration: "none",
+  fontFamily: tokens.typography.fontFamily,
+  fontSize: tokens.typography.size.small,
+  fontWeight: tokens.typography.weight.semibold,
+} as const;
+
+/** Mnemonic shown as the authoritative engineering identifier under the name. */
+const identityMnemonicStyle = {
+  fontFamily: tokens.typography.fontFamily,
+  fontVariantNumeric: "tabular-nums",
+  fontWeight: tokens.typography.weight.bold,
+  fontSize: "16px",
+  letterSpacing: "0.04em",
+  color: tokens.color.textPrimary,
+} as const;
+
+const identityMnemonicValueStyle = {
+  fontVariantNumeric: "tabular-nums",
+  fontWeight: tokens.typography.weight.bold,
+  fontSize: "15px",
+  letterSpacing: "0.03em",
+  color: tokens.color.textPrimary,
+} as const;
 
 const mutedSmall = {
   margin: 0,

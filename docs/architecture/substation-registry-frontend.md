@@ -42,6 +42,19 @@ Grouped `DetailSection` cards: **Identity**, **Engineering Classification**, **L
 
 **Deferred: a "Network Representation" section.** A read-only, snapshot-scoped view of a substation's correlated PSS/E buses (bus number · name · nominal voltage · correlation status · snapshot identity) would belong to the operational/network layer, not registry identity. It is deferred: this page has no selected/current snapshot to cite honestly, and such a view would duplicate the existing PSS/E Integration / Network Model workflow (which owns `TopologyBus.substation_id` correlation with provenance). Revisit if/when the shell carries an explicit snapshot context (Application Shell Architecture §3).
 
+### The reference workspace pattern (Circuit / Transformer / Relay / Sensitive-Customer registries should follow this)
+
+The detail page is the intended UX standard for every GridDefence registry record. Its shape:
+
+- **Inspect first, edit on purpose.** The record reads as compact summary cards; **editing is an accessible disclosure that is collapsed by default**. The engineer is never confronted with a large form just to read a record. The form expands inline (no route change, no modal), Cancel and a successful Save both collapse it, entered values persist while it is open, and validation is unchanged. Focus moves into the edit region on open and returns to the trigger on close; the trigger carries `aria-expanded` / `aria-controls` (WAI-ARIA disclosure). A successful save collapses the form.
+- **A page command area, not a scattered link.** A top action bar carries `← Back to Registry` on the left and permission-gated actions on the right: **Edit** (the disclosure trigger) and **Change status** (which *focuses/scrolls to* the Lifecycle card's own audited control — it never duplicates lifecycle logic or opens a second dialog).
+- **Engineering identity is visually clear.** The header shows the **official name** (h1) with the **mnemonic** rendered beneath as the authoritative identifier (bold, tabular numerals, tracked) and the lifecycle **badge** below it. The Identity card re-states the mnemonic with the same identifier styling.
+- **Lifecycle prominence.** The current status uses the larger (`md`) badge so it is the focal value, stronger than its "Current status" label; the Change-status control sits in the card header, aligned with the status.
+- **Compact audit.** Created / Last-updated render as `DD Mon YYYY · HH:MM` with the actor on a second line, avoiding long wrapped timestamp lines — same information, denser.
+- **Density.** Summary cards size to their own content (no stretch), with tightened inter-card spacing and no descriptive prose; the two-column desktop layout collapses to one column on narrow viewports; the retained Equipment-Registry sections follow below the disclosure.
+
+Reusable pieces that carry this pattern forward: `PageHeader` (title/description/actions), `DetailSection` + `MetadataList`, `Badge` (`size="md"` for a focal status), `ConfirmActionDialog`, and the shared module `…Form` in an `mode="edit"` disclosure. A future registry composes the same, swapping only its own fields, lifecycle mirror, and equipment sections.
+
 ## Lifecycle action (status change)
 
 `ConfirmActionDialog` — offers only the legal target states for the current status (reflecting rules, not relying on rejection), requires a deliberate confirm, takes an audited reason, uses a danger tone for "Entered in Error", disables repeat submission while pending, and surfaces the backend's own rejection message in place. Cancel makes no request.

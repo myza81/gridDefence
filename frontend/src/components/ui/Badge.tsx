@@ -9,6 +9,8 @@ interface BadgeProps {
   tone?: BadgeTone;
   /** Show a leading status dot (shape reinforces the tone beyond colour). */
   dot?: boolean;
+  /** `md` is slightly larger for a focal status (e.g. the Lifecycle card). */
+  size?: "sm" | "md";
 }
 
 /**
@@ -25,28 +27,29 @@ const PALETTE: Record<BadgeTone, { bg: string; fg: string; dot: string }> = {
   danger: { bg: "#FBE7E4", fg: "#B23A1B", dot: "#C2410C" },
 };
 
-export function Badge({ label, tone = "neutral", dot = true }: BadgeProps) {
+export function Badge({ label, tone = "neutral", dot = true, size = "sm" }: BadgeProps) {
   const colors = PALETTE[tone];
+  const md = size === "md";
   return (
     <span
       data-testid="badge"
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: "6px",
-        padding: "2px 10px",
+        gap: md ? "7px" : "6px",
+        padding: md ? "4px 12px" : "2px 10px",
         borderRadius: tokens.radius.pill,
         background: colors.bg,
         color: colors.fg,
         fontFamily: tokens.typography.fontFamily,
-        fontSize: "12px",
+        fontSize: md ? "13px" : "12px",
         fontWeight: tokens.typography.weight.semibold,
         lineHeight: 1.5,
         whiteSpace: "nowrap",
       }}
     >
       {dot && (
-        <span aria-hidden="true" style={{ width: "7px", height: "7px", borderRadius: "50%", background: colors.dot, flex: "none" }} />
+        <span aria-hidden="true" style={{ width: md ? "8px" : "7px", height: md ? "8px" : "7px", borderRadius: "50%", background: colors.dot, flex: "none" }} />
       )}
       {label}
     </span>

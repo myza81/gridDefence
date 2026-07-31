@@ -151,6 +151,22 @@ describe("SubstationDetailPage", () => {
     window.localStorage.clear();
   });
 
+  // Edit is a disclosure (collapsed by default) — open it before asserting on
+  // the form. Uses the below-cards "Edit substation" trigger.
+  async function openEdit(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("button", { name: "Edit substation" }));
+    await screen.findByRole("heading", { name: "Edit substation" });
+  }
+
+  // Both the header page-action and the Lifecycle card expose "Change status";
+  // the dialog-opening one is the Lifecycle card button (not inside <header>).
+  async function openStatusDialog(user: ReturnType<typeof userEvent.setup>) {
+    const buttons = await screen.findAllByRole("button", { name: "Change status" });
+    const cardButton = buttons.find((b) => !b.closest("header")) ?? buttons[buttons.length - 1];
+    await user.click(cardButton);
+    return screen.getByRole("dialog", { name: "Change substation status" });
+  }
+
   it("hides the edit and status-change forms for a user without substation_registry.write", async () => {
     authStorage.setToken("token");
     stubFetch([
@@ -252,9 +268,7 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Change status" }));
-
-    const dialog = screen.getByRole("dialog", { name: "Change substation status" });
+    const dialog = await openStatusDialog(user);
     const targetSelect = within(dialog).getByLabelText("New status") as HTMLSelectElement;
     const offered = Array.from(targetSelect.querySelectorAll("option")).map((o) => o.textContent?.trim());
     // Only legal targets from ACTIVE — never Active/Under Construction/Planned.
@@ -1258,11 +1272,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
-
     const user = userEvent.setup();
+    await openEdit(user);
     const nameInput = screen.getByLabelText("Official name");
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed");
@@ -1271,6 +1282,56 @@ describe("SubstationDetailPage", () => {
     await waitFor(() => {
       expect(updatePayload).toMatchObject({ official_name: "Renamed" });
     });
+    // A successful save collapses the disclosure back to the trigger.
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit substation" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Edit substation" })).toBeInTheDocument();
+  });
+
+  it("keeps the edit form collapsed by default and toggles it as an accessible disclosure", async () => {
+    authStorage.setToken("token");
+    stubActiveWriteSession();
+    renderDetailPage();
+    const user = userEvent.setup();
+
+    // Collapsed by default: no form, an accessible disclosure trigger.
+    const trigger = await screen.findByRole("button", { name: "Edit substation" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-controls", "substation-edit-panel");
+    expect(screen.queryByRole("heading", { name: "Edit substation" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+
+    // Expand → form appears; the header "Edit" action reflects expanded state.
+    await user.click(trigger);
+    expect(await screen.findByRole("heading", { name: "Edit substation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toHaveAttribute("aria-expanded", "true");
+
+    // Entered values persist while expanded.
+    const nameInput = screen.getByLabelText("Official name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Draft rename");
+    expect(nameInput).toHaveValue("Draft rename");
+
+    // Cancel collapses and discards; the trigger returns.
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit substation" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Edit substation" })).toBeInTheDocument();
+  });
+
+  it("provides a page action bar: Back to Registry and a Change status action that focuses the Lifecycle control", async () => {
+    authStorage.setToken("token");
+    stubActiveWriteSession();
+    renderDetailPage();
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("link", { name: "← Back to Registry" })).toHaveAttribute("href", "/substations");
+
+    const buttons = await screen.findAllByRole("button", { name: "Change status" });
+    const headerButton = buttons.find((b) => b.closest("header"))!;
+    const lifecycleButton = buttons.find((b) => !b.closest("header"))!;
+    await user.click(headerButton);
+    // The header action focuses (does not duplicate) the Lifecycle card control.
+    expect(lifecycleButton).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Change substation status" })).toBeNull();
   });
 
   it("displays the assigned GM Zone in the detail view", async () => {
@@ -1362,9 +1423,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
+    const user = userEvent.setup();
+    await openEdit(user);
     expect(screen.getByLabelText("GM Zone")).toBeRequired();
   });
 
@@ -1425,11 +1485,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
-
     const user = userEvent.setup();
+    await openEdit(user);
     await user.selectOptions(screen.getByLabelText("GM Zone"), "2");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -1486,9 +1543,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
+    const user = userEvent.setup();
+    await openEdit(user);
 
     expect((screen.getByLabelText("Region") as HTMLSelectElement).value).toBe("1");
     expect((screen.getByLabelText("State (Optional)") as HTMLSelectElement).value).toBe("1");
@@ -1555,11 +1611,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
-
     const user = userEvent.setup();
+    await openEdit(user);
     await user.selectOptions(screen.getByLabelText("Region"), "2");
     await user.selectOptions(screen.getByLabelText("GM Zone"), "2");
     await user.selectOptions(screen.getByLabelText("State (Optional)"), "2");
@@ -1675,13 +1728,11 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
+    const user = userEvent.setup();
+    await openEdit(user);
     // The current State (id 1) is preloaded; choosing "None" clears it.
     const stateSelect = screen.getByLabelText("State (Optional)") as HTMLSelectElement;
     expect(stateSelect.value).toBe("1");
-    const user = userEvent.setup();
     await user.selectOptions(stateSelect, "");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -1753,11 +1804,8 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Edit" })).toBeInTheDocument();
-    });
-
     const user = userEvent.setup();
+    await openEdit(user);
     await user.selectOptions(screen.getByLabelText("Region"), "2");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -1809,8 +1857,7 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Change status" }));
-    const dialog = screen.getByRole("dialog", { name: "Change substation status" });
+    const dialog = await openStatusDialog(user);
     await user.selectOptions(within(dialog).getByLabelText("New status"), "5");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
@@ -1828,8 +1875,7 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Change status" }));
-    const dialog = screen.getByRole("dialog", { name: "Change substation status" });
+    const dialog = await openStatusDialog(user);
     await user.selectOptions(within(dialog).getByLabelText("New status"), "5");
     await user.type(within(dialog).getByLabelText("Change reason"), "End of service life");
     await user.click(within(dialog).getByRole("button", { name: "Change status" }));
@@ -1860,7 +1906,8 @@ describe("SubstationDetailPage", () => {
     authStorage.setToken("token");
     stubActiveWriteSession(); // ACTIVE substation, write permission
     renderDetailPage();
-    await screen.findByRole("heading", { name: "Edit" });
+    const user = userEvent.setup();
+    await openEdit(user);
 
     // Card headings retained…
     for (const heading of ["Identity", "Engineering Classification", "Lifecycle", "Audit & Revision"]) {
@@ -1894,8 +1941,9 @@ describe("SubstationDetailPage", () => {
     expect(screen.getByText("Current status", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("Created", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("Last updated", { selector: "dt" })).toBeInTheDocument();
-    // Change-status action + edit controls retained.
-    expect(screen.getByRole("button", { name: "Change status" })).toBeInTheDocument();
+    // Change-status action + edit controls retained (header page-action and the
+    // Lifecycle card both expose "Change status").
+    expect(screen.getAllByRole("button", { name: "Change status" }).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Mnemonic")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
 
