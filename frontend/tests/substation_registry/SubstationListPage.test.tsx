@@ -1,4 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { authStorage } from "../../src/modules/iam/authStorage";
@@ -272,14 +274,54 @@ describe("SubstationListPage", () => {
     });
   });
 
-  it("links each row to its detail record", async () => {
+  it("uses the mnemonic itself as the row's navigation link (no separate Open action)", async () => {
     authStorage.setToken("token");
     stubSession([]);
 
     renderWithProviders(<SubstationListPage />, { route: "/substations" });
 
-    const link = await screen.findByRole("link", { name: /Open SUB1 Substation One/ });
+    const link = await screen.findByRole("link", { name: "Open SUB1 Substation One" });
+    // The link IS the mnemonic, and points at the existing detail route.
+    expect(link).toHaveTextContent("SUB1");
     expect(link).toHaveAttribute("href", "/substations/33333333-3333-3333-3333-333333333333");
+    // The generic "Open" column/action is gone.
+    expect(screen.queryByText("Open")).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "Open" })).toBeNull();
+  });
+
+  function renderListWithDetailRoute(route = "/substations") {
+    return renderWithProviders(
+      <Routes>
+        <Route path="/substations" element={<SubstationListPage />} />
+        <Route path="/substations/:substationId" element={<div>Detail workspace marker</div>} />
+      </Routes>,
+      { route },
+    );
+  }
+
+  it("opens the detail page when the mnemonic link is clicked", async () => {
+    authStorage.setToken("token");
+    stubSession([]);
+    const user = userEvent.setup();
+
+    renderListWithDetailRoute();
+
+    await user.click(await screen.findByRole("link", { name: "Open SUB1 Substation One" }));
+    expect(await screen.findByText("Detail workspace marker")).toBeInTheDocument();
+  });
+
+  it("opens the detail page when the focused mnemonic link is activated with Enter", async () => {
+    authStorage.setToken("token");
+    stubSession([]);
+    const user = userEvent.setup();
+
+    renderListWithDetailRoute();
+
+    const link = await screen.findByRole("link", { name: "Open SUB1 Substation One" });
+    link.focus();
+    expect(link).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByText("Detail workspace marker")).toBeInTheDocument();
   });
 
   function stubEmpty(myPermissions: string[], total: number) {

@@ -207,14 +207,58 @@ function StatusCell({ referenceData, statusId }: { referenceData: RowsProps["ref
   return <Badge label={status?.label ?? String(statusId)} tone={toneForStatusCode(status?.code)} />;
 }
 
+/**
+ * The mnemonic rendered as the primary navigation affordance (the mnemonic is
+ * the authoritative engineering identifier — engineers reason in mnemonics).
+ * A real link (Enter-activatable, screen-reader-announced), styled as an
+ * engineering identifier — semibold, primary blue, underline on hover/focus
+ * only, tabular numerals — not a button or a decorated hyperlink.
+ */
+function MnemonicLink({ substationId, mnemonic, officialName, fontSize = "13px" }: { substationId: string; mnemonic: string; officialName: string; fontSize?: string }) {
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  return (
+    <Link
+      to={`/substations/${substationId}`}
+      aria-label={`Open ${mnemonic} ${officialName}`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        display: "inline-block",
+        fontFamily: tokens.typography.fontFamily,
+        fontSize,
+        fontWeight: tokens.typography.weight.semibold,
+        fontVariantNumeric: "tabular-nums",
+        letterSpacing: "0.02em",
+        color: tokens.color.link,
+        textDecoration: hovered || focused ? "underline" : "none",
+        cursor: "pointer",
+        borderRadius: tokens.radius.sm,
+        padding: "1px 3px",
+        margin: "-1px -3px",
+        outline: "none",
+        boxShadow: focused ? tokens.focus.ring : "none",
+      }}
+    >
+      {mnemonic}
+    </Link>
+  );
+}
+
 function RegistryTable({ items, referenceData, voltageLabelsBySubstation }: RowsProps) {
   return (
     <Card padding="0" style={{ overflowX: "auto" }}>
+      {/* Columns are identity-first: the Mnemonic is the primary navigation
+          target (engineers reason in mnemonics), so there is no generic "Open"
+          action column. A future per-row overflow (⋮) menu can be added as a
+          new trailing column here without restructuring the table. */}
       <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: tokens.typography.fontFamily, fontSize: "13px" }}>
         <thead>
           <tr>
-            {["Mnemonic", "Substation", "Switchyards", "Region", "GM Zone", "Grid Owner", "Status", ""].map((heading, index) => (
-              <th key={heading || "actions"} scope="col" style={{ ...thStyle, textAlign: index === 7 ? "right" : "left" }}>
+            {["Mnemonic", "Substation", "Switchyards", "Region", "GM Zone", "Grid Owner", "Status"].map((heading) => (
+              <th key={heading} scope="col" style={thStyle}>
                 {heading}
               </th>
             ))}
@@ -223,18 +267,15 @@ function RegistryTable({ items, referenceData, voltageLabelsBySubstation }: Rows
         <tbody>
           {items.map((substation) => (
             <tr key={substation.substation_id} style={{ borderTop: `1px solid ${tokens.color.borderDivider}` }}>
-              <td style={{ ...tdStyle, fontWeight: tokens.typography.weight.bold, color: tokens.color.textPrimary }}>{substation.mnemonic}</td>
+              <td style={tdStyle}>
+                <MnemonicLink substationId={substation.substation_id} mnemonic={substation.mnemonic} officialName={substation.official_name} />
+              </td>
               <td style={tdStyle}>{substation.official_name}</td>
               <td style={tdStyle}>{(voltageLabelsBySubstation.get(substation.substation_id) ?? []).join(", ") || "—"}</td>
               <td style={tdStyle}>{referenceData.regionsById.get(substation.region_id)?.label ?? substation.region_id}</td>
               <td style={tdStyle}>{referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? substation.gm_zone_id}</td>
               <td style={tdStyle}>{referenceData.gridOwnersById.get(substation.grid_owner_id)?.label ?? substation.grid_owner_id}</td>
               <td style={tdStyle}><StatusCell referenceData={referenceData} statusId={substation.operational_status_id} /></td>
-              <td style={{ ...tdStyle, textAlign: "right" }}>
-                <Link to={`/substations/${substation.substation_id}`} style={linkStyle} aria-label={`Open ${substation.mnemonic} ${substation.official_name}`}>
-                  Open
-                </Link>
-              </td>
             </tr>
           ))}
         </tbody>
@@ -249,16 +290,13 @@ function MobileList({ items, referenceData, voltageLabelsBySubstation }: RowsPro
       {items.map((substation) => (
         <Card key={substation.substation_id} padding="16px" style={{ display: "flex", flexDirection: "column", gap: tokens.space[2] }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: tokens.space[2] }}>
-            <span style={{ fontWeight: tokens.typography.weight.bold, fontFamily: tokens.typography.fontFamily, color: tokens.color.textPrimary }}>{substation.mnemonic}</span>
+            <MnemonicLink substationId={substation.substation_id} mnemonic={substation.mnemonic} officialName={substation.official_name} fontSize="15px" />
             <StatusCell referenceData={referenceData} statusId={substation.operational_status_id} />
           </div>
           <span style={{ fontFamily: tokens.typography.fontFamily, fontSize: "13px", color: tokens.color.textPrimary }}>{substation.official_name}</span>
           <span style={{ fontFamily: tokens.typography.fontFamily, fontSize: "12.5px", color: tokens.color.textSecondary }}>
             {referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? "—"} · {(voltageLabelsBySubstation.get(substation.substation_id) ?? []).join(", ") || "no switchyards"}
           </span>
-          <Link to={`/substations/${substation.substation_id}`} style={{ ...linkStyle, marginTop: tokens.space[1] }} aria-label={`Open ${substation.mnemonic} ${substation.official_name}`}>
-            Open record →
-          </Link>
         </Card>
       ))}
     </div>
@@ -289,13 +327,6 @@ const tdStyle = {
   color: tokens.color.textPrimary,
   verticalAlign: "middle",
   whiteSpace: "nowrap",
-} as const;
-
-const linkStyle = {
-  color: tokens.color.link,
-  fontWeight: tokens.typography.weight.semibold,
-  textDecoration: "none",
-  fontFamily: tokens.typography.fontFamily,
 } as const;
 
 const mutedTextStyle = {
