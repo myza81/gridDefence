@@ -314,8 +314,16 @@ function PlusIcon() {
   );
 }
 
+// Header and body cells share identical padding, box-sizing and left alignment
+// so every heading sits on the same vertical axis as its column values. The
+// explicit `textAlign: "left"` overrides the browser's default centred <th>,
+// which was the sole cause of the header/value misalignment (Status included:
+// its header now starts at the left edge of the lifecycle badges).
 const thStyle = {
   padding: "10px 14px",
+  boxSizing: "border-box",
+  textAlign: "left",
+  verticalAlign: "middle",
   fontSize: "10.5px",
   letterSpacing: "0.05em",
   textTransform: "uppercase",
@@ -327,6 +335,8 @@ const thStyle = {
 
 const tdStyle = {
   padding: "10px 14px",
+  boxSizing: "border-box",
+  textAlign: "left",
   color: tokens.color.textPrimary,
   verticalAlign: "middle",
   whiteSpace: "nowrap",

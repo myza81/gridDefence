@@ -159,6 +159,31 @@ describe("SubstationListPage", () => {
     expect(within(row!).getByText("Active")).toBeInTheDocument();
   });
 
+  it("left-aligns every semantic column header with its column values", async () => {
+    authStorage.setToken("token");
+    stubSession([]);
+
+    renderWithProviders(<SubstationListPage />, { route: "/substations" });
+
+    await screen.findByText("SUB1");
+    const headers = screen.getAllByRole("columnheader");
+    expect(headers.map((h) => h.textContent)).toEqual([
+      "Mnemonic",
+      "Substation",
+      "Voltage",
+      "Region",
+      "GM Zone",
+      "Grid Owner",
+      "Status",
+    ]);
+    // Every header is a semantic <th> left-aligned (not the default centred th),
+    // so it sits on the same axis as its left-aligned body cells.
+    for (const header of headers) {
+      expect(header.tagName).toBe("TH");
+      expect(header).toHaveStyle({ textAlign: "left" });
+    }
+  });
+
   it("labels the voltage column 'Voltage' and shows the compact grid-owner abbreviation", async () => {
     authStorage.setToken("token");
     stubSession([]);
