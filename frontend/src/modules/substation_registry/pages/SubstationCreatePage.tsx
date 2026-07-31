@@ -1,169 +1,50 @@
-import { useMutation } from "@tanstack/react-query";
-import type { FormEvent } from "react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../../api/client";
+import { Card } from "../../../components/ui/Card";
+import { PageHeader } from "../../../components/ui/PageHeader";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
-import { substationRegistryApi } from "../api";
+import { SubstationForm } from "../components/SubstationForm";
+import { useCreateSubstationMutation } from "../hooks";
+import type { SubstationCreate, SubstationUpdate } from "../types";
 
+/**
+ * Register a new Substation. Uses the shared, grouped SubstationForm and the
+ * module's create mutation (which invalidates the registry list on success),
+ * then navigates to the new record's detail workspace.
+ */
 export function SubstationCreatePage() {
   const navigate = useNavigate();
   const referenceData = useReferenceData();
-
-  const [mnemonic, setMnemonic] = useState("");
-  const [officialName, setOfficialName] = useState("");
-  const [regionId, setRegionId] = useState("");
-  const [gmZoneId, setGmZoneId] = useState("");
-  const [stateId, setStateId] = useState("");
-  const [gridOwnerId, setGridOwnerId] = useState("");
-  const [operationalStatusId, setOperationalStatusId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      substationRegistryApi.createSubstation({
-        mnemonic,
-        official_name: officialName,
-        region_id: Number(regionId),
-        gm_zone_id: Number(gmZoneId),
-        // State is optional (ADR-026) — omit it entirely when none is
-        // chosen; never send a placeholder or a fabricated value.
-        ...(stateId ? { state_id: Number(stateId) } : {}),
-        grid_owner_id: Number(gridOwnerId),
-        operational_status_id: Number(operationalStatusId),
-      }),
-    onSuccess: (detail) => {
-      navigate(`/substations/${detail.substation_id}`, { replace: true });
-    },
-    onError: (err: unknown) => {
-      setError(err instanceof ApiError ? err.message : "Failed to create substation.");
-    },
-  });
+  const createMutation = useCreateSubstationMutation();
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
+  function handleSubmit(payload: SubstationCreate | SubstationUpdate): void {
     setError(null);
-    createMutation.mutate();
+    createMutation.mutate(payload as SubstationCreate, {
+      onSuccess: (detail) => navigate(`/substations/${detail.substation_id}`, { replace: true }),
+      onError: (err: unknown) => setError(err instanceof ApiError ? err.message : "Failed to create substation."),
+    });
   }
 
-  // Create: always starts as Under Construction or Active
-  // (substation-registry.md §10, ADR-014).
-  const initialStatusOptions = referenceData.operationalStatuses.filter((status) =>
-    ["UNDER_CONSTRUCTION", "ACTIVE"].includes(status.code),
-  );
-
   return (
-    <section>
-      <h2>Create substation</h2>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label htmlFor="mnemonic">Mnemonic</label>
-          <br />
-          <input
-            id="mnemonic"
-            value={mnemonic}
-            onChange={(e) => setMnemonic(e.target.value)}
-            required
-            maxLength={10}
-          />
-        </div>
-        <div>
-          <label htmlFor="official-name">Official name</label>
-          <br />
-          <input
-            id="official-name"
-            value={officialName}
-            onChange={(e) => setOfficialName(e.target.value)}
-            required
-            maxLength={150}
-          />
-        </div>
-        <div>
-          <label htmlFor="region">Region</label>
-          <br />
-          <select
-            id="region"
-            value={regionId}
-            onChange={(e) => setRegionId(e.target.value)}
-            required
-          >
-            <option value="">Select...</option>
-            {referenceData.regions.map((region) => (
-              <option key={region.region_id} value={region.region_id}>
-                {region.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="gm-zone">GM Zone</label>
-          <br />
-          <select
-            id="gm-zone"
-            value={gmZoneId}
-            onChange={(e) => setGmZoneId(e.target.value)}
-            required
-          >
-            <option value="">Select...</option>
-            {referenceData.gmZones.map((zone) => (
-              <option key={zone.gm_zone_id} value={zone.gm_zone_id}>
-                {zone.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="state">State (Optional)</label>
-          <br />
-          <select id="state" value={stateId} onChange={(e) => setStateId(e.target.value)}>
-            <option value="">None</option>
-            {referenceData.states.map((state) => (
-              <option key={state.state_id} value={state.state_id}>
-                {state.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="grid-owner">Grid owner</label>
-          <br />
-          <select
-            id="grid-owner"
-            value={gridOwnerId}
-            onChange={(e) => setGridOwnerId(e.target.value)}
-            required
-          >
-            <option value="">Select...</option>
-            {referenceData.gridOwners.map((owner) => (
-              <option key={owner.grid_owner_id} value={owner.grid_owner_id}>
-                {owner.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="operational-status">Initial status</label>
-          <br />
-          <select
-            id="operational-status"
-            value={operationalStatusId}
-            onChange={(e) => setOperationalStatusId(e.target.value)}
-            required
-          >
-            <option value="">Select...</option>
-            {initialStatusOptions.map((status) => (
-              <option key={status.operational_status_id} value={status.operational_status_id}>
-                {status.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={createMutation.isPending}>
-          Create substation
-        </button>
-      </form>
-    </section>
+    <div style={{ maxWidth: "820px", margin: "0 auto" }}>
+      <PageHeader
+        title="Register substation"
+        description="Add a new transmission substation to the authoritative registry. Identity and classification are validated against Core Platform reference data before the record is created."
+      />
+      <Card padding="24px">
+        <SubstationForm
+          mode="create"
+          referenceData={referenceData}
+          submitting={createMutation.isPending}
+          error={error}
+          onSubmit={handleSubmit}
+          onCancel={() => navigate("/substations")}
+        />
+      </Card>
+    </div>
   );
 }

@@ -258,17 +258,91 @@ describe("SubstationListPage", () => {
     await waitFor(() => {
       expect(screen.getByText("SUB1")).toBeInTheDocument();
     });
-    expect(screen.queryByRole("link", { name: "Create substation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Register substation" })).not.toBeInTheDocument();
   });
 
-  it("shows the create-substation link for a user with substation_registry.write", async () => {
+  it("shows the register-substation link for a user with substation_registry.write", async () => {
     authStorage.setToken("token");
     stubSession(["substation_registry.write"]);
 
     renderWithProviders(<SubstationListPage />, { route: "/substations" });
 
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Create substation" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Register substation" })).toBeInTheDocument();
     });
+  });
+
+  it("links each row to its detail record", async () => {
+    authStorage.setToken("token");
+    stubSession([]);
+
+    renderWithProviders(<SubstationListPage />, { route: "/substations" });
+
+    const link = await screen.findByRole("link", { name: /Open SUB1 Substation One/ });
+    expect(link).toHaveAttribute("href", "/substations/33333333-3333-3333-3333-333333333333");
+  });
+
+  function stubEmpty(myPermissions: string[], total: number) {
+    stubFetch([
+      { method: "GET", pattern: /\/api\/v1\/users\/me$/, respond: () => ({ status: 200, body: CURRENT_USER }) },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({
+          status: 200,
+          body: [
+            {
+              role: { role_id: "r", name: "Engineer", description: null, is_system_role: true, status: "active" },
+              granted_at: "2026-01-01T00:00:00Z",
+              permissions: myPermissions,
+            },
+          ],
+        }),
+      },
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/substations\?/,
+        respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 20, total } }),
+      },
+      { method: "GET", pattern: /\/api\/v1\/voltage-yards$/, respond: () => ({ status: 200, body: [] }) },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+  }
+
+  it("distinguishes an empty registry from an empty filtered result", async () => {
+    authStorage.setToken("token");
+    stubEmpty(["substation_registry.write"], 0);
+
+    const { unmount } = renderWithProviders(<SubstationListPage />, { route: "/substations" });
+    expect(await screen.findByText("No substations registered")).toBeInTheDocument();
+    unmount();
+
+    stubEmpty(["substation_registry.write"], 0);
+    renderWithProviders(<SubstationListPage />, { route: "/substations?status=1" });
+    expect(await screen.findByText("No substations match the current filters")).toBeInTheDocument();
+  });
+
+  it("shows an error state (not a blank page) when the registry request fails", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      { method: "GET", pattern: /\/api\/v1\/users\/me$/, respond: () => ({ status: 200, body: CURRENT_USER }) },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        method: "GET",
+        pattern: /\/api\/v1\/substations\?/,
+        respond: () => ({ status: 500, body: { detail: { code: "app_error", message: "Registry unavailable." } } }),
+      },
+      { method: "GET", pattern: /\/api\/v1\/voltage-yards$/, respond: () => ({ status: 200, body: [] }) },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderWithProviders(<SubstationListPage />, { route: "/substations" });
+
+    expect(await screen.findByText("Couldn't load substations")).toBeInTheDocument();
+    expect(screen.getByText("Registry unavailable.")).toBeInTheDocument();
   });
 });

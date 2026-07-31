@@ -1,223 +1,323 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
-import { useAuth } from "../../iam/AuthContext";
+import { ApiError } from "../../../api/client";
+import { Badge } from "../../../components/ui/Badge";
+import { Button } from "../../../components/ui/Button";
+import { Card } from "../../../components/ui/Card";
+import { EmptyState } from "../../../components/ui/EmptyState";
+import { ErrorState } from "../../../components/ui/ErrorState";
+import { PageHeader } from "../../../components/ui/PageHeader";
+import { SelectField } from "../../../components/ui/SelectField";
+import { TextField } from "../../../components/ui/TextField";
+import { useIsMobile } from "../../../components/layout/useIsMobile";
+import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
+import { tokens } from "../../../theme/tokens";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
+import { useAuth } from "../../iam/AuthContext";
 import { equipmentRegistryApi } from "../../equipment_registry/api";
-import { substationRegistryApi } from "../api";
+import { useSubstationsQuery } from "../hooks";
+import { substationStatuses, toneForStatusCode } from "../lifecycle";
 import type { SubstationSummary } from "../types";
 
-const columnHelper = createColumnHelper<SubstationSummary>();
+const PAGE_SIZE = 20;
 
 export function SubstationListPage() {
   const { permissions } = useAuth();
   const canWrite = permissions.has("substation_registry.write");
   const referenceData = useReferenceData();
+  const isMobile = useIsMobile();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [regionId, setRegionId] = useState<string>("");
-  const [gmZoneId, setGmZoneId] = useState<string>("");
-  const [statusId, setStatusId] = useState<string>("");
-  const pageSize = 20;
+  // Discrete filters + page live in the URL (shareable, deep-linkable); the
+  // free-text search is a debounced local input mirrored into the URL.
+  const regionId = searchParams.get("region") ?? "";
+  const gmZoneId = searchParams.get("gm_zone") ?? "";
+  const statusId = searchParams.get("status") ?? "";
+  const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
 
-  const substationsQuery = useQuery({
-    queryKey: ["substations", { page, search, regionId, gmZoneId, statusId }],
-    queryFn: () =>
-      substationRegistryApi.listSubstations({
-        page,
-        page_size: pageSize,
-        search: search || undefined,
-        region_id: regionId ? Number(regionId) : undefined,
-        gm_zone_id: gmZoneId ? Number(gmZoneId) : undefined,
-        operational_status_id: statusId ? Number(statusId) : undefined,
-      }),
-  });
+  const [searchInput, setSearchInput] = useState(searchParams.get("q") ?? "");
+  const debouncedSearch = useDebouncedValue(searchInput.trim(), 300);
 
-  // Voltage level is no longer a Substation attribute (ADR-009) — it is
-  // represented exclusively by SubstationVoltageYard, owned by Equipment
-  // Registry. Composed client-side, not via a backend join: Substation
-  // Registry (Master Data) must never depend on Equipment Registry
-  // (Network Data), per CLAUDE.md A2/F2.
+  function updateParams(mutate: (next: URLSearchParams) => void, resetPage = true): void {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        mutate(next);
+        if (resetPage) next.delete("page");
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
+  // Mirror the debounced search into the URL without a render loop.
+  useEffect(() => {
+    if ((searchParams.get("q") ?? "") === debouncedSearch) return;
+    updateParams((next) => (debouncedSearch ? next.set("q", debouncedSearch) : next.delete("q")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
+
+  const filters = useMemo(
+    () => ({
+      page,
+      page_size: PAGE_SIZE,
+      search: debouncedSearch || undefined,
+      region_id: regionId ? Number(regionId) : undefined,
+      gm_zone_id: gmZoneId ? Number(gmZoneId) : undefined,
+      operational_status_id: statusId ? Number(statusId) : undefined,
+    }),
+    [page, debouncedSearch, regionId, gmZoneId, statusId],
+  );
+
+  const substationsQuery = useSubstationsQuery(filters);
+
+  // Switchyard voltages are composed client-side (ADR-009; A2/F2 — Master Data
+  // never depends on Equipment Registry, so this is a read-only compose, not a
+  // backend join). Degrades to "—" if unavailable.
   const voltageYardsQuery = useQuery({
     queryKey: ["voltage-yards"],
     queryFn: () => equipmentRegistryApi.listVoltageYards(),
   });
-  // Substation lifecycle statuses (substation-registry.md §10, ADR-014) —
-  // Planned/Mothballed/Retired remain seeded `operational_status` rows for
-  // Equipment Registry's own, independent status model and may still
-  // appear on legacy Substation rows created before this filter list was
-  // tightened, but are no longer offered as a *filter* choice going
-  // forward — "All statuses" (no filter) still returns any legacy rows.
-  const substationStatusFilterOptions = referenceData.operationalStatuses.filter((status) =>
-    ["UNDER_CONSTRUCTION", "ACTIVE", "DECOMMISSIONED", "ENTERED_IN_ERROR"].includes(status.code),
-  );
-  const voltageYardLabelsBySubstationId = new Map<string, string[]>();
-  for (const yard of voltageYardsQuery.data ?? []) {
-    const existing = voltageYardLabelsBySubstationId.get(yard.substation_id) ?? [];
-    existing.push(yard.voltage_level_label);
-    voltageYardLabelsBySubstationId.set(yard.substation_id, existing);
+  const voltageLabelsBySubstation = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const yard of voltageYardsQuery.data ?? []) {
+      const existing = map.get(yard.substation_id) ?? [];
+      existing.push(yard.voltage_level_label);
+      map.set(yard.substation_id, existing);
+    }
+    return map;
+  }, [voltageYardsQuery.data]);
+
+  const statusOptions = substationStatuses(referenceData.operationalStatuses);
+  const hasActiveFilters = Boolean(debouncedSearch || regionId || gmZoneId || statusId);
+
+  const total = substationsQuery.data?.total ?? 0;
+  const items = substationsQuery.data?.items ?? [];
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  function resetFilters(): void {
+    setSearchInput("");
+    setSearchParams({}, { replace: true });
   }
 
-  const columns = [
-    columnHelper.accessor("mnemonic", { header: "Mnemonic" }),
-    columnHelper.accessor("official_name", { header: "Name" }),
-    columnHelper.display({
-      id: "voltage_yards",
-      header: "Switchyards",
-      cell: (info) =>
-        (voltageYardLabelsBySubstationId.get(info.row.original.substation_id) ?? []).join(", ") ||
-        "—",
-    }),
-    columnHelper.accessor("region_id", {
-      header: "Region",
-      cell: (info) => referenceData.regionsById.get(info.getValue())?.label ?? info.getValue(),
-    }),
-    columnHelper.accessor("gm_zone_id", {
-      header: "GM Zone",
-      cell: (info) => referenceData.gmZonesById.get(info.getValue())?.label ?? info.getValue(),
-    }),
-    columnHelper.accessor("grid_owner_id", {
-      header: "Owner",
-      cell: (info) => referenceData.gridOwnersById.get(info.getValue())?.label ?? info.getValue(),
-    }),
-    columnHelper.accessor("operational_status_id", {
-      header: "Status",
-      cell: (info) =>
-        referenceData.operationalStatusesById.get(info.getValue())?.label ?? info.getValue(),
-    }),
-    columnHelper.display({
-      id: "actions",
-      header: "",
-      cell: (info) => <Link to={`/substations/${info.row.original.substation_id}`}>View</Link>,
-    }),
-  ];
-
-  const table = useReactTable({
-    data: substationsQuery.data?.items ?? [],
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
-
   return (
-    <section>
-      <h2>Substations</h2>
+    <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
+      <PageHeader
+        title="Substation Registry"
+        description="Authoritative registry of transmission substations referenced by equipment, network and defence-scheme workflows."
+        meta={
+          substationsQuery.isSuccess
+            ? `${total} substation${total === 1 ? "" : "s"}${hasActiveFilters ? " matching the current filters" : " registered"}`
+            : undefined
+        }
+        actions={canWrite ? <Link to="/substations/new" style={createActionStyle}><PlusIcon /> Register substation</Link> : undefined}
+      />
 
-      <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-        <input
-          aria-label="Search substations"
-          placeholder="Search mnemonic or name..."
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-        />
-        <select
-          aria-label="Filter by region"
-          value={regionId}
-          onChange={(e) => {
-            setRegionId(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="">All regions</option>
-          {referenceData.regions.map((region) => (
-            <option key={region.region_id} value={region.region_id}>
-              {region.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by GM Zone"
-          value={gmZoneId}
-          onChange={(e) => {
-            setGmZoneId(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="">All GM Zones</option>
-          {referenceData.gmZones.map((zone) => (
-            <option key={zone.gm_zone_id} value={zone.gm_zone_id}>
-              {zone.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by status"
-          value={statusId}
-          onChange={(e) => {
-            setStatusId(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="">All statuses</option>
-          {substationStatusFilterOptions.map((status) => (
-            <option key={status.operational_status_id} value={status.operational_status_id}>
-              {status.label}
-            </option>
-          ))}
-        </select>
-        {canWrite && <Link to="/substations/new">Create substation</Link>}
-      </div>
-
-      {substationsQuery.isLoading && <p>Loading substations...</p>}
-      {substationsQuery.isError && <p role="alert">Failed to load substations.</p>}
-
-      {substationsQuery.data && (
-        <>
-          <table>
-            <thead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <th key={header.id}>
-                      {flexRender(header.column.columnDef.header, header.getContext())}
-                    </th>
-                  ))}
-                </tr>
-              ))}
-            </thead>
-            <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                  ))}
-                </tr>
-              ))}
-              {table.getRowModel().rows.length === 0 && (
-                <tr>
-                  <td colSpan={columns.length}>No substations found.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-
-          <div style={{ marginTop: "1rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
-            <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-              Previous
-            </button>
-            <span>
-              Page {page} of {Math.max(1, Math.ceil(substationsQuery.data.total / pageSize))}
-            </span>
-            <button
-              type="button"
-              disabled={page * pageSize >= substationsQuery.data.total}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Next
-            </button>
+      <Card padding="16px" style={{ marginBottom: tokens.space[4] }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: tokens.space[3], alignItems: "end" }}>
+          <TextField
+            label="Search"
+            placeholder="Search mnemonic or name…"
+            aria-label="Search substations"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          <SelectField label="Region" value={regionId} onChange={(e) => updateParams((n) => (e.target.value ? n.set("region", e.target.value) : n.delete("region")))}>
+            <option value="">All regions</option>
+            {referenceData.regions.map((region) => (
+              <option key={region.region_id} value={region.region_id}>{region.label}</option>
+            ))}
+          </SelectField>
+          <SelectField label="GM Zone" value={gmZoneId} onChange={(e) => updateParams((n) => (e.target.value ? n.set("gm_zone", e.target.value) : n.delete("gm_zone")))}>
+            <option value="">All GM Zones</option>
+            {referenceData.gmZones.map((zone) => (
+              <option key={zone.gm_zone_id} value={zone.gm_zone_id}>{zone.label}</option>
+            ))}
+          </SelectField>
+          <SelectField label="Lifecycle status" value={statusId} onChange={(e) => updateParams((n) => (e.target.value ? n.set("status", e.target.value) : n.delete("status")))}>
+            <option value="">All statuses</option>
+            {statusOptions.map((status) => (
+              <option key={status.operational_status_id} value={status.operational_status_id}>{status.label}</option>
+            ))}
+          </SelectField>
+        </div>
+        {hasActiveFilters && (
+          <div style={{ display: "flex", alignItems: "center", gap: tokens.space[2], marginTop: tokens.space[3], flexWrap: "wrap" }}>
+            <span style={{ fontSize: tokens.typography.size.small, color: tokens.color.textSecondary, fontFamily: tokens.typography.fontFamily }}>Active filters applied.</span>
+            <Button variant="secondary" onClick={resetFilters} style={{ height: "32px", padding: "0 12px", fontSize: "12.5px" }}>
+              Reset filters
+            </Button>
           </div>
-        </>
+        )}
+      </Card>
+
+      {substationsQuery.isError ? (
+        <ErrorState
+          title="Couldn't load substations"
+          message={substationsQuery.error instanceof ApiError ? substationsQuery.error.message : "The registry could not be reached. Check your connection and try again."}
+          onRetry={() => void substationsQuery.refetch()}
+        />
+      ) : substationsQuery.isPending ? (
+        <p style={mutedTextStyle}>Loading substations…</p>
+      ) : items.length === 0 ? (
+        hasActiveFilters ? (
+          <EmptyState
+            title="No substations match the current filters"
+            description="Adjust or clear the filters to see more of the registry."
+            action={<Button variant="secondary" onClick={resetFilters}>Reset filters</Button>}
+          />
+        ) : (
+          <EmptyState
+            title="No substations registered"
+            description="The registry is empty. Register the first transmission substation to begin."
+            action={canWrite ? <Link to="/substations/new" style={createActionStyle}><PlusIcon /> Register substation</Link> : undefined}
+          />
+        )
+      ) : isMobile ? (
+        <MobileList items={items} referenceData={referenceData} voltageLabelsBySubstation={voltageLabelsBySubstation} />
+      ) : (
+        <RegistryTable items={items} referenceData={referenceData} voltageLabelsBySubstation={voltageLabelsBySubstation} />
       )}
-    </section>
+
+      {substationsQuery.isSuccess && items.length > 0 && (
+        <nav aria-label="Pagination" style={{ display: "flex", alignItems: "center", gap: tokens.space[3], marginTop: tokens.space[4] }}>
+          <Button variant="secondary" disabled={page <= 1} onClick={() => updateParams((n) => n.set("page", String(page - 1)), false)}>
+            Previous
+          </Button>
+          <span style={mutedTextStyle}>Page {page} of {totalPages}</span>
+          <Button variant="secondary" disabled={page >= totalPages} onClick={() => updateParams((n) => n.set("page", String(page + 1)), false)}>
+            Next
+          </Button>
+        </nav>
+      )}
+    </div>
   );
 }
+
+interface RowsProps {
+  items: SubstationSummary[];
+  referenceData: ReturnType<typeof useReferenceData>;
+  voltageLabelsBySubstation: Map<string, string[]>;
+}
+
+function StatusCell({ referenceData, statusId }: { referenceData: RowsProps["referenceData"]; statusId: number }) {
+  const status = referenceData.operationalStatusesById.get(statusId);
+  return <Badge label={status?.label ?? String(statusId)} tone={toneForStatusCode(status?.code)} />;
+}
+
+function RegistryTable({ items, referenceData, voltageLabelsBySubstation }: RowsProps) {
+  return (
+    <Card padding="0" style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: tokens.typography.fontFamily, fontSize: "13px" }}>
+        <thead>
+          <tr>
+            {["Mnemonic", "Substation", "Switchyards", "Region", "GM Zone", "Grid Owner", "Status", ""].map((heading, index) => (
+              <th key={heading || "actions"} scope="col" style={{ ...thStyle, textAlign: index === 7 ? "right" : "left" }}>
+                {heading}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((substation) => (
+            <tr key={substation.substation_id} style={{ borderTop: `1px solid ${tokens.color.borderDivider}` }}>
+              <td style={{ ...tdStyle, fontWeight: tokens.typography.weight.bold, color: tokens.color.textPrimary }}>{substation.mnemonic}</td>
+              <td style={tdStyle}>{substation.official_name}</td>
+              <td style={tdStyle}>{(voltageLabelsBySubstation.get(substation.substation_id) ?? []).join(", ") || "—"}</td>
+              <td style={tdStyle}>{referenceData.regionsById.get(substation.region_id)?.label ?? substation.region_id}</td>
+              <td style={tdStyle}>{referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? substation.gm_zone_id}</td>
+              <td style={tdStyle}>{referenceData.gridOwnersById.get(substation.grid_owner_id)?.label ?? substation.grid_owner_id}</td>
+              <td style={tdStyle}><StatusCell referenceData={referenceData} statusId={substation.operational_status_id} /></td>
+              <td style={{ ...tdStyle, textAlign: "right" }}>
+                <Link to={`/substations/${substation.substation_id}`} style={linkStyle} aria-label={`Open ${substation.mnemonic} ${substation.official_name}`}>
+                  Open
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function MobileList({ items, referenceData, voltageLabelsBySubstation }: RowsProps) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: tokens.space[3] }}>
+      {items.map((substation) => (
+        <Card key={substation.substation_id} padding="16px" style={{ display: "flex", flexDirection: "column", gap: tokens.space[2] }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: tokens.space[2] }}>
+            <span style={{ fontWeight: tokens.typography.weight.bold, fontFamily: tokens.typography.fontFamily, color: tokens.color.textPrimary }}>{substation.mnemonic}</span>
+            <StatusCell referenceData={referenceData} statusId={substation.operational_status_id} />
+          </div>
+          <span style={{ fontFamily: tokens.typography.fontFamily, fontSize: "13px", color: tokens.color.textPrimary }}>{substation.official_name}</span>
+          <span style={{ fontFamily: tokens.typography.fontFamily, fontSize: "12.5px", color: tokens.color.textSecondary }}>
+            {referenceData.gmZonesById.get(substation.gm_zone_id)?.label ?? "—"} · {(voltageLabelsBySubstation.get(substation.substation_id) ?? []).join(", ") || "no switchyards"}
+          </span>
+          <Link to={`/substations/${substation.substation_id}`} style={{ ...linkStyle, marginTop: tokens.space[1] }} aria-label={`Open ${substation.mnemonic} ${substation.official_name}`}>
+            Open record →
+          </Link>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+const thStyle = {
+  padding: "10px 14px",
+  fontSize: "10.5px",
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
+  color: tokens.color.textSecondary,
+  fontWeight: tokens.typography.weight.bold,
+  background: tokens.color.surfaceSubtle,
+  whiteSpace: "nowrap",
+} as const;
+
+const tdStyle = {
+  padding: "10px 14px",
+  color: tokens.color.textPrimary,
+  verticalAlign: "middle",
+  whiteSpace: "nowrap",
+} as const;
+
+const linkStyle = {
+  color: tokens.color.link,
+  fontWeight: tokens.typography.weight.semibold,
+  textDecoration: "none",
+  fontFamily: tokens.typography.fontFamily,
+} as const;
+
+const mutedTextStyle = {
+  fontFamily: tokens.typography.fontFamily,
+  fontSize: tokens.typography.size.label,
+  color: tokens.color.textSecondary,
+} as const;
+
+/** Anchor styled as a primary button (avoids an interactive <button> nested in a <Link>). */
+const createActionStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: tokens.space[2],
+  height: tokens.control.height,
+  padding: `0 ${tokens.space[5]}`,
+  borderRadius: tokens.radius.md,
+  background: tokens.color.actionPrimary,
+  color: tokens.color.actionPrimaryText,
+  border: `1px solid ${tokens.color.actionPrimary}`,
+  fontFamily: tokens.typography.fontFamily,
+  fontSize: tokens.typography.size.button,
+  fontWeight: tokens.typography.weight.semibold,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+} as const;

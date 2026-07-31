@@ -4,6 +4,12 @@ Status: Draft v1
 Owner: Solution Architecture
 Scope: Master Data Management (MDM) module for GridDefence
 
+> **Frontend (Phase E):** the registry's modernised UI — list/create/detail
+> workspace inside Application Shell V2 — is documented in
+> [substation-registry-frontend.md](substation-registry-frontend.md). This
+> specification (domain/DB/API) remains authoritative; the frontend doc records
+> only how that established behaviour is presented.
+
 > **Deprecation note (ADR-009):** this document's references to "voltage
 > level" as a single static attribute of `Substation` (§2, §6, §7, §10) are
 > superseded by [ADR-008](../adr/ADR-008-substation-voltage-yard.md)'s

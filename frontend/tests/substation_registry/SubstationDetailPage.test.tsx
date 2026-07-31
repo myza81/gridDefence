@@ -185,14 +185,19 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Substation One")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Substation One" })).toBeInTheDocument();
     });
+    // No editable surfaces for a read-only user: the Edit section and the
+    // lifecycle "Change status" action are both absent.
     expect(screen.queryByRole("heading", { name: "Edit" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Change status" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change status" })).not.toBeInTheDocument();
   });
 
-  it("surfaces the backend's rejection message when an illegal status transition is attempted", async () => {
+  it("only offers legal target statuses and surfaces a backend rejection inside the confirm dialog", async () => {
     authStorage.setToken("token");
+    // Current status ACTIVE — its legal targets are Decommissioned and
+    // Entered in Error (ADR-014); Active/Under Construction are never offered.
+    const activeDetail = { ...SUBSTATION_DETAIL, operational_status_id: 1 };
     stubFetch([
       {
         method: "GET",
@@ -206,13 +211,7 @@ describe("SubstationDetailPage", () => {
           status: 200,
           body: [
             {
-              role: {
-                role_id: "role-1",
-                name: "Administrator",
-                description: null,
-                is_system_role: true,
-                status: "active",
-              },
+              role: { role_id: "role-1", name: "Administrator", description: null, is_system_role: true, status: "active" },
               granted_at: "2026-01-01T00:00:00Z",
               permissions: ["substation_registry.write"],
             },
@@ -222,7 +221,7 @@ describe("SubstationDetailPage", () => {
       {
         method: "GET",
         pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`),
-        respond: () => ({ status: 200, body: SUBSTATION_DETAIL }),
+        respond: () => ({ status: 200, body: activeDetail }),
       },
       {
         method: "GET",
@@ -243,8 +242,7 @@ describe("SubstationDetailPage", () => {
           body: {
             detail: {
               code: "validation_error",
-              message:
-                "Operational status cannot transition from 'PLANNED' to 'DECOMMISSIONED' — this is not a defined transition (substation-registry.md §10).",
+              message: "This substation was modified by another user; reload and try again.",
             },
           },
         }),
@@ -253,21 +251,22 @@ describe("SubstationDetailPage", () => {
 
     renderDetailPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Change status" })).toBeInTheDocument();
-    });
-
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText("New status"), "5");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(await screen.findByRole("button", { name: "Change status" }));
 
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          "Operational status cannot transition from 'PLANNED' to 'DECOMMISSIONED' — this is not a defined transition (substation-registry.md §10).",
-        ),
-      ).toBeInTheDocument();
-    });
+    const dialog = screen.getByRole("dialog", { name: "Change substation status" });
+    const targetSelect = within(dialog).getByLabelText("New status") as HTMLSelectElement;
+    const offered = Array.from(targetSelect.querySelectorAll("option")).map((o) => o.textContent?.trim());
+    // Only legal targets from ACTIVE — never Active/Under Construction/Planned.
+    expect(offered).toEqual(["Select new status…", "Decommissioned", "Entered in Error"]);
+
+    await user.selectOptions(targetSelect, "5");
+    await user.click(within(dialog).getByRole("button", { name: "Change status" }));
+
+    // The backend's own words are surfaced in the dialog, not a generic message.
+    expect(
+      await within(dialog).findByText("This substation was modified by another user; reload and try again."),
+    ).toBeInTheDocument();
   });
 
   it("no longer shows a single 'Voltage level' field — voltage yards are the sole authoritative representation (ADR-009)", async () => {
@@ -309,7 +308,7 @@ describe("SubstationDetailPage", () => {
     renderDetailPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Substation One")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Substation One" })).toBeInTheDocument();
     });
     expect(screen.queryByText("Voltage level")).not.toBeInTheDocument();
   });
@@ -1764,5 +1763,93 @@ describe("SubstationDetailPage", () => {
         screen.getByText("region_id '99999' is not a recognized reference data value."),
       ).toBeInTheDocument();
     });
+  });
+
+  function stubActiveWriteSession(onStatusPost?: (payload: unknown) => { status?: number; body?: unknown }) {
+    const activeDetail = { ...SUBSTATION_DETAIL, operational_status_id: 1 };
+    stubFetch([
+      { method: "GET", pattern: /\/api\/v1\/users\/me$/, respond: () => ({ status: 200, body: CURRENT_USER }) },
+      {
+        method: "GET",
+        pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`),
+        respond: () => ({
+          status: 200,
+          body: [
+            {
+              role: { role_id: "role-1", name: "Administrator", description: null, is_system_role: true, status: "active" },
+              granted_at: "2026-01-01T00:00:00Z",
+              permissions: ["substation_registry.write"],
+            },
+          ],
+        }),
+      },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`), respond: () => ({ status: 200, body: activeDetail }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`), respond: () => ({ status: 200, body: [] }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`), respond: () => ({ status: 200, body: { items: [], page: 1, page_size: 50, total: 0 } }) },
+      { method: "GET", pattern: /\/api\/v1\/voltage-yards\?/, respond: () => ({ status: 200, body: [] }) },
+      ...REFERENCE_DATA_HANDLERS,
+      {
+        method: "POST",
+        pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/status$`),
+        respond: (_url, init) => (onStatusPost ? onStatusPost(init?.body ? JSON.parse(init.body as string) : null) : { status: 200, body: activeDetail }),
+      },
+    ]);
+  }
+
+  it("makes no status request when the confirmation dialog is cancelled", async () => {
+    authStorage.setToken("token");
+    let statusCalls = 0;
+    stubActiveWriteSession(() => {
+      statusCalls += 1;
+      return { status: 200, body: SUBSTATION_DETAIL };
+    });
+
+    renderDetailPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Change status" }));
+    const dialog = screen.getByRole("dialog", { name: "Change substation status" });
+    await user.selectOptions(within(dialog).getByLabelText("New status"), "5");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Change substation status" })).toBeNull());
+    expect(statusCalls).toBe(0);
+  });
+
+  it("applies a legal status change and closes the dialog", async () => {
+    authStorage.setToken("token");
+    let statusPayload: unknown = null;
+    stubActiveWriteSession((payload) => {
+      statusPayload = payload;
+      return { status: 200, body: { ...SUBSTATION_DETAIL, operational_status_id: 5 } };
+    });
+
+    renderDetailPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Change status" }));
+    const dialog = screen.getByRole("dialog", { name: "Change substation status" });
+    await user.selectOptions(within(dialog).getByLabelText("New status"), "5");
+    await user.type(within(dialog).getByLabelText("Change reason"), "End of service life");
+    await user.click(within(dialog).getByRole("button", { name: "Change status" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Change substation status" })).toBeNull());
+    expect(statusPayload).toMatchObject({ operational_status_id: 5, change_reason: "End of service life" });
+  });
+
+  it("shows a not-found state for a substation that does not exist", async () => {
+    authStorage.setToken("token");
+    stubFetch([
+      { method: "GET", pattern: /\/api\/v1\/users\/me$/, respond: () => ({ status: 200, body: CURRENT_USER }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/users/${CURRENT_USER.user_id}/roles$`), respond: () => ({ status: 200, body: [] }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}$`), respond: () => ({ status: 404, body: { detail: "Substation not found" } }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/aliases$`), respond: () => ({ status: 404, body: { detail: "Substation not found" } }) },
+      { method: "GET", pattern: new RegExp(`/api/v1/substations/${SUBSTATION_ID}/audit-log`), respond: () => ({ status: 404, body: { detail: "Substation not found" } }) },
+      { method: "GET", pattern: /\/api\/v1\/voltage-yards\?/, respond: () => ({ status: 200, body: [] }) },
+      ...REFERENCE_DATA_HANDLERS,
+    ]);
+
+    renderDetailPage();
+
+    expect(await screen.findByText("Substation not found")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Back to Substation Registry/ })).toHaveAttribute("href", "/substations");
   });
 });

@@ -108,7 +108,7 @@ describe("SubstationCreatePage", () => {
     const optionLabels = Array.from(statusSelect.querySelectorAll("option")).map((o) =>
       o.textContent?.trim(),
     );
-    expect(optionLabels).toEqual(["Select...", "Active", "Under Construction"]);
+    expect(optionLabels).toEqual(["Select…", "Active", "Under Construction"]);
     expect(optionLabels).not.toContain("Mothballed");
   });
 
@@ -404,5 +404,22 @@ describe("SubstationCreatePage", () => {
     });
     expect(createdPayload).not.toHaveProperty("state_id");
     expect(createdPayload).toMatchObject({ mnemonic: "NOST", region_id: 1, gm_zone_id: 1 });
+  });
+
+  it("blocks submission and shows field errors when required fields are empty", async () => {
+    authStorage.setToken("token");
+    // No POST handler is registered: if the form wrongly submitted, stubFetch
+    // would throw "No stub registered", failing this test loudly.
+    stubSession();
+
+    renderWithProviders(<SubstationCreatePage />, { route: "/substations/new" });
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Create substation" }));
+
+    expect(await screen.findByText("Mnemonic is required.")).toBeInTheDocument();
+    expect(screen.getByText("Official name is required.")).toBeInTheDocument();
+    expect(screen.getByText("Region is required.")).toBeInTheDocument();
+    expect(screen.getByText("Initial status is required.")).toBeInTheDocument();
   });
 });
