@@ -141,14 +141,21 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
           maxLength={10}
           required
           error={fieldErrors.mnemonic}
-          aria-describedby="mnemonic-rule"
+          aria-describedby={isEdit ? undefined : "mnemonic-rule"}
         />
-        {/* Real engineering/validation rule — retained (condensed in edit). */}
-        <p id="mnemonic-rule" style={hintStyle}>
-          {isEdit
-            ? "Up to 10 characters. Must be unique and cannot be reused for another substation."
-            : "Up to 10 characters. The mnemonic is an authoritative engineering identifier: it must be unique, and once assigned it is never reused for a different substation. It is stored exactly as entered."}
-        </p>
+        {/* Create keeps the full mnemonic rule as inline help. The edit form
+            has no permanent helper text — the field label, the enforced
+            maxLength, and backend validation/error messages convey the rule
+            when it is actually relevant. (aria-describedby is dropped in edit
+            so there is no dangling reference; the field's own error linkage is
+            unaffected.) */}
+        {!isEdit && (
+          <p id="mnemonic-rule" style={hintStyle}>
+            Up to 10 characters. The mnemonic is an authoritative engineering identifier: it must be
+            unique, and once assigned it is never reused for a different substation. It is stored
+            exactly as entered.
+          </p>
+        )}
         <TextField
           label="Official name"
           value={officialName}

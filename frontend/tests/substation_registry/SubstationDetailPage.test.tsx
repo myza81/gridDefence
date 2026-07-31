@@ -1890,10 +1890,13 @@ describe("SubstationDetailPage", () => {
     expect(screen.getByLabelText("Mnemonic")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
 
-    // The condensed mnemonic engineering rule is retained.
-    expect(
-      screen.getByText("Up to 10 characters. Must be unique and cannot be reused for another substation."),
-    ).toBeInTheDocument();
+    // The always-visible mnemonic helper text is gone from the edit form — the
+    // label, enforced maxLength and backend validation convey the rule when
+    // needed; accessibility (labelled, required input) is preserved.
+    expect(screen.queryByText(/Up to 10 characters/)).toBeNull();
+    const mnemonicInput = screen.getByLabelText("Mnemonic");
+    expect(mnemonicInput).toBeRequired();
+    expect(mnemonicInput).toHaveAttribute("maxLength", "10");
 
     // The misleading singular PSS/E bus number row is removed (no value fabricated).
     expect(screen.queryByText("PSS/E bus number")).toBeNull();
