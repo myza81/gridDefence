@@ -1855,4 +1855,47 @@ describe("SubstationDetailPage", () => {
     expect(await screen.findByText("Substation not found")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Back to Substation Registry/ })).toHaveAttribute("href", "/substations");
   });
+
+  it("presents the record compactly: card/edit descriptions removed, data + actions + rules retained, no PSS/E bus row", async () => {
+    authStorage.setToken("token");
+    stubActiveWriteSession(); // ACTIVE substation, write permission
+    renderDetailPage();
+    await screen.findByRole("heading", { name: "Edit" });
+
+    // Card headings retained…
+    for (const heading of ["Identity", "Engineering Classification", "Lifecycle", "Audit & Revision"]) {
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    }
+    // …but their repetitive descriptions are gone.
+    expect(screen.queryByText("How this substation is uniquely referenced across GridDefence.")).toBeNull();
+    expect(screen.queryByText("Reference classifications owned by Core Platform reference data.")).toBeNull();
+    expect(screen.queryByText(/operational status\. Changes are audited/)).toBeNull();
+    expect(screen.queryByText("Accountability for this record (who and when).")).toBeNull();
+    // Edit-card intro description and the redundant Identity subsection are gone.
+    expect(screen.queryByText(/Update identity, classification and remarks/)).toBeNull();
+    const legendTexts = Array.from(document.querySelectorAll("legend")).map((l) => l.textContent);
+    expect(legendTexts).not.toContain("Identity");
+
+    // Identity + Classification data still present (as dt/dd metadata).
+    expect(screen.getByText("Mnemonic", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Official name", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("GM Zone", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Grid owner", { selector: "dt" })).toBeInTheDocument();
+    // Lifecycle status + audit accountability retained.
+    expect(screen.getByText("Current status", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Created", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Last updated", { selector: "dt" })).toBeInTheDocument();
+    // Change-status action + edit controls retained.
+    expect(screen.getByRole("button", { name: "Change status" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Mnemonic")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+
+    // The condensed mnemonic engineering rule is retained.
+    expect(
+      screen.getByText("Up to 10 characters. Must be unique and cannot be reused for another substation."),
+    ).toBeInTheDocument();
+
+    // The misleading singular PSS/E bus number row is removed (no value fabricated).
+    expect(screen.queryByText("PSS/E bus number")).toBeNull();
+  });
 });

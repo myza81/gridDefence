@@ -131,7 +131,9 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
 
   return (
     <form onSubmit={handleSubmit} noValidate style={{ display: "flex", flexDirection: "column", gap: tokens.space[6], maxWidth: "760px" }}>
-      <FieldGroup legend="Identity" description="How this substation is uniquely referenced across GridDefence.">
+      {/* Edit mode drops the "Identity" legend/description — the field labels
+          already carry the meaning; create mode keeps the fuller framing. */}
+      <FieldGroup legend={isEdit ? undefined : "Identity"} description={isEdit ? undefined : "How this substation is uniquely referenced across GridDefence."}>
         <TextField
           label="Mnemonic"
           value={mnemonic}
@@ -141,10 +143,11 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
           error={fieldErrors.mnemonic}
           aria-describedby="mnemonic-rule"
         />
+        {/* Real engineering/validation rule — retained (condensed in edit). */}
         <p id="mnemonic-rule" style={hintStyle}>
-          Up to 10 characters. The mnemonic is an authoritative engineering identifier: it must be
-          unique, and once assigned it is never reused for a different substation. It is stored exactly
-          as entered.
+          {isEdit
+            ? "Up to 10 characters. Must be unique and cannot be reused for another substation."
+            : "Up to 10 characters. The mnemonic is an authoritative engineering identifier: it must be unique, and once assigned it is never reused for a different substation. It is stored exactly as entered."}
         </p>
         <TextField
           label="Official name"
@@ -156,7 +159,7 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
         />
       </FieldGroup>
 
-      <FieldGroup legend="Engineering classification" description="Reference classifications owned by Core Platform reference data.">
+      <FieldGroup legend="Engineering classification" description={isEdit ? undefined : "Reference classifications owned by Core Platform reference data."}>
         <div style={twoColStyle}>
           <SelectField label="Region" value={regionId} onChange={(e) => setRegionId(e.target.value)} required error={fieldErrors.region_id}>
             <option value="">Select…</option>
@@ -221,7 +224,7 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
         </FieldGroup>
       )}
 
-      <FieldGroup legend={isEdit ? "Remarks" : "Remarks (optional)"}>
+      <FieldGroup legend={isEdit ? undefined : "Remarks (optional)"}>
         <label htmlFor="substation-remarks" style={labelStyle}>
           Remarks
         </label>
@@ -254,9 +257,18 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
   );
 }
 
-function FieldGroup({ legend, description, children }: { legend: string; description?: string; children: ReactNode }) {
+/**
+ * Groups related fields. With a `legend` it renders a labelled `<fieldset>`;
+ * without one (the simplified edit form, where field labels already carry the
+ * meaning) it renders a plain container — never an empty, unlabelled fieldset.
+ */
+function FieldGroup({ legend, description, children }: { legend?: string; description?: string; children: ReactNode }) {
+  const groupStyle = { border: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: tokens.space[3] } as const;
+  if (legend == null) {
+    return <div style={groupStyle}>{children}</div>;
+  }
   return (
-    <fieldset style={{ border: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: tokens.space[3] }}>
+    <fieldset style={groupStyle}>
       <legend style={{ padding: 0, fontFamily: tokens.typography.fontFamily, fontSize: "13px", fontWeight: tokens.typography.weight.bold, color: tokens.color.textPrimary, textTransform: "uppercase", letterSpacing: "0.06em" }}>
         {legend}
       </legend>

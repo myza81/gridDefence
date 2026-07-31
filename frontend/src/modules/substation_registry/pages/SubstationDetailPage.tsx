@@ -386,18 +386,25 @@ export function SubstationDetailPage() {
         meta={<Link to="/substations" style={{ color: tokens.color.link, textDecoration: "none" }}>← Substation Registry</Link>}
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: tokens.space[4], marginBottom: tokens.space[4] }}>
-        <DetailSection title="Identity" description="How this substation is uniquely referenced across GridDefence.">
+      {/* align-items: start so each summary card sizes to its own content (no
+          stretch), avoiding empty space now that the descriptions are gone. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: tokens.space[4], marginBottom: tokens.space[4], alignItems: "start" }}>
+        {/* PSS/E bus correlation is snapshot-scoped and one-to-many
+            (TopologyBus.substation_id, per TopologyVersion — ADR-006/ADR-003),
+            owned by PSS/E Integration / Network Model. The registry's singular
+            psse_bus_number would misrepresent that as a permanent 1:1 identity,
+            and this page has no snapshot context — so it is not shown here (see
+            substation-registry-frontend.md). No value is inferred or fetched. */}
+        <DetailSection title="Identity">
           <MetadataList
             items={[
               { term: "Mnemonic", value: <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: tokens.typography.weight.semibold }}>{substation.mnemonic}</span> },
               { term: "Official name", value: substation.official_name },
-              { term: "PSS/E bus number", value: substation.psse_bus_number ?? "—" },
             ]}
           />
         </DetailSection>
 
-        <DetailSection title="Engineering Classification" description="Reference classifications owned by Core Platform reference data.">
+        <DetailSection title="Engineering Classification">
           <MetadataList
             items={[
               { term: "Region", value: displayOrDash(referenceData.regionsById.get(substation.region_id)?.label) },
@@ -410,7 +417,6 @@ export function SubstationDetailPage() {
 
         <DetailSection
           title="Lifecycle"
-          description="The substation's operational status. Changes are audited and follow the defined transitions (ADR-014)."
           actions={
             canWrite && targetStatusOptions.length > 0 ? (
               <Button variant="secondary" onClick={() => setStatusDialogOpen(true)}>Change status</Button>
@@ -427,7 +433,7 @@ export function SubstationDetailPage() {
           )}
         </DetailSection>
 
-        <DetailSection title="Audit & Revision" description="Accountability for this record (who and when).">
+        <DetailSection title="Audit & Revision">
           <MetadataList
             items={[
               { term: "Created", value: `${formatDateTime(substation.created_at)} · ${substation.created_by?.display_name ?? substation.created_by?.username ?? "—"}` },
@@ -439,7 +445,7 @@ export function SubstationDetailPage() {
 
       {canWrite && (
         <div style={{ marginBottom: tokens.space[4] }}>
-          <DetailSection title="Edit" description="Update identity, classification and remarks. Operational status is changed through the audited lifecycle action above.">
+          <DetailSection title="Edit">
             <SubstationForm mode="edit" referenceData={referenceData} initial={substation} submitting={updateMutation.isPending} error={editError} onSubmit={handleEditSubmit} />
           </DetailSection>
         </div>
