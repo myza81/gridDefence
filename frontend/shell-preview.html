@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  DEV/SCREENSHOT-ONLY authenticated preview of Application Shell V2 (Phase D §18).
+  Not referenced by index.html and never bundled by `vite build`. Served by the
+  dev server: `npm run dev` → http://localhost:5173/shell-preview.html
+  See dev/shellPreview.tsx for how the signed-in session is stubbed.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html, body, #root { height: 100%; }
+      body { margin: 0; }
+    </style>
+    <title>GridDefence — Shell Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/dev/shellPreview.tsx"></script>
+  </body>
+</html>

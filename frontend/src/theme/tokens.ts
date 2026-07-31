@@ -23,13 +23,18 @@ const color = {
   textPrimary: "#0F2340",
   /** Muted supporting text and placeholders. */
   textSecondary: "#5A6A85",
+  /** Faintest text — group labels, disabled placeholders, decorative captions. */
+  textFaint: "#8B98AD",
   /** Light text used over the darker areas of the hero image. */
   textOnHero: "rgba(255, 255, 255, 0.88)",
 
-  /** White working surface (the login card). */
+  /** White working surface (the login card, shell header/sidebar, cards). */
   surfacePanel: "#FFFFFF",
   /** Very light blue-grey fill for subtle field/hover surfaces. */
   surfaceSubtle: "#F7F9FD",
+  /** App canvas behind the workspace — the calm blue-grey the shell sits on
+   *  (from the approved Application Shell V2 direction, same cool-blue family). */
+  canvas: "#EFF3FA",
 
   borderDefault: "#DCE3EF",
   borderStrong: "#C9D2E4",
@@ -109,7 +114,14 @@ const shadow = {
   /** Soft, restrained elevation for the floating login card — kept light so
    *  the card complements the hero rather than dominating it. */
   panel: "0 16px 40px rgba(15, 30, 61, 0.15)",
+  /** Barely-there separation for the shell header and resting cards. */
+  hairline: "0 1px 2px rgba(15, 30, 61, 0.04)",
+  /** Elevation for the mobile navigation drawer floating above the overlay. */
+  drawer: "0 12px 40px rgba(15, 30, 61, 0.28)",
 } as const;
+
+/** Breakpoint (px) below which the persistent sidebar becomes a mobile drawer. */
+const shellBreakpoint = 900;
 
 /** Consistent control sizing for inputs and buttons. Height is viewport-height
  *  responsive so controls compact on short-height screens (login single-viewport
@@ -126,6 +138,10 @@ const layout = {
   panelMaxWidth: "380px",
   panelPadding: "40px",
   panelPaddingCompact: "28px",
+  /** Application Shell V2 frame dimensions. */
+  headerHeight: "56px",
+  sidebarWidth: "248px",
+  sidebarCollapsedWidth: "68px",
 } as const;
 
 /** Min viewport widths at which the login layout adapts (for JS media checks). */
@@ -148,6 +164,7 @@ export const tokens = {
   control,
   layout,
   breakpoint,
+  shellBreakpoint,
   transition,
 } as const;
 

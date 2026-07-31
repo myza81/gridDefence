@@ -4,6 +4,8 @@ Governing standard: [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) v1.1 (§15 Fr
 
 Related: [engineering-workspace-architecture.md](engineering-workspace-architecture.md); [continuous-evaluation-architecture.md](continuous-evaluation-architecture.md); [findings-and-publication-governance-architecture.md](findings-and-publication-governance-architecture.md); [iam-module.md](iam-module.md).
 
+Implementation: [application-shell-implementation.md](application-shell-implementation.md) records the concrete Phase D frontend realisation of the roles defined here.
+
 **This is the frontend equivalent of the system architecture, not a layout.** It defines the enduring structural responsibilities of the application shell — the frame every engineering workspace runs inside. It prescribes no screens, positions, geometry, or technology; those are downstream and may change without changing this document.
 
 ---
