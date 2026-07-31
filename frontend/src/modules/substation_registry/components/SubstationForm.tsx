@@ -166,7 +166,9 @@ export function SubstationForm({ mode, referenceData, initial, submitting, error
         />
       </FieldGroup>
 
-      <FieldGroup legend="Engineering classification" description={isEdit ? undefined : "Reference classifications owned by Core Platform reference data."}>
+      {/* Edit mode drops the "Engineering classification" heading too — the
+          field labels already convey it; create mode keeps the fuller framing. */}
+      <FieldGroup legend={isEdit ? undefined : "Engineering classification"} description={isEdit ? undefined : "Reference classifications owned by Core Platform reference data."}>
         <div style={twoColStyle}>
           <SelectField label="Region" value={regionId} onChange={(e) => setRegionId(e.target.value)} required error={fieldErrors.region_id}>
             <option value="">Select…</option>

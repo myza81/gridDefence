@@ -1873,8 +1873,17 @@ describe("SubstationDetailPage", () => {
     expect(screen.queryByText("Accountability for this record (who and when).")).toBeNull();
     // Edit-card intro description and the redundant Identity subsection are gone.
     expect(screen.queryByText(/Update identity, classification and remarks/)).toBeNull();
+    // No redundant subsection legends remain in the edit form — neither
+    // "Identity" nor "Engineering classification" (their field labels suffice);
+    // the summary card headings (separate <h2>s) are unaffected.
     const legendTexts = Array.from(document.querySelectorAll("legend")).map((l) => l.textContent);
     expect(legendTexts).not.toContain("Identity");
+    expect(legendTexts).not.toContain("Engineering classification");
+    // The classification fields themselves remain, in order.
+    expect(screen.getByLabelText("Region")).toBeInTheDocument();
+    expect(screen.getByLabelText("GM Zone")).toBeInTheDocument();
+    expect(screen.getByLabelText("State (Optional)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Grid owner")).toBeInTheDocument();
 
     // Identity + Classification data still present (as dt/dd metadata).
     expect(screen.getByText("Mnemonic", { selector: "dt" })).toBeInTheDocument();
