@@ -26,6 +26,29 @@ export interface SubstationPage {
   total: number;
 }
 
+/** Lightweight geographic projection for the map (Phase E.1). The authoritative
+ *  coordinate is the Substation's own latitude/longitude (ADR-008). */
+export interface SubstationMapFeature {
+  substation_id: string;
+  mnemonic: string;
+  official_name: string;
+  operational_status_id: number;
+  region_id: number;
+  gm_zone_id: number;
+  state_id: number | null;
+  grid_owner_id: number;
+  latitude: number | null;
+  longitude: number | null;
+  coordinate_status: "present" | "missing";
+}
+
+export interface SubstationMapResponse {
+  items: SubstationMapFeature[];
+  mapped_count: number;
+  missing_coordinate_count: number;
+  total: number;
+}
+
 export interface SubstationDetail {
   substation_id: string;
   mnemonic: string;

@@ -28,6 +28,7 @@ from app.modules.substation_registry.schemas import (
     SubstationAuditLogPage,
     SubstationCreate,
     SubstationDetail,
+    SubstationMapResponse,
     SubstationPage,
     SubstationStatusChange,
     SubstationUpdate,
@@ -99,6 +100,39 @@ def create_substation(
     detail = service.get_substation(substation.substation_id)
     assert detail is not None
     return detail
+
+
+@router.get("/map", response_model=SubstationMapResponse)
+def list_substation_map(
+    region_id: int | None = None,
+    gm_zone_id: int | None = None,
+    state_id: int | None = None,
+    grid_owner_id: int | None = None,
+    operational_status_id: int | None = None,
+    search: str | None = None,
+    service: SubstationService = Depends(get_substation_service),
+    _current_user: User = Depends(get_current_user),
+) -> SubstationMapResponse:
+    """Read-only geographic projection for the Substation map view (Phase E.1).
+
+    Same filter surface as the list endpoint (so the table and map never
+    drift). Returns every matching record unpaginated with the authoritative
+    Substation coordinate plus mapped/missing counts; reads are open to any
+    authenticated user, exactly like the list (substation-registry.md §10 —
+    reference data, not sensitive). Declared before `/{substation_id}` so
+    "map" is never parsed as a substation id.
+    """
+    features, mapped, missing = service.list_map_features(
+        region_id=region_id,
+        gm_zone_id=gm_zone_id,
+        state_id=state_id,
+        grid_owner_id=grid_owner_id,
+        operational_status_id=operational_status_id,
+        search=search,
+    )
+    return SubstationMapResponse(
+        items=features, mapped_count=mapped, missing_coordinate_count=missing, total=len(features)
+    )
 
 
 @router.get("/{substation_id}", response_model=SubstationDetail)

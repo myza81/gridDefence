@@ -84,6 +84,41 @@ class SubstationRepository:
         items = list(self.db.execute(stmt).scalars().all())
         return items, total
 
+    def list_all_for_map(
+        self,
+        *,
+        region_id: int | None = None,
+        gm_zone_id: int | None = None,
+        state_id: int | None = None,
+        grid_owner_id: int | None = None,
+        operational_status_id: int | None = None,
+        search: str | None = None,
+    ) -> list[Substation]:
+        """Every substation matching the filters, UNPAGINATED — the geographic
+        map needs all coordinate-bearing records at once, not one page. Same
+        filter surface as `list_substations` so the map and the table can never
+        drift semantically. Read-only; the caller projects the lightweight map
+        shape (never the full ORM object)."""
+        stmt = select(Substation)
+        if region_id is not None:
+            stmt = stmt.where(Substation.region_id == region_id)
+        if gm_zone_id is not None:
+            stmt = stmt.where(Substation.gm_zone_id == gm_zone_id)
+        if state_id is not None:
+            stmt = stmt.where(Substation.state_id == state_id)
+        if grid_owner_id is not None:
+            stmt = stmt.where(Substation.grid_owner_id == grid_owner_id)
+        if operational_status_id is not None:
+            stmt = stmt.where(Substation.operational_status_id == operational_status_id)
+        if search:
+            pattern = f"%{search.lower()}%"
+            stmt = stmt.where(
+                func.lower(Substation.mnemonic).like(pattern)
+                | func.lower(Substation.official_name).like(pattern)
+            )
+        stmt = stmt.order_by(Substation.mnemonic)
+        return list(self.db.execute(stmt).scalars().all())
+
     # --- SubstationAlias --------------------------------------------------------
     def add_alias(self, alias: SubstationAlias) -> SubstationAlias:
         self.db.add(alias)

@@ -35,6 +35,14 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   };
 }
 
+// maplibre-gl reads window.URL.createObjectURL at import time (worker setup),
+// which jsdom does not implement. Polyfill it so the map module chain loads;
+// the map itself is stubbed / degrades gracefully in tests (no WebGL).
+if (typeof window !== "undefined" && typeof window.URL.createObjectURL !== "function") {
+  window.URL.createObjectURL = () => "blob:mock";
+  window.URL.revokeObjectURL = () => {};
+}
+
 // Keep tests isolated: clear seeded auth tokens and any stubbed globals (e.g.
 // stubFetch) between tests so no state leaks across files.
 afterEach(() => {

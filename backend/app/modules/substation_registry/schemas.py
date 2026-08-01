@@ -90,6 +90,41 @@ class SubstationSummary(BaseModel):
 SubstationPage = Page[SubstationSummary]
 
 
+class SubstationMapFeature(BaseModel):
+    """Lightweight geographic projection of one substation (Phase E.1 map).
+
+    The authoritative substation coordinate is `Substation.latitude/longitude`
+    (Substation Registry owns geography — ADR-008; switchyard coordinates are
+    per-yard GIS metadata and are NOT substation geography). Because the DB
+    enforces the geolocation pair + range check, a persisted coordinate is
+    either both-present-and-valid or both-null, so `coordinate_status` is
+    `present` or `missing` (incomplete/invalid cannot persist).
+    """
+
+    substation_id: uuid.UUID
+    mnemonic: str
+    official_name: str
+    operational_status_id: int
+    region_id: int
+    gm_zone_id: int
+    state_id: int | None
+    grid_owner_id: int
+    latitude: float | None
+    longitude: float | None
+    coordinate_status: str  # "present" | "missing"
+
+
+class SubstationMapResponse(BaseModel):
+    """All substations matching the (registry-shared) filters, unpaginated,
+    plus mapped/missing coordinate counts so the map can honestly account for
+    records without usable coordinates rather than silently dropping them."""
+
+    items: list[SubstationMapFeature]
+    mapped_count: int
+    missing_coordinate_count: int
+    total: int
+
+
 class SubstationDetail(BaseModel):
     """Full detail view — includes resolved accountability (getUser,
     iam-module.md §13), never raw UUIDs alone.

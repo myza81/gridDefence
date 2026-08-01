@@ -29,6 +29,16 @@ export function useSubstationsQuery(filters: SubstationListFilters) {
   });
 }
 
+/** Geographic projection for the map view (Phase E.1) — reuses the registry
+ *  filters (minus pagination) so the table and map never drift. */
+export function useSubstationMapQuery(filters: Omit<SubstationListFilters, "page" | "page_size">) {
+  return useQuery({
+    queryKey: [...substationKeys.all, "map", filters] as const,
+    queryFn: () => substationRegistryApi.getSubstationMap(filters),
+    placeholderData: (previous) => previous,
+  });
+}
+
 export function useSubstationQuery(substationId: string | undefined) {
   return useQuery({
     queryKey: substationKeys.detail(substationId ?? ""),

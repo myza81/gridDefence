@@ -96,12 +96,39 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   const ref = path.match(/\/api\/v1\/reference-data\/([a-z-]+)/);
   if (ref) return Promise.resolve(json((REF as Record<string, unknown>)[ref[1]] ?? []));
   const detail = path.match(/\/api\/v1\/substations\/([^/?]+)$/);
-  if (detail) {
+  if (detail && detail[1] !== "map") {
     const found = SUBSTATIONS.find((s) => s.substation_id === detail[1]) ?? SUBSTATIONS[0];
     return Promise.resolve(json({ ...found, latitude: 3.1478, longitude: 101.6953, commissioned_date: "2004-05-01", remarks: "Primary intake for the eastern KL corridor.", created_at: "2004-05-01T00:00:00Z", updated_at: "2026-06-12T09:12:00Z", created_by: PREVIEW_USER, updated_by: PREVIEW_USER }));
   }
   if (/\/aliases$/.test(path)) return Promise.resolve(json([{ alias_id: 1, alias_mnemonic: "AMPANG", alias_name: null, valid_from: "2004-05-01T00:00:00Z", valid_to: "2012-01-01T00:00:00Z" }]));
   if (/\/audit-log/.test(path)) return Promise.resolve(json({ items: [{ log_id: 1, field_name: "official_name", old_value: "Ampang SSU", new_value: "Ampang", changed_at: "2026-06-12T09:12:00Z", changed_by: PREVIEW_USER, change_reason: "Naming standardisation" }], page: 1, page_size: 50, total: 1 }));
+  if (/\/api\/v1\/substations\/map/.test(path)) {
+    const coords: Record<string, [number, number]> = {
+      "PREVIEW-1": [101.75, 3.16],
+      "PREVIEW-2": [101.53, 3.42],
+      "PREVIEW-3": [101.35, 3.11],
+      "PREVIEW-4": [101.62, 2.99],
+      "PREVIEW-6": [100.4, 5.38],
+    };
+    const items = SUBSTATIONS.map((s) => {
+      const c = coords[s.substation_id];
+      return {
+        substation_id: s.substation_id,
+        mnemonic: s.mnemonic,
+        official_name: s.official_name,
+        operational_status_id: s.operational_status_id,
+        region_id: s.region_id,
+        gm_zone_id: s.gm_zone_id,
+        state_id: s.state_id,
+        grid_owner_id: s.grid_owner_id,
+        latitude: c ? c[1] : null,
+        longitude: c ? c[0] : null,
+        coordinate_status: c ? "present" : "missing",
+      };
+    });
+    const mapped = items.filter((i) => i.coordinate_status === "present").length;
+    return Promise.resolve(json({ items, mapped_count: mapped, missing_coordinate_count: items.length - mapped, total: items.length }));
+  }
   if (/\/api\/v1\/substations\?/.test(path)) {
     const empty = /state=empty/.test(path);
     const items = empty ? [] : SUBSTATIONS;

@@ -17,6 +17,7 @@ import { tokens } from "../../../theme/tokens";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
 import { useAuth } from "../../iam/AuthContext";
 import { equipmentRegistryApi } from "../../equipment_registry/api";
+import { SubstationMapView } from "../components/SubstationMapView";
 import { useSubstationsQuery } from "../hooks";
 import { substationStatuses, toneForStatusCode } from "../lifecycle";
 import type { SubstationSummary } from "../types";
@@ -71,6 +72,19 @@ export function SubstationListPage() {
     [page, debouncedSearch, regionId, gmZoneId, statusId],
   );
 
+  // Table ↔ Map view via URL query (view=map) — filters are shared, so the two
+  // views can never drift, and the view is deep-linkable / back-forward safe.
+  const view = searchParams.get("view") === "map" ? "map" : "table";
+  const mapFilters = useMemo(
+    () => ({
+      search: debouncedSearch || undefined,
+      region_id: regionId ? Number(regionId) : undefined,
+      gm_zone_id: gmZoneId ? Number(gmZoneId) : undefined,
+      operational_status_id: statusId ? Number(statusId) : undefined,
+    }),
+    [debouncedSearch, regionId, gmZoneId, statusId],
+  );
+
   const substationsQuery = useSubstationsQuery(filters);
 
   // Switchyard voltages are composed client-side (ADR-009; A2/F2 — Master Data
@@ -112,7 +126,12 @@ export function SubstationListPage() {
             ? `${total} substation${total === 1 ? "" : "s"}${hasActiveFilters ? " matching the current filters" : " registered"}`
             : undefined
         }
-        actions={canWrite ? <Link to="/substations/new" style={createActionStyle}><PlusIcon /> Register substation</Link> : undefined}
+        actions={
+          <>
+            <ViewSwitch view={view} onChange={(next) => updateParams((n) => (next === "map" ? n.set("view", "map") : n.delete("view")), false)} />
+            {canWrite && <Link to="/substations/new" style={createActionStyle}><PlusIcon /> Register substation</Link>}
+          </>
+        }
       />
 
       <Card padding="16px" style={{ marginBottom: tokens.space[4] }}>
@@ -153,7 +172,9 @@ export function SubstationListPage() {
         )}
       </Card>
 
-      {substationsQuery.isError ? (
+      {view === "map" ? (
+        <SubstationMapView filters={mapFilters} />
+      ) : substationsQuery.isError ? (
         <ErrorState
           title="Couldn't load substations"
           message={substationsQuery.error instanceof ApiError ? substationsQuery.error.message : "The registry could not be reached. Check your connection and try again."}
@@ -181,7 +202,7 @@ export function SubstationListPage() {
         <RegistryTable items={items} referenceData={referenceData} voltageLabelsBySubstation={voltageLabelsBySubstation} />
       )}
 
-      {substationsQuery.isSuccess && items.length > 0 && (
+      {view === "table" && substationsQuery.isSuccess && items.length > 0 && (
         <nav aria-label="Pagination" style={{ display: "flex", alignItems: "center", gap: tokens.space[3], marginTop: tokens.space[4] }}>
           <Button variant="secondary" disabled={page <= 1} onClick={() => updateParams((n) => n.set("page", String(page - 1)), false)}>
             Previous
@@ -200,6 +221,38 @@ interface RowsProps {
   items: SubstationSummary[];
   referenceData: ReturnType<typeof useReferenceData>;
   voltageLabelsBySubstation: Map<string, string[]>;
+}
+
+/** Segmented Table/Map view switch (accessible tablist-style buttons). */
+function ViewSwitch({ view, onChange }: { view: "table" | "map"; onChange: (v: "table" | "map") => void }) {
+  return (
+    <span role="group" aria-label="Registry view" style={{ display: "inline-flex", border: `1px solid ${tokens.color.borderStrong}`, borderRadius: tokens.radius.md, overflow: "hidden" }}>
+      {(["table", "map"] as const).map((option) => {
+        const active = view === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(option)}
+            style={{
+              height: tokens.control.height,
+              padding: `0 ${tokens.space[4]}`,
+              border: "none",
+              background: active ? tokens.color.actionPrimary : tokens.color.surfacePanel,
+              color: active ? tokens.color.actionPrimaryText : tokens.color.textPrimary,
+              fontFamily: tokens.typography.fontFamily,
+              fontSize: tokens.typography.size.button,
+              fontWeight: tokens.typography.weight.semibold,
+              cursor: "pointer",
+            }}
+          >
+            {option === "table" ? "Table" : "Map"}
+          </button>
+        );
+      })}
+    </span>
+  );
 }
 
 function StatusCell({ referenceData, statusId }: { referenceData: RowsProps["referenceData"]; statusId: number }) {

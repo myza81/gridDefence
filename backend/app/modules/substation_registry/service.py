@@ -53,6 +53,7 @@ from app.modules.substation_registry.schemas import (
     SubstationAliasSummary,
     SubstationAuditLogEntry,
     SubstationDetail,
+    SubstationMapFeature,
     SubstationSummary,
 )
 from app.reference_data.repository import ReferenceDataRepository
@@ -556,6 +557,53 @@ class SubstationService:
             search=search,
         )
         return [SubstationSummary.model_validate(s) for s in items], total
+
+    def list_map_features(
+        self,
+        *,
+        region_id: int | None = None,
+        gm_zone_id: int | None = None,
+        state_id: int | None = None,
+        grid_owner_id: int | None = None,
+        operational_status_id: int | None = None,
+        search: str | None = None,
+    ) -> tuple[list[SubstationMapFeature], int, int]:
+        """Geographic projection for the map (Phase E.1). Returns the
+        lightweight features (all matching records, unpaginated), the mapped
+        count, and the missing-coordinate count. The authoritative coordinate is
+        the Substation's own latitude/longitude (ADR-008 — Substation Registry
+        owns geography); this method NEVER derives, averages, or infers a
+        coordinate. Read-only; no audit, no mutation."""
+        substations = self.repo.list_all_for_map(
+            region_id=region_id,
+            gm_zone_id=gm_zone_id,
+            state_id=state_id,
+            grid_owner_id=grid_owner_id,
+            operational_status_id=operational_status_id,
+            search=search,
+        )
+        features: list[SubstationMapFeature] = []
+        mapped = 0
+        for s in substations:
+            has_coord = s.latitude is not None and s.longitude is not None
+            if has_coord:
+                mapped += 1
+            features.append(
+                SubstationMapFeature(
+                    substation_id=s.substation_id,
+                    mnemonic=s.mnemonic,
+                    official_name=s.official_name,
+                    operational_status_id=s.operational_status_id,
+                    region_id=s.region_id,
+                    gm_zone_id=s.gm_zone_id,
+                    state_id=s.state_id,
+                    grid_owner_id=s.grid_owner_id,
+                    latitude=float(s.latitude) if s.latitude is not None else None,
+                    longitude=float(s.longitude) if s.longitude is not None else None,
+                    coordinate_status="present" if has_coord else "missing",
+                )
+            )
+        return features, mapped, len(features) - mapped
 
     def list_aliases(self, substation_id: uuid.UUID) -> list[SubstationAliasSummary]:
         return [

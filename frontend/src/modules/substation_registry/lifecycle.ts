@@ -46,6 +46,20 @@ const TONES: Record<SubstationStatusCode, BadgeTone> = {
   ENTERED_IN_ERROR: "danger",
 };
 
+/** Map-marker colour per lifecycle code (matches the Badge dot palette). Colour
+ *  is never the SOLE indicator — the map also carries a legend, a text label,
+ *  and an accessible record list (Marker design §5). */
+const MARKER_COLORS: Record<SubstationStatusCode, string> = {
+  UNDER_CONSTRUCTION: "#2540D8",
+  ACTIVE: "#22A45D",
+  DECOMMISSIONED: "#8B98AD",
+  ENTERED_IN_ERROR: "#C2410C",
+};
+
+export function markerColorForStatusCode(code: string | undefined): string {
+  return code && code in MARKER_COLORS ? MARKER_COLORS[code as SubstationStatusCode] : "#8B98AD";
+}
+
 /** Badge tone for any operational-status code (legacy/foreign codes → neutral). */
 export function toneForStatusCode(code: string | undefined): BadgeTone {
   return code && code in TONES ? TONES[code as SubstationStatusCode] : "neutral";

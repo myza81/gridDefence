@@ -4,6 +4,7 @@ import type {
   SubstationAliasSummary,
   SubstationCreate,
   SubstationDetail,
+  SubstationMapResponse,
   SubstationPage,
   SubstationStatusChange,
   SubstationUpdate,
@@ -35,6 +36,10 @@ function buildQuery(filters: SubstationListFilters): string {
 export const substationRegistryApi = {
   listSubstations: (filters: SubstationListFilters = {}) =>
     apiClient.get<SubstationPage>(`/api/v1/substations${buildQuery(filters)}`),
+  // Read-only geographic projection (Phase E.1) — same filter surface as the
+  // list, unpaginated, with the authoritative Substation coordinate + counts.
+  getSubstationMap: (filters: Omit<SubstationListFilters, "page" | "page_size"> = {}) =>
+    apiClient.get<SubstationMapResponse>(`/api/v1/substations/map${buildQuery(filters)}`),
   getSubstation: (substationId: string) =>
     apiClient.get<SubstationDetail>(`/api/v1/substations/${substationId}`),
   createSubstation: (payload: SubstationCreate) =>
