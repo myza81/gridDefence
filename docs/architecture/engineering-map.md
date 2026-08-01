@@ -1,0 +1,145 @@
+# Engineering Map — Framework, Offline Architecture & Operator Guide
+
+Status: Implemented (Phase E.1A — cartographic enhancement + offline capability). Companion to [substation-registry-frontend.md](substation-registry-frontend.md). Governing standard: [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) v1.1 (§15 Frontend, §22 Configuration, A7 Engineering vs Infrastructure config, A12 Frontend calculation boundary) and [EDR-006](../engineering/edr/EDR-006-operational-context-visualization.md) (visualisation is decision-support presentation, never a second source of engineering truth).
+
+This document records how the **Engineering Map** is built and, critically, how it is expected to run **without internet connectivity**. It does not redefine any engineering behaviour: the map plots the *same* authoritative registry records the table shows, draws no lines, and computes no engineering facts.
+
+---
+
+## 1. What the Engineering Map is
+
+`EngineeringMap` ([frontend/src/components/map/EngineeringMap.tsx](../../frontend/src/components/map/EngineeringMap.tsx)) is a **registry-agnostic MapLibre GL wrapper**. It owns the map instance, controls (navigation + compass, metric scale, reset-to-extent, style selector), clustering, marker selection (subtle pulse + popup), and offline-first failure handling. It knows nothing about substations — callers pass one or more `EngineeringMapLayer`s (GeoJSON points + a category→colour map). Future engineering layers (Transformer / Circuit / Relay / Sensitive-Customer / defence-scheme overlays) plug in without changing the component. It is **infrastructure, not a one-off**.
+
+The map is always a **progressive enhancement** over an accessible, keyboard-operable record list ([SubstationMapView](../../frontend/src/modules/substation_registry/components/SubstationMapView.tsx)): the map is never the only way to find or open a substation.
+
+---
+
+## 2. Operating modes (configuration only)
+
+Two modes are selected purely by configuration — no code change (CLAUDE.md §22, A7). Each selectable basemap is a MapLibre **style URL**, configured per style:
+
+| Variable | Meaning |
+|---|---|
+| `VITE_MAP_STYLE_STANDARD` | Standard "engineering day" style. (`VITE_MAP_STYLE_URL` is honoured as a back-compatible alias.) |
+| `VITE_MAP_STYLE_SATELLITE` | Satellite imagery style (optional). |
+| `VITE_MAP_STYLE_TERRAIN` | Terrain / relief style (optional). |
+
+**Connected development mode** — externally hosted styles (require internet):
+```
+VITE_MAP_STYLE_STANDARD=https://your-provider.example/standard/style.json
+VITE_MAP_STYLE_SATELLITE=https://your-provider.example/satellite/style.json
+VITE_MAP_STYLE_TERRAIN=https://your-provider.example/terrain/style.json
+```
+
+**Offline / internal production mode** — every resource served from the GridDefence deployment or an internal service (no internet):
+```
+VITE_MAP_STYLE_STANDARD=/map-assets/styles/standard/style.json
+VITE_MAP_STYLE_SATELLITE=/map-assets/styles/satellite/style.json
+VITE_MAP_STYLE_TERRAIN=/map-assets/styles/terrain/style.json
+```
+
+**Availability comes from configuration, not code** ([mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)). A style is offered in the selector only when its variable is set; unset styles are omitted rather than offered and then failing. When *nothing* is configured, the map degrades to the record list and the registry stays fully usable. No public provider is hard-coded as a production service, and the map **never silently falls back to a public external provider**.
+
+The recommended **initial production target** is a detailed **offline Standard** map for Peninsular Malaysia; Satellite and Terrain are enabled only when locally licensed and hosted.
+
+---
+
+## 3. Offline resource audit (a local style JSON is not enough)
+
+A style is offline-capable only if **every** resource it references resolves locally: the top-level style JSON *plus* its `glyphs`, `sprite`, and each source's `tiles`/`url` (vector, raster, raster-DEM/hillshade, contour). A "local" style that still points `glyphs`/`sprite`/`tiles` at `https://…`, `//host/…` or `mapbox://…` is **not** offline-capable.
+
+`auditStyleForExternalUrls(style)` ([mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)) scans a style object and returns every external URL it finds (empty ⇒ offline-capable). It is exercised by [mapConfig.test.ts](../../frontend/tests/components/map/mapConfig.test.ts) and should be run by operators against any style they intend to host offline. Checklist of resources to localise:
+
+- style JSON · glyph/font ranges (`.pbf`) · sprite (`.json`/`.png`) · vector tiles · raster tiles · satellite imagery tiles · raster-DEM/hillshade tiles · contour vector tiles · administrative boundaries · place labels · roads · rivers/water · forest/land-cover.
+
+---
+
+## 4. Local map-serving strategy (Docker Compose → Kubernetes)
+
+**Recommendation: package Peninsular-Malaysia vector tiles as a single [PMTiles](https://github.com/protomaps/PMTiles) archive, plus locally hosted MapLibre style + glyphs + sprite, served as static files by the existing frontend web server (or a small dedicated `map-assets` service).** Rationale: one immutable file, no tile database or tile-server process, HTTP range-request friendly, trivial to back up and version, and portable from Docker Compose to Kubernetes unchanged.
+
+| Concern | Recommendation |
+|---|---|
+| Compose deployment | A `map-assets` static service (Nginx) mounting a versioned volume/image with `style.json`, `glyphs/`, `sprite.*`, and `peninsular-malaysia.pmtiles`; or serve the same folder from the frontend container. Frontend points `VITE_MAP_STYLE_STANDARD=/map-assets/styles/standard/style.json`. |
+| Health check | HTTP `GET` on the style JSON. The map service being down must **not** make the wider GridDefence application unhealthy (see §9). |
+| Startup | Deterministic — assets are baked into the image or a pre-populated named volume; **no runtime downloading of production tiles**. |
+| Tile-data volume / size | Peninsular-Malaysia vector (Standard) at z0–z14 is typically ~a few hundred MB (confirm at packaging time). Satellite/terrain raster is far larger (§7). |
+| Update process | Rebuild the assets image / replace the PMTiles file with a new dated version; documented in the operator runbook; frontend URL is unchanged. |
+| Backup | The PMTiles + style/glyph/sprite bundle is a small, immutable artefact — back up with the deployment. |
+| Caching | Long-lived `Cache-Control` on immutable tile/glyph/sprite assets; the style JSON short-lived so a re-packaged dataset is picked up. |
+| Licensing / attribution | Only host data whose licence permits redistribution; keep the required attribution in the style's `attribution`/an on-map attribution control (see §7). |
+| Kubernetes | Same static assets behind an Ingress path (or a small Deployment + Service); PMTiles on a ReadOnlyMany PVC or in the image. No change to the frontend contract. |
+
+Alternatives evaluated and *not* chosen as the default: MBTiles behind a tile-server container (adds a stateful process), a full vector-tile server (operationally heavier), per-zoom static raster pyramids (simple but large and less crisp). Any of these remain compatible because the frontend only depends on a **style URL**.
+
+**This document specifies the architecture; it does not fabricate map data.** Producing the actual PMTiles/style/glyph/sprite bundle for Peninsular Malaysia (from an appropriately licensed source such as OpenMapTiles/Protomaps builds of OSM) is a deployment/packaging step performed by an operator with confirmed redistribution rights — not invented here.
+
+---
+
+## 5. Required offline coverage
+
+Initial locally hosted package should prioritise **Peninsular Malaysia**, with padding so coastal/border areas stay legible. The default and reset viewport is `PENINSULAR_MALAYSIA_BOUNDS = [99.3, 0.8, 104.9, 6.8]` (a display extent only — not an engineering region or operational boundary). Document at packaging time: geographic bounds, supported zoom range, approximate storage size, included layers, source-data version, and update procedure. Do **not** package global data without a justified requirement.
+
+---
+
+## 6. Failure behaviour, fallback hierarchy & connectivity detection
+
+Map resource loading is **time-bounded** (`loadTimeoutMs`, default 8 s) — there is **no infinite retry** and no aggressive retry loop; a single missing *tile* does not tear the workspace down (only a style/glyph/sprite/source **load** failure triggers fallback). Availability is determined from **actual resource load success/failure**, not `navigator.onLine` (which does not indicate whether a map provider is reachable), and the app does not repeatedly probe external providers.
+
+Deliberate fallback sequence, each stage attempted at most once (no loops):
+```
+Configured selected style
+        ↓  (load fails / times out)
+Configured local Standard style
+        ↓  (load fails / times out)
+Neutral local canvas  (inline style, zero network requests — markers still plotted)
+        ↓  (only if even WebGL/canvas init fails)
+Accessible Substation record list
+```
+The neutral canvas (`NEUTRAL_FALLBACK_STYLE`) is an inline MapLibre style with a single background layer and **no** sources/glyphs/sprites, so it renders markers with zero external requests. On the neutral canvas clustering is disabled (cluster labels need glyphs) — points render individually. A future **governed** Peninsular-Malaysia / state-boundary overlay may enrich this neutral stage (see §11); geometry is never fabricated.
+
+When degraded, the UI shows an honest notice (e.g. *"The configured basemap could not be loaded. Showing a neutral offline canvas — every substation is still plotted and listed."*). When no map is possible at all it shows an explicit **Basemap unavailable — Substation Registry data remains available** state (never a permanent spinner or unexplained blank canvas). The **Table view and record list remain available at all times.**
+
+---
+
+## 7. Satellite & terrain — larger data and licence sensitivity
+
+Satellite imagery and terrain/DEM data are far larger and often carry restrictive licences. For each offline style, document: source, licence, redistribution rights, storage estimate, supported zoom range, update process, and whether internal hosting is permitted. It is acceptable — and is the recommended initial posture — to ship an **offline Standard** basemap while leaving **Satellite and Terrain connected-only** until locally licensed and hosted; the selector then simply offers Standard alone, and the offline Standard map remains fully usable. **Do not package third-party imagery without confirmed redistribution rights, and do not fabricate contour/terrain geometry.** If the configured Standard style does not carry a layer (e.g. hillshade/contours), that limitation is documented honestly rather than faked.
+
+---
+
+## 8. Service worker & browser caching
+
+Browser caching (or a service worker) may improve resilience for *previously loaded* assets, but it is **not** the offline strategy — locally hosted tiles + a controlled internal map service + deterministic deployment packaging are. The map must not be described as offline-capable merely because a previously visited tile might be cached. A service worker is **not** introduced by this phase; if considered later, document cache versioning, invalidation, maximum storage, partial-download behaviour, first-use limitation, browser support, and deployment risks first.
+
+---
+
+## 9. Docker Compose / deployment integration
+
+Extend the deployment with a map-assets/tile service alongside `frontend`, `backend`, `postgres`, `redis`, and the worker. Requirements: health check on the style JSON; deterministic startup; a clear mounted-volume or image-packaging strategy; **no runtime downloading of production tiles**; environment-based style endpoints; a documented resource update procedure; and graceful operation when the map service is unavailable. Crucially, **the basemap service being unavailable must not make the whole GridDefence application unhealthy** — map failure is isolated to the map, and every other module keeps working.
+
+---
+
+## 10. Search, selection, scale — all offline
+
+- **Search** is registry-only — GridDefence's own Substation data. No Nominatim, no Google, no external geocoding. Fly-to and selected-marker emphasis work entirely from local coordinates; records without coordinates remain disclosed.
+- **Selection** highlights the marker (subtle pulse), opens a compact popup, and mirrors into the accessible side panel with the full record + **Open substation →** (SPA navigation).
+- **Scale bar** (metric) is computed from the map projection/viewport and needs no network. It is *not* survey-grade; future distance measurement must also stay local and must never call an external API.
+
+The popup is intentionally compact (mnemonic, official name, lifecycle, coordinate, Open) to avoid oversized popups; the full field set lives in the side panel. **Voltage is deliberately absent from the map** — it is a switchyard composition (per ADR-009/A2-F2), not part of the geographic registry projection; adding it would require a backend projection change and is out of scope for this cartographic phase (documented limitation).
+
+---
+
+## 11. Future authoritative boundary overlay (ADR-030 — not implemented here)
+
+A future **governed** Malaysian State (admin level 1) boundary overlay belongs as an additional `EngineeringMapLayer` (line/fill), sourced from an authoritative, versioned, locally packaged dataset — exactly the dataset [ADR-030](../adr/ADR-030-coordinate-assisted-state-resolution.md) governs. The framework is already shaped for it: layers are additive, offline-served, and audited by `auditStyleForExternalUrls`. **This phase does not implement ADR-030** (coordinate→State resolution) and draws no boundary geometry; it only leaves the seam.
+
+---
+
+## 12. Configuration reference
+
+See [frontend/.env.example](../../frontend/.env.example). Vite reads env from the `frontend/` directory; only `VITE_`-prefixed variables reach the browser bundle, and nothing secret belongs there. Attribution for any hosted data is carried in the style's own `attribution` and surfaced by MapLibre's attribution control.
+
+## 13. Verification notes
+
+`typecheck`, `lint`, `test`, and `build` are automated. Full **offline GL rendering** verification (the map drawing with internet disabled / external map hosts blocked, capturing network-request evidence that the offline Standard map makes no external calls) is a **browser/manual** step — jsdom has no WebGL, so it cannot run in the unit suite. The automated tests instead lock the offline *contract*: availability-from-configuration, unconfigured-styles-omitted, the neutral fallback and local styles being free of external URLs, and the registry data/list/search surviving basemap failure.

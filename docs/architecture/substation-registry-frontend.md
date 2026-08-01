@@ -133,6 +133,17 @@ A complementary geographic presentation of the *same* authoritative registry rec
 - **States:** map-data loading / retryable error (table stays available) / empty / all-filtered-out / basemap-unavailable — no blank grey rectangle.
 - **Deferred:** geographic **line overlays** (a separate, governed capability — never drawn from proximity/mnemonic similarity/shared GM Zone/PSS/E without snapshot context). The **coordinate→State resolution** addendum is deferred to [ADR-030](../adr/ADR-030-coordinate-assisted-state-resolution.md) (proposal delivered; not implemented until approved).
 
+### Cartographic enhancement + offline capability (Phase E.1A)
+
+The map engine and framework are unchanged (still MapLibre GL JS + `EngineeringMap` + read-only projection); the **cartographic experience** and **offline resilience** were enhanced. Full detail lives in [engineering-map.md](engineering-map.md); in summary:
+
+- **Selectable basemap styles** (Standard / Satellite / Terrain) built from a **config object** driven by per-style env vars (`VITE_MAP_STYLE_STANDARD|SATELLITE|TERRAIN`), so future styles (Dark, High-Contrast, Utility) are a one-line addition. Availability comes from configuration — unset styles are omitted, not offered-then-failing. Style switching preserves camera, selection and filters.
+- **Offline-first**: two operating modes (connected dev vs offline/internal production) by configuration alone; time-bounded loads (no infinite retry); a deliberate fallback hierarchy (selected → local Standard → neutral local canvas → record list) that **never silently switches to a public provider**; availability detected from real resource load success/failure (not `navigator.onLine`). Registry search, marker selection, fly-to and the metric scale bar all work with local resources.
+- **Controls**: navigation + compass, metric **scale bar**, reset-to-Peninsular-Malaysia, and the style selector.
+- **Marker/popup/search polish**: subtle selected-marker pulse, a compact on-map popup (mnemonic · name · lifecycle · coordinate · Open), smooth fly-to, and an enriched side panel (adds **Coordinate**). Lifecycle semantics are retained — markers are never sized by load (no MVP-style load sizing).
+- **Responsive**: desktop large-map + side details, tablet balanced, mobile bounded map height (no horizontal overflow); the accessible record list is always present.
+- **Boundary overlay seam**: a future authoritative State-boundary overlay ([ADR-030](../adr/ADR-030-coordinate-assisted-state-resolution.md)) plugs in as an additional offline-served layer — **not** implemented here; no geometry fabricated.
+
 ## Reference detail-workspace pattern for future registries
 
 The map framework is registry-agnostic and reusable. Future registries (Circuit / Transformer / Relay / Sensitive Customer) reuse the same `[Table] [Map]` switch, the `EngineeringMap` framework with their own marker layer, and the same lightweight read-projection pattern.

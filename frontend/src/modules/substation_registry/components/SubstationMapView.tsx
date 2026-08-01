@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../../api/client";
 import { Badge } from "../../../components/ui/Badge";
@@ -10,6 +10,7 @@ import { MetadataList } from "../../../components/ui/MetadataList";
 import { EngineeringMap } from "../../../components/map/EngineeringMap";
 import type { EngineeringMapLayer } from "../../../components/map/EngineeringMap";
 import { PENINSULAR_MALAYSIA_BOUNDS } from "../../../components/map/mapConfig";
+import { useIsMobile } from "../../../components/layout/useIsMobile";
 import { tokens } from "../../../theme/tokens";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
 import type { SubstationListFilters } from "../api";
@@ -32,10 +33,19 @@ type MapFilters = Omit<SubstationListFilters, "page" | "page_size">;
  */
 export function SubstationMapView({ filters }: { filters: MapFilters }) {
   const referenceData = useReferenceData();
+  const navigate = useNavigate();
   const query = useSubstationMapQuery(filters);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [basemapAvailable, setBasemapAvailable] = useState(true);
+  const [basemapNotice, setBasemapNotice] = useState<string | null>(null);
+
+  // Structural (not cosmetic) layout switch — inline styles cannot express a
+  // media query. Desktop: large map + side details. Tablet: balanced stack.
+  // Mobile: bounded map height so the page never overflows.
+  const isNarrow = useIsMobile(tokens.breakpoint.tablet);
+  const isMobile = useIsMobile(tokens.breakpoint.mobile);
+  const mapHeight = isMobile ? "380px" : isNarrow ? "460px" : "min(70vh, 680px)";
 
   const items = useMemo(() => query.data?.items ?? [], [query.data]);
   const mapped = query.data?.mapped_count ?? 0;
@@ -71,9 +81,10 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
         latitude: f.latitude as number,
         category: String(f.operational_status_id),
         label: `${f.mnemonic} — ${f.official_name}`,
+        popupHtml: buildPopupHtml(f, referenceData.operationalStatusesById.get(f.operational_status_id)?.label),
       })),
     };
-  }, [withCoords, referenceData.operationalStatuses]);
+  }, [withCoords, referenceData.operationalStatuses, referenceData.operationalStatusesById]);
 
   const selected = items.find((f) => f.substation_id === selectedId) ?? null;
 
@@ -118,7 +129,7 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
         </p>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: tokens.space[3], alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "minmax(0, 1.7fr) minmax(300px, 1fr)", gap: tokens.space[3], alignItems: "start" }}>
         <div style={{ minWidth: 0 }}>
           <EngineeringMap
             layers={[layer]}
@@ -126,8 +137,14 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onBasemapStatus={setBasemapAvailable}
+            onBasemapNotice={setBasemapNotice}
+            onOpen={(id) => navigate(`/substations/${id}`)}
             focusId={focusId}
+            height={mapHeight}
           />
+          {basemapAvailable && basemapNotice && (
+            <p role="status" style={{ ...mutedSmall, marginTop: tokens.space[2], color: "#8A5A00" }}>{basemapNotice}</p>
+          )}
           {!basemapAvailable && (
             <p style={{ ...mutedSmall, marginTop: tokens.space[2] }}>
               The map is unavailable, but every substation remains reachable from the list.
@@ -238,6 +255,7 @@ function SelectedPanel({ feature, referenceData, onClose }: { feature: Substatio
           { term: "GM Zone", value: dash(referenceData.gmZonesById.get(feature.gm_zone_id)?.label) },
           { term: "Grid owner", value: dash(referenceData.gridOwnersById.get(feature.grid_owner_id)?.code) },
           { term: "State", value: feature.state_id === null ? "—" : dash(referenceData.statesById.get(feature.state_id)?.label) },
+          { term: "Coordinate", value: formatCoordinate(feature.latitude, feature.longitude) },
         ]}
       />
       <Link to={`/substations/${feature.substation_id}`} style={{ color: tokens.color.link, fontWeight: tokens.typography.weight.semibold, textDecoration: "none", fontFamily: tokens.typography.fontFamily, fontSize: "13px" }}>
@@ -245,6 +263,34 @@ function SelectedPanel({ feature, referenceData, onClose }: { feature: Substatio
       </Link>
     </Card>
   );
+}
+
+function formatCoordinate(lat: number | null, lng: number | null): string {
+  if (lat === null || lng === null) return "—";
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
+
+/** Compact, pre-escaped popup for the on-map selected marker. Registry data
+ *  (mnemonic/name) is user-entered, so every value is HTML-escaped. Voltage is
+ *  intentionally absent — it is a switchyard composition, not part of the
+ *  geographic registry projection (documented in engineering-map.md). The full
+ *  record + Open action live in the accessible side panel. */
+function buildPopupHtml(feature: SubstationMapFeature, statusLabel: string | undefined): string {
+  const line = (label: string, value: string) =>
+    `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;line-height:1.5"><span style="color:#5A6A85">${escapeHtml(label)}</span><span style="color:#0F2340;font-weight:600">${escapeHtml(value)}</span></div>`;
+  return [
+    `<div style="font-family:'Inter',system-ui,sans-serif;min-width:180px">`,
+    `<div style="font-weight:700;font-size:13px;color:#0F2340">${escapeHtml(feature.mnemonic)}</div>`,
+    `<div style="font-size:12px;color:#5A6A85;margin-bottom:6px">${escapeHtml(feature.official_name)}</div>`,
+    line("Lifecycle", statusLabel ?? String(feature.operational_status_id)),
+    line("Coordinate", formatCoordinate(feature.latitude, feature.longitude)),
+    `<a data-map-open href="/substations/${escapeHtml(feature.substation_id)}" style="display:inline-block;margin-top:8px;color:#2B5BE6;font-weight:600;font-size:12px;text-decoration:none">Open substation →</a>`,
+    `</div>`,
+  ].join("");
 }
 
 function InfoIcon() {

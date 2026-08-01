@@ -118,6 +118,8 @@ describe("SubstationMapView", () => {
     const user = userEvent.setup();
     await user.click(within(list).getByText("A Famosa"));
     expect(screen.getByText("Open substation →").closest("a")).toHaveAttribute("href", "/substations/id-1");
+    // The selected details panel exposes the canonical coordinate.
+    expect(screen.getByText("2.43000, 102.28000")).toBeInTheDocument();
     expect(within(list).getByRole("button", { name: /A Famosa/ })).toHaveAttribute("aria-pressed", "true");
   });
 
