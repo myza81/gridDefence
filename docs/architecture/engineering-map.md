@@ -183,6 +183,16 @@ When the Standard style is the local package and the archive is absent,
 installed"* notice with the exact setup command, and the record list + Table
 view stay usable. No `navigator.onLine`, no polling, no retry storm.
 
+**Acquiring the basemap (Phase E.1D).** The canonical Peninsular-Malaysia
+PMTiles is **generated (Route A)** from approved OpenStreetMap data (Protomaps
+basemaps schema) — a pre-built package was evaluated and rejected on
+licensing/provenance grounds. The full acquisition decision, candidate
+comparison, external-tool requirements (Planetiler / pmtiles CLI), and the
+reproducible build + provenance-recording steps are in
+[offline-basemap-build.md](offline-basemap-build.md). The actual build and the
+offline browser render check are operator steps (they need a build tool and a
+real browser/WebGL).
+
 **Windows setup (PowerShell, from repo root):**
 ```
 .\.venv\Scripts\Activate.ps1

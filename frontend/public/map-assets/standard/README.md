@@ -48,6 +48,15 @@ If the binaries are absent, the app shows an honest "offline Standard map assets
 are not installed" message and keeps the record list + Table view usable — it
 never stalls.
 
+## How the basemap is produced (Route A)
+
+The Peninsular-Malaysia PMTiles is **generated** from approved OpenStreetMap data
+(Protomaps basemaps schema) via a reproducible workflow — see
+[`docs/architecture/offline-basemap-build.md`](../../../../docs/architecture/offline-basemap-build.md)
+for the decision (why a pre-built package was rejected), the external build
+tools (Planetiler / pmtiles CLI), and the exact commands. After building, stamp
+provenance with `python scripts/record_map_provenance.py archive --file <pmtiles>`.
+
 ## Sources (confirm licence/redistribution before hosting)
 
 - **PMTiles archive:** a Protomaps regional extract of OpenStreetMap, or your

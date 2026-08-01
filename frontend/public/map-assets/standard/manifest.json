@@ -10,7 +10,12 @@
     "policy": "docs/engineering/licensing-policy.md",
     "notices": "THIRD_PARTY_NOTICES.md",
     "reviewed": "2026-08-01",
-    "note": "Every asset below must carry licence, attribution, source, download_url, download_date and checksum before it may be installed. scripts/fetch_map_assets.py rejects assets that do not."
+    "note": "Every asset below must carry licence, attribution, source, provenance (download_date) and checksum before it may be installed. scripts/fetch_map_assets.py rejects assets that do not."
+  },
+  "acquisition": {
+    "route": "A",
+    "reason": "No pre-built, pinned, region-scoped, freely-redistributable PMTiles package exists (Protomaps = rolling global/on-demand; MapTiler = commercial). Route A generates the canonical package from approved OSM sources without weakening E.1C governance.",
+    "workflow": "docs/architecture/offline-basemap-build.md"
   },
   "assets": {
     "archive": {
@@ -28,9 +33,16 @@
       "modification": "Permitted (share-alike on derived databases)",
       "attribution": "© OpenStreetMap contributors, © Protomaps",
       "geographic_extent": "Peninsular Malaysia [99.3, 0.8, 104.9, 6.8], zoom 0-14",
-      "update_procedure": "Re-extract from a newer Protomaps/OSM build over the same bounds; bump version, set download_date + checksum; re-run scripts/fetch_map_assets.py --force",
+      "update_procedure": "Rebuild via docs/architecture/offline-basemap-build.md (Planetiler or pmtiles extract), then `python scripts/record_map_provenance.py archive --file <pmtiles>`; bump version.",
       "archiveFormat": null,
-      "note": "Provide an internal/licensed URL and its SHA-256. No public provider is assumed."
+      "build": {
+        "route": "A",
+        "tool": "Planetiler (Apache-2.0) | pmtiles CLI (BSD-3) — operator-provided, build-time only",
+        "profile": "Protomaps basemaps schema (matches protomaps-themes-base style)",
+        "bbox": [99.3, 0.8, 104.9, 6.8],
+        "upstream": "OpenStreetMap (ODbL) + Natural Earth (public domain)"
+      },
+      "note": "Generated locally (Route A), not downloaded from a public URL. Set download_url only when hosting the built file on an internal artifact server for other engineers."
     },
     "glyphs": {
       "name": "Noto Sans glyph ranges",

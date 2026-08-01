@@ -101,6 +101,18 @@ serving:
 
 **When redistribution, attribution, or provenance is uncertain: exclude.**
 
+### 6a. Standard basemap source decision (Phase E.1D)
+
+The offline Standard basemap is **generated (Route A)** from approved OpenStreetMap
+data in the Protomaps basemaps schema, not adopted as a pre-built third-party
+package. Rationale and the full candidate comparison are in
+[`../architecture/offline-basemap-build.md`](../architecture/offline-basemap-build.md).
+Governance outcomes: **Protomaps/OSM** (ODbL tiles + BSD-3/CC0 styles) **accepted**
+as the approved source (redistributable, attributed); **OpenMapTiles/MapTiler
+prepared tiles rejected** (commercial/uncertain redistribution); hosted tile
+services rejected (no offline redistribution). Build-time tools (Planetiler
+Apache-2.0, pmtiles CLI BSD-3) are licence-clean and used at build time only.
+
 ## 7. Attribution policy
 
 Mandatory attributions must remain visible in all modes — online, **offline**,

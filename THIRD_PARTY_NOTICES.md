@@ -99,7 +99,20 @@ See [`frontend/public/map-assets/standard/`](frontend/public/map-assets/standard
 | **Sprites** | (per source) | Protomaps basemaps-assets | Icons for the style | Per the asset's own licence — record in its manifest before hosting |
 | **Satellite imagery** | **Excluded** | — | — | Not bundled — redistribution rights not established (see policy) |
 | **Terrain / DEM / hillshade** | **Excluded** | — | — | Not bundled — redistribution rights not established (see policy) |
+| Included base data (Natural Earth) | Public domain | Natural Earth (naturalearthdata.com) | Small-scale base features inside the Protomaps schema | No attribution required |
 | **Malaysian administrative boundaries** (as a separate governed layer) | **Not adopted** | — | Future ADR-030 State overlay | No enterprise-redistributable dataset confirmed — recommended against adoption until resolved |
+
+### 5a. Build-time tools for the offline basemap (Route A — not shipped, not linked)
+
+These are operator-provided, build-time-only tools used to generate the offline
+Standard PMTiles (see [`docs/architecture/offline-basemap-build.md`](docs/architecture/offline-basemap-build.md)).
+They are **not** bundled, **not** linked into the application, and **not**
+required at runtime.
+
+| Name | Licence | Source | Purpose |
+|---|---|---|---|
+| Planetiler | Apache-2.0 | https://github.com/onthegomap/planetiler | Generate Peninsular-Malaysia PMTiles from OSM (Protomaps profile) |
+| pmtiles CLI (go-pmtiles) | BSD-3-Clause | https://github.com/protomaps/go-pmtiles | Alternative: `pmtiles extract` a regional subset from the open Protomaps build |
 
 Runtime attribution for the map is rendered by MapLibre's attribution control,
 which aggregates each source's `attribution` field (the committed
