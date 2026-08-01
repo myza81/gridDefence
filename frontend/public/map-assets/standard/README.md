@@ -32,11 +32,13 @@ binaries are excluded (see root `.gitignore`) and obtained per-workstation.
 
 1. Open **PowerShell** in the repository root.
 2. Activate the Python venv: `.\.venv\Scripts\Activate.ps1`
-3. Fill in the `assets[*].url` (and ideally `sha256`) fields in `manifest.json`
-   with your organisation's internal/licensed artifact URLs (see **Sources**).
+3. Complete the governance fields in `manifest.json` for each asset — the setup
+   script **rejects** any asset missing `licence`, `attribution`, `source`,
+   `download_url`, `download_date`, or `checksum`, or carrying a prohibited
+   licence (see [`docs/engineering/licensing-policy.md`](../../../../docs/engineering/licensing-policy.md)).
 4. Run: `python scripts/fetch_map_assets.py`
-   - Downloads each asset, verifies its checksum (when provided), and unpacks
-     glyphs/sprites into this folder. It refuses to overwrite without `--force`.
+   - Downloads each asset, **verifies its checksum**, and unpacks glyphs/sprites
+     into this folder. It refuses to overwrite without `--force`.
 5. Point the frontend at the local style:
    `VITE_MAP_STYLE_STANDARD=/map-assets/standard/style.json` in `frontend/.env`.
 6. `cd frontend && npm run dev`, then open `/substations?view=map`. Disconnect

@@ -6,36 +6,69 @@
   "bounds": [99.3, 0.8, 104.9, 6.8],
   "minzoom": 0,
   "maxzoom": 14,
-  "source": "Protomaps 'basemaps' vector build of OpenStreetMap",
-  "license": {
-    "data": "ODbL 1.0 (OpenStreetMap)",
-    "styleLayers": "BSD-3-Clause (protomaps-themes-base)",
-    "fonts": "SIL Open Font License 1.1 (Noto Sans)",
-    "note": "Only redistribute assets whose licence permits it; confirm before hosting."
+  "governance": {
+    "policy": "docs/engineering/licensing-policy.md",
+    "notices": "THIRD_PARTY_NOTICES.md",
+    "reviewed": "2026-08-01",
+    "note": "Every asset below must carry licence, attribution, source, download_url, download_date and checksum before it may be installed. scripts/fetch_map_assets.py rejects assets that do not."
   },
-  "attribution": "© OpenStreetMap contributors, © Protomaps",
-  "styleFonts": ["Noto Sans Regular", "Noto Sans Medium", "Noto Sans Italic"],
   "assets": {
     "archive": {
+      "name": "Peninsular Malaysia vector tiles (PMTiles)",
       "path": "peninsular-malaysia.pmtiles",
-      "url": "",
-      "sha256": "",
-      "approxBytes": 0,
-      "note": "PMTiles vector archive. Provide an internal/licensed URL (e.g. a Protomaps regional extract or your own build). Left blank so no source is assumed."
+      "version": "",
+      "source": "OpenStreetMap, via a Protomaps 'basemaps' vector build",
+      "download_url": "",
+      "download_date": "",
+      "checksum": "",
+      "licence": "ODbL-1.0",
+      "licence_version": "1.0",
+      "redistribution": "Permitted for internal serving with attribution; share-alike applies to derived databases",
+      "commercial_use": "Permitted",
+      "modification": "Permitted (share-alike on derived databases)",
+      "attribution": "© OpenStreetMap contributors, © Protomaps",
+      "geographic_extent": "Peninsular Malaysia [99.3, 0.8, 104.9, 6.8], zoom 0-14",
+      "update_procedure": "Re-extract from a newer Protomaps/OSM build over the same bounds; bump version, set download_date + checksum; re-run scripts/fetch_map_assets.py --force",
+      "archiveFormat": null,
+      "note": "Provide an internal/licensed URL and its SHA-256. No public provider is assumed."
     },
     "glyphs": {
+      "name": "Noto Sans glyph ranges",
       "path": "glyphs",
-      "url": "",
-      "sha256": "",
+      "version": "",
+      "source": "Noto Sans (Noto project) glyph PBFs, e.g. protomaps/basemaps-assets",
+      "download_url": "",
+      "download_date": "",
+      "checksum": "",
+      "licence": "OFL-1.1",
+      "licence_version": "1.1",
+      "redistribution": "Permitted under the SIL Open Font License 1.1",
+      "commercial_use": "Permitted",
+      "modification": "Permitted under OFL (Reserved Font Name conditions apply)",
+      "attribution": "Noto Sans, © the Noto project, under SIL OFL 1.1",
+      "geographic_extent": "n/a (Latin glyph ranges for English + Malay place names)",
+      "update_procedure": "Replace glyph set; set download_date + checksum; re-run fetch script",
       "archiveFormat": "zip",
-      "note": "Glyph ranges for the styleFonts above (e.g. from protomaps/basemaps-assets). Unzips to glyphs/{fontstack}/{range}.pbf."
+      "note": "Unzips to glyphs/{fontstack}/{range}.pbf for Noto Sans Regular/Medium/Italic."
     },
     "sprites": {
+      "name": "Standard style sprite set",
       "path": "sprites",
-      "url": "",
-      "sha256": "",
+      "version": "",
+      "source": "Protomaps basemaps-assets (light sprite)",
+      "download_url": "",
+      "download_date": "",
+      "checksum": "",
+      "licence": "",
+      "licence_version": "",
+      "redistribution": "",
+      "commercial_use": "",
+      "modification": "",
+      "attribution": "© Protomaps",
+      "geographic_extent": "n/a (icon set)",
+      "update_procedure": "Replace sprite set; set licence, download_date + checksum; re-run fetch script",
       "archiveFormat": "zip",
-      "note": "Sprite set named 'light' (light.json + light.png[, @2x]). Unzips to sprites/."
+      "note": "Record the sprite source's exact SPDX licence before hosting — the fetch script rejects it until 'licence' is set."
     }
   }
 }
