@@ -1,0 +1,41 @@
+{
+  "package": "griddefence-standard-peninsular-malaysia",
+  "version": "1.0.0",
+  "description": "Offline Standard Engineering Map basemap for Peninsular Malaysia.",
+  "coverage": "Peninsular Malaysia (with coastal/border padding)",
+  "bounds": [99.3, 0.8, 104.9, 6.8],
+  "minzoom": 0,
+  "maxzoom": 14,
+  "source": "Protomaps 'basemaps' vector build of OpenStreetMap",
+  "license": {
+    "data": "ODbL 1.0 (OpenStreetMap)",
+    "styleLayers": "BSD-3-Clause (protomaps-themes-base)",
+    "fonts": "SIL Open Font License 1.1 (Noto Sans)",
+    "note": "Only redistribute assets whose licence permits it; confirm before hosting."
+  },
+  "attribution": "© OpenStreetMap contributors, © Protomaps",
+  "styleFonts": ["Noto Sans Regular", "Noto Sans Medium", "Noto Sans Italic"],
+  "assets": {
+    "archive": {
+      "path": "peninsular-malaysia.pmtiles",
+      "url": "",
+      "sha256": "",
+      "approxBytes": 0,
+      "note": "PMTiles vector archive. Provide an internal/licensed URL (e.g. a Protomaps regional extract or your own build). Left blank so no source is assumed."
+    },
+    "glyphs": {
+      "path": "glyphs",
+      "url": "",
+      "sha256": "",
+      "archiveFormat": "zip",
+      "note": "Glyph ranges for the styleFonts above (e.g. from protomaps/basemaps-assets). Unzips to glyphs/{fontstack}/{range}.pbf."
+    },
+    "sprites": {
+      "path": "sprites",
+      "url": "",
+      "sha256": "",
+      "archiveFormat": "zip",
+      "note": "Sprite set named 'light' (light.json + light.png[, @2x]). Unzips to sprites/."
+    }
+  }
+}

@@ -354,6 +354,55 @@ report — see [`CHANGELOG.md`](CHANGELOG.md) for the summarized outcome.
 
 ---
 
+## 11a. Offline Map Assets
+
+The Engineering Map's **Standard** basemap can run fully offline on a
+company-managed Windows laptop — no Docker, no tile server, no admin rights.
+The style is served from the frontend's static area at `/map-assets/standard/**`.
+The small text assets (style.json, manifest.json, attribution.txt, README.md)
+are committed; the heavy binaries (the `.pmtiles` archive, `glyphs/`, `sprites/`)
+are git-ignored and fetched per workstation.
+
+Windows PowerShell, from the repository root (no elevation, no execution-policy
+change required):
+
+```powershell
+# 1. Activate the repo Python venv (stdlib-only script, but keep it in .venv)
+.\.venv\Scripts\Activate.ps1
+
+# 2. Configure sources: edit frontend/public/map-assets/standard/manifest.json
+#    and set assets.archive.url / assets.glyphs.url / assets.sprites.url to your
+#    organisation's internal/licensed artifacts (sha256 recommended). No public
+#    provider is assumed — see that folder's README.md for recommended sources.
+
+# 3. Fetch + verify + unpack the binaries
+python scripts/fetch_map_assets.py            # --force to replace, --manifest PATH to override
+
+# 4. Point the frontend at the local Standard style
+#    In frontend/.env:  VITE_MAP_STYLE_STANDARD=/map-assets/standard/style.json
+
+# 5. Run and verify offline
+cd frontend
+npm run dev
+#    Open http://localhost:5173/substations?view=map, then DISCONNECT the network
+#    and confirm the Standard map still renders.
+```
+
+Regenerate / audit the local style (no network needed):
+
+```powershell
+cd frontend
+npm run map:build-style     # regenerate public/map-assets/standard/style.json
+npm run map:audit-style     # fails if the style references any external host
+```
+
+If the binaries are absent, GridDefence shows an honest "Offline Standard map
+assets are not installed" notice and keeps the substation record list and Table
+view fully usable — it never stalls. Full architecture, licensing, and
+IIS/Nginx byte-range notes: [`docs/architecture/engineering-map.md`](docs/architecture/engineering-map.md) §11b.
+
+---
+
 ## 12. Related Documents
 
 - [`.claude/CLAUDE.md`](.claude/CLAUDE.md) — governing engineering standard.

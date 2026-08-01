@@ -12,6 +12,13 @@ frontend/dist/
 frontend/coverage/
 *.tsbuildinfo
 
+# Offline map binary assets — generated/fetched, never committed (see
+# frontend/public/map-assets/standard/README.md). The style.json, manifest.json,
+# README.md and attribution.txt ARE committed; the heavy binaries are not.
+frontend/public/map-assets/**/*.pmtiles
+frontend/public/map-assets/**/glyphs/
+frontend/public/map-assets/**/sprites/
+
 # Environment
 .env
 .env.local

@@ -144,6 +144,8 @@ The map engine and framework are unchanged (still MapLibre GL JS + `EngineeringM
 - **Responsive**: desktop large-map + side details, tablet balanced, mobile bounded map height (no horizontal overflow); the accessible record list is always present.
 - **Boundary overlay seam**: a future authoritative State-boundary overlay ([ADR-030](../adr/ADR-030-coordinate-assisted-state-resolution.md)) plugs in as an additional offline-served layer — **not** implemented here; no geometry fabricated.
 
+**Offline Standard package (Phase E.1B):** the Standard basemap is served entirely from the app (`/map-assets/standard/**`) as a PMTiles archive + local glyphs/sprite + a local, audited `style.json`, so it works with no internet and no tile server. Committed text (style/manifest/attribution/README) vs git-ignored binaries fetched by `python scripts/fetch_map_assets.py`; missing binaries produce an honest "not installed" notice while the list/Table stay usable. Full detail in [engineering-map.md](engineering-map.md) §11b.
+
 ## Reference detail-workspace pattern for future registries
 
 The map framework is registry-agnostic and reusable. Future registries (Circuit / Transformer / Relay / Sensitive Customer) reuse the same `[Table] [Map]` switch, the `EngineeringMap` framework with their own marker layer, and the same lightweight read-projection pattern.

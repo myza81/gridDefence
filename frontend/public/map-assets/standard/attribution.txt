@@ -1,0 +1,14 @@
+Offline Standard Engineering Map — attribution
+
+Map data: © OpenStreetMap contributors (https://www.openstreetmap.org/copyright),
+licensed under the Open Database License (ODbL) 1.0.
+
+Vector tile build / schema: © Protomaps (https://protomaps.com).
+
+Style layers: protomaps-themes-base (BSD-3-Clause).
+
+Fonts / glyphs: Noto Sans, licensed under the SIL Open Font License 1.1.
+
+This attribution must remain visible in the application's map attribution
+control. Do not redistribute any of the above assets without confirming the
+licence permits it for your deployment.

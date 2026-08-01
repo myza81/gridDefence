@@ -12,6 +12,7 @@ import {
   styleById,
 } from "./mapConfig";
 import type { EngineeringMapStyle } from "./mapConfig";
+import { registerPmtilesProtocol } from "./pmtilesProtocol";
 
 /**
  * Engineering Map Framework — a generic, reusable MapLibre GL wrapper.
@@ -137,6 +138,9 @@ export function EngineeringMap({
       onBasemapStatus?.(false);
       return;
     }
+    // Teach MapLibre the `pmtiles://` scheme before any style that uses it loads
+    // (offline Standard). Idempotent — safe on every mount.
+    registerPmtilesProtocol();
     let map: maplibregl.Map;
     try {
       map = new maplibregl.Map({

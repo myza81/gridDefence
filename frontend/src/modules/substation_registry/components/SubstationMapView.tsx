@@ -9,7 +9,8 @@ import { ErrorState } from "../../../components/ui/ErrorState";
 import { MetadataList } from "../../../components/ui/MetadataList";
 import { EngineeringMap } from "../../../components/map/EngineeringMap";
 import type { EngineeringMapLayer } from "../../../components/map/EngineeringMap";
-import { PENINSULAR_MALAYSIA_BOUNDS } from "../../../components/map/mapConfig";
+import { PENINSULAR_MALAYSIA_BOUNDS, styleById } from "../../../components/map/mapConfig";
+import { isLocalMapAsset, probeLocalStandardInstalled } from "../../../components/map/mapAssets";
 import { useIsMobile } from "../../../components/layout/useIsMobile";
 import { tokens } from "../../../theme/tokens";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
@@ -46,6 +47,23 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
   const isNarrow = useIsMobile(tokens.breakpoint.tablet);
   const isMobile = useIsMobile(tokens.breakpoint.mobile);
   const mapHeight = isMobile ? "380px" : isNarrow ? "460px" : "min(70vh, 680px)";
+
+  // When the Standard basemap is the LOCAL offline package, bounded-probe once
+  // whether its PMTiles archive is installed, so we can guide setup instead of
+  // silently degrading. Only runs when a local /map-assets style is configured
+  // (no probe in connected-only or unconfigured deployments).
+  const localStandardConfigured = isLocalMapAsset(styleById("standard")?.styleUrl);
+  const [offlineAssetsMissing, setOfflineAssetsMissing] = useState(false);
+  useEffect(() => {
+    if (!localStandardConfigured) return;
+    let alive = true;
+    void probeLocalStandardInstalled().then((ok) => {
+      if (alive) setOfflineAssetsMissing(!ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [localStandardConfigured]);
 
   const items = useMemo(() => query.data?.items ?? [], [query.data]);
   const mapped = query.data?.mapped_count ?? 0;
@@ -127,6 +145,12 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
         <p role="status" style={{ ...mutedSmall, color: "#8A5A00" }}>
           <strong>{soleMatch.mnemonic}</strong> is registered but has no coordinates, so it cannot be shown on the map. It is listed below.
         </p>
+      )}
+
+      {offlineAssetsMissing && (
+        <div role="status" style={{ padding: "12px 14px", borderRadius: tokens.radius.lg, background: "#FFF7E6", border: "1px solid #F0D48A", fontFamily: tokens.typography.fontFamily, fontSize: "13px", color: "#6B4E00", lineHeight: tokens.typography.lineHeight.normal }}>
+          <strong>Offline Standard map assets are not installed.</strong> The map basemap will fall back to a neutral canvas, but every substation is still plotted and listed, and the Table view remains available. To install the offline Peninsular Malaysia basemap, run <code>python scripts/fetch_map_assets.py</code> from the repository root (see DEVELOPMENT.md → “Offline map assets”).
+        </div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "minmax(0, 1.7fr) minmax(300px, 1fr)", gap: tokens.space[3], alignItems: "start" }}>

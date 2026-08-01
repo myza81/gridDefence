@@ -111,19 +111,26 @@ export function auditStyleForExternalUrls(style: unknown): string[] {
   const found: string[] = [];
   // External ⇒ absolute (`https://…`, `mapbox://…`, any `scheme://…`) or
   // protocol-relative (`//host/…`). Local paths (`/map-assets/…`, `./x`,
-  // `x/y`) and inline data are not external.
-  const isExternal = (value: string): boolean => /^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^\/\//.test(value);
-  const visit = (node: unknown): void => {
+  // `x/y`) and inline data are not external. A `pmtiles://` URL is unwrapped
+  // first: `pmtiles:///map-assets/…` is local, `pmtiles://https://…` is not.
+  const isExternal = (raw: string): boolean => {
+    const value = raw.replace(/^pmtiles:\/\//i, "");
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^\/\//.test(value);
+  };
+  const visit = (node: unknown, key?: string): void => {
+    // `attribution` legitimately carries display links (OSM/Protomaps credits);
+    // it is rendered, never fetched as a map resource, so it is not audited.
+    if (key === "attribution") return;
     if (typeof node === "string") {
       if (isExternal(node)) found.push(node);
       return;
     }
     if (Array.isArray(node)) {
-      node.forEach(visit);
+      node.forEach((n) => visit(n));
       return;
     }
     if (node && typeof node === "object") {
-      Object.values(node as Record<string, unknown>).forEach(visit);
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) visit(v, k);
     }
   };
   visit(style);
