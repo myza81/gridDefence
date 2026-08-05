@@ -72,24 +72,41 @@ export function styleById(id: string | null | undefined): EngineeringMapStyle | 
 export const MAP_STYLE_URL: string | undefined = styleById("standard")?.styleUrl;
 
 /**
- * Neutral, fully-offline fallback style — the last *map* stage before the map
- * is dropped entirely for the record list. It is an inline MapLibre style with
- * a single background layer and **no external URLs** (no sources, glyphs, or
- * sprites), so it renders substation markers on a plain canvas without a single
- * network request. It never fabricates geographic geometry: a governed
- * Peninsular Malaysia / state-boundary overlay is a future addition (see the
- * offline-overlay section of docs/architecture/engineering-map.md), not
- * invented here.
+ * Neutral-mode geographic reference — the built-in fallback used when the
+ * configured rich online basemap is unavailable. It renders a small, **locally
+ * bundled, public-domain** geographic backdrop (land / sea / coastlines /
+ * national borders) from Natural Earth, served app-relative — so it makes **no
+ * external font, sprite, tile, or glyph requests** and works immediately after
+ * clone + build, with no operator install, no Docker, no internet.
+ *
+ * It deliberately shows ONLY land/sea/coastline/borders — no roads, rivers,
+ * forests, labels, landmarks, terrain, or imagery — because only that geometry
+ * is packaged. Provenance/checksum: frontend/public/map-assets/neutral/manifest.json.
+ * Malaysian State boundaries are intentionally absent until a governed source
+ * passes the licensing gate (see docs/engineering/licensing-policy.md).
  */
-export const NEUTRAL_FALLBACK_STYLE: StyleSpecification = {
-  version: 8,
-  name: "neutral-offline-canvas",
-  sources: {},
-  layers: [{ id: "background", type: "background", paint: { "background-color": "#E7ECF3" } }],
-};
+export const NEUTRAL_GEOMETRY_URL = "/map-assets/neutral/southeast-asia.geojson";
+export const NEUTRAL_STYLE_ID = "__neutral__";
 
-/** Marker to identify the neutral fallback so consumers can label the state. */
-export const NEUTRAL_FALLBACK_STYLE_ID = "__neutral__";
+/** Build the neutral geographic style from the bundled local GeoJSON. Colours
+ *  keep a calm sea/land contrast so lifecycle-coloured markers stay prominent. */
+export function buildNeutralStyle(geojsonUrl: string = NEUTRAL_GEOMETRY_URL): StyleSpecification {
+  return {
+    version: 8,
+    name: "neutral-geographic",
+    sources: {
+      neutral: { type: "geojson", data: geojsonUrl, attribution: "Made with Natural Earth (public domain)" },
+    },
+    layers: [
+      { id: "background", type: "background", paint: { "background-color": "#CBD9E6" } }, // sea
+      { id: "neutral-land", type: "fill", source: "neutral", paint: { "fill-color": "#EEF1F4", "fill-outline-color": "#B7C3D2" } },
+      { id: "neutral-border", type: "line", source: "neutral", paint: { "line-color": "#AFBED0", "line-width": 0.8 } },
+    ],
+  };
+}
+
+/** A ready neutral style instance (audited local-only). */
+export const NEUTRAL_STYLE: StyleSpecification = buildNeutralStyle();
 
 /**
  * Approximate Peninsular Malaysia extent [west, south, east, north] — the

@@ -356,12 +356,26 @@ report — see [`CHANGELOG.md`](CHANGELOG.md) for the summarized outcome.
 
 ## 11a. Offline Map Assets
 
-The Engineering Map's **Standard** basemap can run fully offline on a
-company-managed Windows laptop — no Docker, no tile server, no admin rights.
-The style is served from the frontend's static area at `/map-assets/standard/**`.
-The small text assets (style.json, manifest.json, attribution.txt, README.md)
-are committed; the heavy binaries (the `.pmtiles` archive, `glyphs/`, `sprites/`)
-are git-ignored and fetched per workstation.
+**Dual-mode.** The Engineering Map runs in **rich mode** when a configured online
+style (`VITE_MAP_STYLE_*`) loads, and otherwise in **neutral mode** using a
+small, committed, public-domain Natural Earth land/coastline/border geometry
+(`frontend/public/map-assets/neutral/`). Neutral mode needs **no configuration,
+no internet, and no install** — it works immediately after clone + build. To
+regenerate/verify the neutral geometry (public domain, checksummed):
+
+```powershell
+python scripts/build_neutral_geometry.py     # rebuild the committed GeoJSON + manifest
+cd frontend; npm run map:audit-neutral        # verify checksum + provenance + local-only
+```
+
+**Optional — locally hosted rich Standard basemap (PMTiles).** The steps below
+package a rich Peninsular-Malaysia basemap served entirely from the app. This is
+now **optional** (the neutral fallback covers the no-config case); use it only
+when you want a rich locally hosted basemap. No Docker, no tile server, no admin.
+The style is served from `/map-assets/standard/**`; the small text assets
+(style.json, manifest.json, attribution.txt, README.md) are committed; the heavy
+binaries (the `.pmtiles` archive, `glyphs/`, `sprites/`) are git-ignored and
+fetched per workstation.
 
 Windows PowerShell, from the repository root (no elevation, no execution-policy
 change required):

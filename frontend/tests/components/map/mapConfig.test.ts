@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { auditStyleForExternalUrls, NEUTRAL_FALLBACK_STYLE } from "../../../src/components/map/mapConfig";
+import { auditStyleForExternalUrls, NEUTRAL_STYLE, NEUTRAL_GEOMETRY_URL, buildNeutralStyle } from "../../../src/components/map/mapConfig";
 
 /**
  * Offline-capability guardrails for the Engineering Map basemap configuration.
@@ -48,12 +48,16 @@ describe("auditStyleForExternalUrls", () => {
     expect(auditStyleForExternalUrls(style)).toEqual([]);
   });
 
-  it("confirms the neutral fallback style has no external dependency", () => {
-    expect(auditStyleForExternalUrls(NEUTRAL_FALLBACK_STYLE)).toEqual([]);
-    // No glyphs/sprite/sources ⇒ nothing to fetch at all.
-    expect(NEUTRAL_FALLBACK_STYLE.sources).toEqual({});
-    expect(NEUTRAL_FALLBACK_STYLE.glyphs).toBeUndefined();
-    expect(NEUTRAL_FALLBACK_STYLE.sprite).toBeUndefined();
+  it("confirms the neutral geographic style references only the local bundled geometry", () => {
+    // No external hosts; only the app-relative Natural Earth GeoJSON is fetched.
+    expect(auditStyleForExternalUrls(NEUTRAL_STYLE)).toEqual([]);
+    expect(NEUTRAL_STYLE.glyphs).toBeUndefined();
+    expect(NEUTRAL_STYLE.sprite).toBeUndefined();
+    const source = (NEUTRAL_STYLE.sources as Record<string, { data?: string }>).neutral;
+    expect(source.data).toBe(NEUTRAL_GEOMETRY_URL);
+    expect(NEUTRAL_GEOMETRY_URL.startsWith("/map-assets/")).toBe(true);
+    // The builder accepts an override but stays local by construction.
+    expect(auditStyleForExternalUrls(buildNeutralStyle("/map-assets/neutral/x.geojson"))).toEqual([]);
   });
 });
 

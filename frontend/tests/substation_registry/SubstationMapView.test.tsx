@@ -9,21 +9,33 @@ import { renderWithProviders, stubFetch } from "../testUtils";
 import type { FetchHandler } from "../testUtils";
 
 // Stub the MapLibre-backed framework (no WebGL in jsdom). The stub renders one
-// button per marker (so selection via the map path is exercised), reports
-// basemap availability from `mockBasemapOk`, and surfaces the focused id.
-let mockBasemapOk = true;
+// button per marker (so selection via the map path is exercised), reports the
+// active map mode via `onModeChange` (from `mockMode`), models a "Retry rich
+// map" by reporting `mockRetryMode` when `retryToken` changes, and surfaces the
+// focused id.
+let mockMode: "loading" | "rich" | "neutral" = "rich";
+let mockRetryMode: "rich" | "neutral" | null = null;
 vi.mock("../../src/components/map/EngineeringMap", async () => {
   const React = await import("react");
   return {
-    EngineeringMap: ({ layers, onSelect, onBasemapStatus, focusId }: {
+    EngineeringMap: ({ layers, onSelect, onModeChange, retryToken, focusId }: {
       layers: { markers: { id: string; label: string }[] }[];
       onSelect?: (id: string) => void;
-      onBasemapStatus?: (ok: boolean) => void;
+      onModeChange?: (mode: "loading" | "rich" | "neutral") => void;
+      retryToken?: number;
       focusId?: string | null;
     }) => {
       React.useEffect(() => {
-        onBasemapStatus?.(mockBasemapOk);
-      }, [onBasemapStatus]);
+        onModeChange?.(mockMode);
+      }, [onModeChange]);
+      const first = React.useRef(true);
+      React.useEffect(() => {
+        if (first.current) {
+          first.current = false;
+          return;
+        }
+        onModeChange?.(mockRetryMode ?? mockMode);
+      }, [retryToken, onModeChange]);
       return React.createElement(
         "div",
         { "data-testid": "engineering-map-stub" },
@@ -92,7 +104,8 @@ describe("SubstationMapView", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     window.localStorage.clear();
-    mockBasemapOk = true;
+    mockMode = "rich";
+    mockRetryMode = null;
   });
 
   it("summarises coordinate coverage, lists records, and opens a selected substation", async () => {
@@ -163,13 +176,53 @@ describe("SubstationMapView", () => {
     expect(screen.queryByTestId("map-focus")).toBeNull();
   });
 
-  it("shows a safe state and keeps the list when the basemap is unavailable", async () => {
-    mockBasemapOk = false;
+  it("shows honest neutral-mode status (not 'offline') and keeps the list", async () => {
+    mockMode = "neutral";
     stubMap([FEATURE({ substation_id: "id-1", mnemonic: "ABBA", official_name: "A Famosa" })]);
 
     renderWithProviders(<SubstationMapView filters={{}} />, { route: "/substations?view=map" });
 
-    expect(await screen.findByText(/the map is unavailable, but every substation remains reachable/i)).toBeInTheDocument();
+    expect(await screen.findByText("Neutral map")).toBeInTheDocument();
+    // Present in the visible status and the polite live region.
+    expect(screen.getAllByText(/online geographic details unavailable/i).length).toBeGreaterThan(0);
+    // Never says "offline" when the provider is simply unavailable.
+    expect(screen.queryByText(/offline map/i)).toBeNull();
+    // Registry data remains reachable.
+    expect(within(screen.getByRole("list", { name: "Substations" })).getByText("ABBA")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry rich map" })).toBeInTheDocument();
+  });
+
+  it("restores rich mode on a successful retry, preserving the selected record", async () => {
+    mockMode = "neutral";
+    mockRetryMode = "rich";
+    stubMap([FEATURE({ substation_id: "id-1", mnemonic: "ABBA", official_name: "A Famosa" })]);
+
+    renderWithProviders(<SubstationMapView filters={{}} />, { route: "/substations?view=map" });
+    const user = userEvent.setup();
+
+    // Select a record while neutral, then retry.
+    await user.click(await screen.findByText("marker:ABBA — A Famosa"));
+    expect(screen.getByText("Open substation →")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry rich map" }));
+
+    // Rich mode is restored; the neutral status/Retry are gone; selection survives.
+    expect(await screen.findByText("Rich map")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry rich map" })).toBeNull();
+    expect(screen.getByText("Open substation →").closest("a")).toHaveAttribute("href", "/substations/id-1");
+  });
+
+  it("keeps neutral mode (no crash) when a retry does not restore the rich map", async () => {
+    mockMode = "neutral";
+    mockRetryMode = "neutral";
+    stubMap([FEATURE({ substation_id: "id-1", mnemonic: "ABBA", official_name: "A Famosa" })]);
+
+    renderWithProviders(<SubstationMapView filters={{}} />, { route: "/substations?view=map" });
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Retry rich map" }));
+    // Still neutral, still usable.
+    expect(await screen.findByText("Neutral map")).toBeInTheDocument();
     expect(within(screen.getByRole("list", { name: "Substations" })).getByText("ABBA")).toBeInTheDocument();
   });
 
@@ -188,7 +241,8 @@ describe("Substation Registry view switch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     window.localStorage.clear();
-    mockBasemapOk = true;
+    mockMode = "rich";
+    mockRetryMode = null;
   });
 
   function stubList(mapCapture?: (url: string) => void) {

@@ -1,0 +1,24 @@
+{
+  "asset": "neutral-southeast-asia-geometry",
+  "file": "southeast-asia.geojson",
+  "dataset": "Natural Earth 1:50m Admin 0 \u2013 Countries",
+  "source": "Natural Earth (naturalearthdata.com), via nvkelso/natural-earth-vector",
+  "source_url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson",
+  "version": "5.1.1",
+  "retrieved": "2026-08-01",
+  "licence": "Public Domain",
+  "licence_note": "All Natural Earth vector/raster map data is in the public domain (naturalearthdata.com/about/terms-of-use).",
+  "attribution": "Made with Natural Earth.",
+  "checksum": "sha256:6baa62ec65ad42dc077a24d8075f39ae08e19139b7991107c58efd18b4c410b1",
+  "upstream_checksum": "sha256:3e458fc036ad0a66411f2c1e6cac49c5d7bfb81cb1123bc513b22511a2b7fdeb",
+  "geographic_extent": [
+    92.0,
+    -10.0,
+    122.0,
+    16.0
+  ],
+  "features": 11,
+  "simplification": "Feature subset intersecting [92.0, -10.0, 122.0, 16.0]; coordinates rounded to 3 decimals (~110 m). No hand-editing of geometry.",
+  "file_size_bytes": 124027,
+  "update_procedure": "Re-run scripts/build_neutral_geometry.py (pins the NE source); commit the regenerated GeoJSON + manifest."
+}

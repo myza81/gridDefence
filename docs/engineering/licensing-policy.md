@@ -84,6 +84,12 @@ serving:
 - **OpenStreetMap-derived vector tiles** — ODbL-1.0: approved for internal
   offline serving **with** "© OpenStreetMap contributors" attribution; no
   external publication of a modified derived database without review.
+- **Neutral-mode geometry (Natural Earth, public domain)** — approved and
+  **bundled/committed** as the built-in dual-mode fallback (land/sea/coastline/
+  national borders; Southeast-Asia subset). Public domain: free redistribution,
+  no attribution legally required (we credit "Made with Natural Earth" anyway).
+  Provenance/checksum: `frontend/public/map-assets/neutral/manifest.json`;
+  reproducible via `python scripts/build_neutral_geometry.py`.
 - **Fonts/glyphs (Noto, OFL-1.1)** — approved; honour OFL conditions.
 - **Sprites** — record the specific source licence in the asset manifest before
   hosting; reject if unstated.

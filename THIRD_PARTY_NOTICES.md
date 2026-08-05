@@ -92,6 +92,7 @@ See [`frontend/public/map-assets/standard/`](frontend/public/map-assets/standard
 
 | Component | Licence | Source / owner | Purpose | Attribution obligation |
 |---|---|---|---|---|
+| **Neutral-mode geometry** (bundled, committed) | **Public Domain** | Natural Earth (naturalearthdata.com), 1:50m Admin 0 Countries | Built-in land/sea/coastline/national-border reference for neutral mode (Southeast-Asia subset) — `frontend/public/map-assets/neutral/southeast-asia.geojson` | "Made with Natural Earth" (no attribution legally required); public domain |
 | Map **data** (vector tiles) | **ODbL-1.0** | OpenStreetMap contributors | Roads, water, land cover, boundaries, place names for Peninsular Malaysia | "© OpenStreetMap contributors" must be shown; share-alike applies to derived **databases** |
 | Vector-tile **build / schema** | BSD-3-Clause | Protomaps (build of OSM) | Tile packaging in the Protomaps basemaps schema | "© Protomaps" |
 | Map **style layers** | BSD-3-Clause | protomaps-themes-base | Style/paint for the offline Standard map | Retain copyright notice |

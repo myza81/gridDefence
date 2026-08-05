@@ -6,6 +6,21 @@ This document records how the **Engineering Map** is built and, critically, how 
 
 ---
 
+## 0. Dual-mode map (current model — supersedes the operator-PMTiles requirement)
+
+The map provides the richest resources actually available — nothing more, nothing less — in exactly two modes:
+
+- **Rich mode** — when a configured online style (`VITE_MAP_STYLE_*`) and its resources load, the map shows that provider's detailed basemap (roads, water, land cover, place labels, boundaries, and satellite/terrain where configured), with attribution. It never claims a layer the loaded style does not actually provide.
+- **Neutral mode** — the built-in fallback, used when no rich style is configured or one fails/times out. It renders a **small, locally bundled, public-domain** geographic reference (land / sea / coastlines / national borders) from **Natural Earth**, served app-relative from [`frontend/public/map-assets/neutral/`](../../frontend/public/map-assets/neutral/). It makes **no external font, sprite, tile, or glyph requests**, works immediately after clone + build (no Docker, no operator install, no internet), and shows **only** that geometry — no roads, rivers, forests, labels, landmarks, imagery, or terrain (none are packaged). Malaysian **State** boundaries are intentionally absent until a governed source passes the licensing gate.
+
+In **both** modes GridDefence continues to show its own information: substation markers (lifecycle-coloured, drawn above the geography), clusters, selected-marker highlight, details panel, registry search/filters, missing-coordinate summary, the accessible record list, and Open-Substation navigation. The metric scale bar and reset-to-Peninsular-Malaysia control work in both modes.
+
+**Mode detection & recovery.** Availability comes from actual style/resource load success or failure (not `navigator.onLine`). A rich load is time-bounded (default 8 s) — no indefinite spinner, no request storm, no continuous background probing, and it never silently switches to another public provider. States are `loading` → `rich` | `neutral`. In neutral mode a compact **"Retry rich map"** action attempts the configured rich style **once**; on success the map returns to rich mode preserving camera, selected substation, popup, filters and search; on failure it stays neutral (no retry loop). Mode is announced to assistive tech via a polite live region, and the status text says *"online geographic details unavailable"* — never "offline" — when the internet exists but the provider is simply unreachable.
+
+**PMTiles is now optional.** The operator-installed offline PMTiles Standard package (§11b) is **no longer required** for map acceptance; it remains a documented, optional enterprise enhancement for deployments that want a rich *locally hosted* basemap. Its governance, provenance, and the reusable `pmtiles://` protocol are retained; missing PMTiles assets simply mean the map runs in neutral mode (they never make the fallback look broken). Neutral geometry provenance: [`frontend/public/map-assets/neutral/manifest.json`](../../frontend/public/map-assets/neutral/manifest.json) (public-domain Natural Earth, checksummed; regenerate with `python scripts/build_neutral_geometry.py`, verify with `npm run map:audit-neutral`).
+
+---
+
 ## 1. What the Engineering Map is
 
 `EngineeringMap` ([frontend/src/components/map/EngineeringMap.tsx](../../frontend/src/components/map/EngineeringMap.tsx)) is a **registry-agnostic MapLibre GL wrapper**. It owns the map instance, controls (navigation + compass, metric scale, reset-to-extent, style selector), clustering, marker selection (subtle pulse + popup), and offline-first failure handling. It knows nothing about substations — callers pass one or more `EngineeringMapLayer`s (GeoJSON points + a category→colour map). Future engineering layers (Transformer / Circuit / Relay / Sensitive-Customer / defence-scheme overlays) plug in without changing the component. It is **infrastructure, not a one-off**.

@@ -8,9 +8,8 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { ErrorState } from "../../../components/ui/ErrorState";
 import { MetadataList } from "../../../components/ui/MetadataList";
 import { EngineeringMap } from "../../../components/map/EngineeringMap";
-import type { EngineeringMapLayer } from "../../../components/map/EngineeringMap";
-import { PENINSULAR_MALAYSIA_BOUNDS, styleById } from "../../../components/map/mapConfig";
-import { isLocalMapAsset, probeLocalStandardInstalled } from "../../../components/map/mapAssets";
+import type { EngineeringMapLayer, MapMode } from "../../../components/map/EngineeringMap";
+import { PENINSULAR_MALAYSIA_BOUNDS } from "../../../components/map/mapConfig";
 import { useIsMobile } from "../../../components/layout/useIsMobile";
 import { tokens } from "../../../theme/tokens";
 import { useReferenceData } from "../../../reference_data/useReferenceData";
@@ -38,8 +37,13 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
   const query = useSubstationMapQuery(filters);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
-  const [basemapAvailable, setBasemapAvailable] = useState(true);
-  const [basemapNotice, setBasemapNotice] = useState<string | null>(null);
+
+  // Dual-mode map: EngineeringMap reports whether the rich online basemap is
+  // active or the built-in neutral geographic fallback is in use. A "Retry rich
+  // map" bumps retryToken (one attempt per click). Retry is only meaningful when
+  // a rich style is actually configured.
+  const [mapMode, setMapMode] = useState<MapMode>("loading");
+  const [retryToken, setRetryToken] = useState(0);
 
   // Structural (not cosmetic) layout switch — inline styles cannot express a
   // media query. Desktop: large map + side details. Tablet: balanced stack.
@@ -47,23 +51,6 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
   const isNarrow = useIsMobile(tokens.breakpoint.tablet);
   const isMobile = useIsMobile(tokens.breakpoint.mobile);
   const mapHeight = isMobile ? "380px" : isNarrow ? "460px" : "min(70vh, 680px)";
-
-  // When the Standard basemap is the LOCAL offline package, bounded-probe once
-  // whether its PMTiles archive is installed, so we can guide setup instead of
-  // silently degrading. Only runs when a local /map-assets style is configured
-  // (no probe in connected-only or unconfigured deployments).
-  const localStandardConfigured = isLocalMapAsset(styleById("standard")?.styleUrl);
-  const [offlineAssetsMissing, setOfflineAssetsMissing] = useState(false);
-  useEffect(() => {
-    if (!localStandardConfigured) return;
-    let alive = true;
-    void probeLocalStandardInstalled().then((ok) => {
-      if (alive) setOfflineAssetsMissing(!ok);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [localStandardConfigured]);
 
   const items = useMemo(() => query.data?.items ?? [], [query.data]);
   const mapped = query.data?.mapped_count ?? 0;
@@ -138,8 +125,8 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
           <Legend statusOptions={statusOptions} />
         </span>
       </Card>
-      <p style={{ ...mutedSmall, display: "flex", alignItems: "center", gap: tokens.space[2] }}>
-        <InfoIcon /> Geographic proximity does not represent electrical connectivity. This view shows registered locations only, not network topology or PSS/E operational context.
+      <p style={{ ...mutedSmall, display: "flex", alignItems: "flex-start", gap: tokens.space[2] }}>
+        <InfoIcon /> <span>Rich geographic details are provided by the configured online basemap. When unavailable, GridDefence shows a built-in neutral geographic reference together with authoritative Substation Registry data. Geographic proximity does not represent electrical connectivity — this view shows registered locations only, not network topology or PSS/E operational context.</span>
       </p>
       {soleMatch && soleMatch.coordinate_status !== "present" && (
         <p role="status" style={{ ...mutedSmall, color: "#8A5A00" }}>
@@ -147,33 +134,20 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
         </p>
       )}
 
-      {offlineAssetsMissing && (
-        <div role="status" style={{ padding: "12px 14px", borderRadius: tokens.radius.lg, background: "#FFF7E6", border: "1px solid #F0D48A", fontFamily: tokens.typography.fontFamily, fontSize: "13px", color: "#6B4E00", lineHeight: tokens.typography.lineHeight.normal }}>
-          <strong>Offline Standard map assets are not installed.</strong> The map basemap will fall back to a neutral canvas, but every substation is still plotted and listed, and the Table view remains available. To install the offline Peninsular Malaysia basemap, run <code>python scripts/fetch_map_assets.py</code> from the repository root (see DEVELOPMENT.md → “Offline map assets”).
-        </div>
-      )}
-
       <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "minmax(0, 1.7fr) minmax(300px, 1fr)", gap: tokens.space[3], alignItems: "start" }}>
         <div style={{ minWidth: 0 }}>
+          <MapStatusBar mode={mapMode} onRetry={() => setRetryToken((n) => n + 1)} />
           <EngineeringMap
             layers={[layer]}
             bounds={PENINSULAR_MALAYSIA_BOUNDS}
             selectedId={selectedId}
             onSelect={setSelectedId}
-            onBasemapStatus={setBasemapAvailable}
-            onBasemapNotice={setBasemapNotice}
+            onModeChange={setMapMode}
+            retryToken={retryToken}
             onOpen={(id) => navigate(`/substations/${id}`)}
             focusId={focusId}
             height={mapHeight}
           />
-          {basemapAvailable && basemapNotice && (
-            <p role="status" style={{ ...mutedSmall, marginTop: tokens.space[2], color: "#8A5A00" }}>{basemapNotice}</p>
-          )}
-          {!basemapAvailable && (
-            <p style={{ ...mutedSmall, marginTop: tokens.space[2] }}>
-              The map is unavailable, but every substation remains reachable from the list.
-            </p>
-          )}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: tokens.space[3], minWidth: 0 }}>
@@ -286,6 +260,53 @@ function SelectedPanel({ feature, referenceData, onClose }: { feature: Substatio
         Open substation →
       </Link>
     </Card>
+  );
+}
+
+const visuallyHidden = { position: "absolute", width: "1px", height: "1px", padding: 0, margin: "-1px", overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0 } as const;
+
+/**
+ * Honest map-mode status + a user-triggered "Retry rich map". Wording never says
+ * "offline" when the internet exists but the configured provider is simply
+ * unavailable — it says the online geographic details are unavailable. The mode
+ * is also announced to assistive tech via a polite live region.
+ */
+function MapStatusBar({ mode, onRetry }: { mode: MapMode; onRetry: () => void }) {
+  const neutral = mode === "neutral";
+  const liveMessage =
+    mode === "loading"
+      ? "Loading rich basemap"
+      : mode === "rich"
+        ? "Rich map active"
+        : "Neutral map active — online geographic details unavailable. Registry information remains available.";
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: tokens.space[2], marginBottom: tokens.space[2], flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontFamily: tokens.typography.fontFamily, fontSize: "12px", color: neutral ? "#6B4E00" : tokens.color.textSecondary }}>
+        <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "50%", flex: "none", background: mode === "rich" ? "#22A45D" : neutral ? "#C08A2E" : tokens.color.borderStrong }} />
+        {mode === "loading" ? "Loading rich basemap…" : mode === "rich" ? "Rich map" : "Neutral map"}
+        {neutral && <span style={{ color: tokens.color.textSecondary }}>· online geographic details unavailable</span>}
+      </span>
+      {neutral && (
+        <button
+          type="button"
+          onClick={onRetry}
+          style={{
+            border: `1px solid ${tokens.color.borderStrong}`,
+            background: tokens.color.surfacePanel,
+            color: tokens.color.link,
+            cursor: "pointer",
+            fontFamily: tokens.typography.fontFamily,
+            fontSize: "12px",
+            fontWeight: tokens.typography.weight.semibold,
+            padding: "4px 10px",
+            borderRadius: tokens.radius.sm,
+          }}
+        >
+          Retry rich map
+        </button>
+      )}
+      <span aria-live="polite" style={visuallyHidden}>{liveMessage}</span>
+    </div>
   );
 }
 

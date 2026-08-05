@@ -1,40 +1,35 @@
 import maplibregl from "maplibre-gl";
-import type { StyleSpecification } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { tokens } from "../../theme/tokens";
-import {
-  BASEMAP_STYLES,
-  DEFAULT_STYLE_ID,
-  NEUTRAL_FALLBACK_STYLE,
-  NEUTRAL_FALLBACK_STYLE_ID,
-  styleById,
-} from "./mapConfig";
+import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById } from "./mapConfig";
 import type { EngineeringMapStyle } from "./mapConfig";
 import { registerPmtilesProtocol } from "./pmtilesProtocol";
 
 /**
  * Engineering Map Framework — a generic, reusable MapLibre GL wrapper.
  *
- * It owns the map instance, the basemap (selectable from configured styles),
- * navigation + scale + reset-to-extent + style-selector controls, clustering,
- * marker selection with a subtle highlight + popup, and **offline-first**
- * failure handling. It knows nothing about substations: callers pass one or
- * more `EngineeringMapLayer`s (GeoJSON points + a category→colour map), so
- * future engineering layers plug in without changing this component. It draws
- * NO lines/relationships — geographic proximity is not electrical connectivity.
+ * **Dual-mode.** It provides the richest map that is actually available:
+ *  - **Rich mode** — when a configured online style and its resources load, it
+ *    shows that provider's detailed basemap (roads, water, land cover, labels,
+ *    boundaries, and satellite/terrain where configured), with attribution.
+ *  - **Neutral mode** — when no rich style is configured or one fails/times out,
+ *    it shows a small, locally bundled, public-domain geographic reference
+ *    (land / sea / coastlines / national borders from Natural Earth) that makes
+ *    **no external requests**. It never silently switches to another public
+ *    provider and never claims a layer it does not actually render.
  *
- * Offline behaviour (see docs/architecture/engineering-map.md):
- *  - Availability comes from configuration; the selector only offers configured
- *    styles.
- *  - A style load is time-bounded; there is no infinite retry. On failure the
- *    map walks a deliberate fallback: selected → local Standard → neutral local
- *    canvas → accessible record list. It never silently switches to a public
- *    provider.
- *  - Style, scale, selection, fly-to and search all work with local resources;
- *    the map is a progressive enhancement over the always-present record list.
+ * It knows nothing about substations: callers pass `EngineeringMapLayer`s
+ * (GeoJSON points + a category→colour map). It draws NO relationship lines —
+ * geographic proximity is not electrical connectivity. Mode is reported via
+ * `onModeChange`; the caller renders the honest status + a user-triggered
+ * "Retry rich map" by bumping `retryToken`. A style load is time-bounded (no
+ * infinite spinner / retry loop), and the accessible record list is always the
+ * non-map path to every record.
  */
+export type MapMode = "loading" | "rich" | "neutral";
+
 export interface EngineeringMapMarker {
   id: string;
   longitude: number;
@@ -58,22 +53,20 @@ interface EngineeringMapProps {
   bounds: [number, number, number, number];
   selectedId?: string | null;
   onSelect?: (id: string | null) => void;
-  /** false ⇒ no map canvas at all (WebGL/style init failed) — caller shows the list only. */
-  onBasemapStatus?: (available: boolean) => void;
-  /** Human notice when the map is degraded (e.g. running on the neutral canvas), or null. */
-  onBasemapNotice?: (notice: string | null) => void;
+  /** Reports the active map mode so the caller can show honest status/retry. */
+  onModeChange?: (mode: MapMode) => void;
+  /** Changing this (e.g. a "Retry rich map" click) attempts the rich style once. */
+  retryToken?: number;
   /** Invoked when the popup's "Open" action is used (SPA navigation). */
   onOpen?: (id: string) => void;
   /** Marker to fly to (e.g. a search hit). */
   focusId?: string | null;
-  /** Selectable basemap styles; defaults to the configured catalogue. */
+  /** Selectable rich basemap styles; defaults to the configured catalogue. */
   styles?: EngineeringMapStyle[];
   /** Bound on a single style load before it is treated as failed (ms). */
   loadTimeoutMs?: number;
   height?: string;
 }
-
-type Stage = { kind: "configured"; style: EngineeringMapStyle } | { kind: "neutral" };
 
 function toFeatureCollection(layer: EngineeringMapLayer): GeoJSON.FeatureCollection {
   return {
@@ -99,8 +92,8 @@ export function EngineeringMap({
   bounds,
   selectedId,
   onSelect,
-  onBasemapStatus,
-  onBasemapNotice,
+  onModeChange,
+  retryToken = 0,
   onOpen,
   focusId,
   styles = BASEMAP_STYLES,
@@ -111,55 +104,64 @@ export function EngineeringMap({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const styleReadyRef = useRef(false);
-  const clusteredRef = useRef(true);
+  // Whether the current style has glyphs (rich) so cluster-count labels can
+  // render. The neutral style ships no glyphs, so counts are omitted there.
+  const clusterCountsRef = useRef(true);
+  const pendingModeRef = useRef<Exclude<MapMode, "loading">>("neutral");
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const attemptedRef = useRef<Set<string>>(new Set());
 
-  // Refs mirror the latest props so the persistent map event handlers (bound
-  // once) always read current values without re-binding.
+  // Refs mirror the latest props so the persistent map handlers (bound once)
+  // always read current values without re-binding.
   const layersRef = useRef(layers);
   const selectedRef = useRef(selectedId ?? null);
   const onSelectRef = useRef(onSelect);
   const onOpenRef = useRef(onOpen);
+  const onModeChangeRef = useRef(onModeChange);
   layersRef.current = layers;
   selectedRef.current = selectedId ?? null;
   onSelectRef.current = onSelect;
   onOpenRef.current = onOpen;
+  onModeChangeRef.current = onModeChange;
 
   const available = styles.filter((s) => s.available);
-  const initialId = available.some((s) => s.id === DEFAULT_STYLE_ID) ? (DEFAULT_STYLE_ID as string) : available[0]?.id ?? null;
-  const [activeStyleId, setActiveStyleId] = useState<string | null>(initialId);
-  const [mapUsable, setMapUsable] = useState<boolean>(initialId != null);
+  const initialRichId = available.some((s) => s.id === DEFAULT_STYLE_ID) ? (DEFAULT_STYLE_ID as string) : available[0]?.id ?? null;
+  const [activeStyleId, setActiveStyleId] = useState<string | null>(initialRichId);
+  const [mode, setModeState] = useState<MapMode>("loading");
+  const [mapUsable, setMapUsable] = useState(true);
+
+  function announce(next: MapMode) {
+    setModeState(next);
+    onModeChangeRef.current?.(next);
+  }
 
   // --- Initialise the map once. ------------------------------------------------
   useEffect(() => {
-    if (initialId == null || containerRef.current == null) {
-      setMapUsable(false);
-      onBasemapStatus?.(false);
-      return;
-    }
-    // Teach MapLibre the `pmtiles://` scheme before any style that uses it loads
-    // (offline Standard). Idempotent — safe on every mount.
-    registerPmtilesProtocol();
+    if (containerRef.current == null) return;
+    registerPmtilesProtocol(); // idempotent — a rich style may be pmtiles://
+    // Start in the richest available: a configured rich style, else neutral.
+    pendingModeRef.current = initialRichId != null ? "rich" : "neutral";
+    clusterCountsRef.current = pendingModeRef.current === "rich";
+    const initialStyle = initialRichId != null ? styleById(initialRichId)!.styleUrl : buildNeutralStyle();
+
     let map: maplibregl.Map;
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: styleById(initialId)!.styleUrl,
+        style: initialStyle,
         bounds,
         fitBoundsOptions: { padding: 40 },
         attributionControl: { compact: false },
-        // Do not hammer unreachable providers: a failed tile is not retried
-        // indefinitely, and the fallback machinery handles style-level failure.
         maxTileCacheSize: 256,
         refreshExpiredTiles: false,
       });
     } catch {
+      // Hard failure (e.g. no WebGL). The caller always keeps the record list.
       setMapUsable(false);
-      onBasemapStatus?.(false);
+      announce("neutral");
       return;
     }
     mapRef.current = map;
+    announce("loading");
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), "top-right");
     map.addControl(new ResetExtentControl(bounds), "top-right");
@@ -170,23 +172,23 @@ export function EngineeringMap({
     map.on("style.load", () => {
       clearLoadTimer();
       styleReadyRef.current = true;
-      setMapUsable(true);
-      onBasemapStatus?.(true);
-      installLayers(map, layersRef.current, clusteredRef.current);
+      installLayers(map, layersRef.current, clusterCountsRef.current);
       applySelection(map, selectedRef.current);
       openPopupFor(selectedRef.current);
+      announce(pendingModeRef.current);
     });
 
     map.on("error", (e) => {
       const message = String(e?.error?.message ?? "");
-      // Only a style/glyph/sprite/source *load* failure triggers fallback; a
-      // single missing tile must not tear the workspace down.
-      if (/style|sprite|glyph|source/i.test(message) && !styleReadyRef.current) {
-        failCurrentStyle();
+      // Only a style/glyph/sprite/source *load* failure of a rich style falls
+      // back; a single missing tile must not tear the workspace down, and a
+      // neutral (local) failure has nowhere safe left to go.
+      if (/style|sprite|glyph|source/i.test(message) && !styleReadyRef.current && pendingModeRef.current === "rich") {
+        goNeutral(map);
       }
     });
 
-    startLoadTimer();
+    startLoadTimer(map);
 
     return () => {
       clearLoadTimer();
@@ -199,20 +201,32 @@ export function EngineeringMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Load a style when the active selection changes. -------------------------
+  // --- Switch rich style from the selector. ------------------------------------
+  const firstStyleEffect = useRef(true);
   useEffect(() => {
+    if (firstStyleEffect.current) {
+      firstStyleEffect.current = false;
+      return; // constructor already loaded the initial style
+    }
     const map = mapRef.current;
     if (map == null || activeStyleId == null) return;
-    const style = styleById(activeStyleId);
-    if (style == null) return;
-    // Skip the very first render: the constructor already loaded initialId.
-    if (attemptedRef.current.size === 0 && activeStyleId === initialId) {
-      attemptedRef.current.add(activeStyleId);
-      return;
-    }
-    loadStage(map, { kind: "configured", style });
+    loadRich(map, activeStyleId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStyleId]);
+
+  // --- Retry rich map (user-triggered; one attempt per token change). ----------
+  const firstRetryEffect = useRef(true);
+  useEffect(() => {
+    if (firstRetryEffect.current) {
+      firstRetryEffect.current = false;
+      return;
+    }
+    const map = mapRef.current;
+    const target = activeStyleId ?? initialRichId;
+    if (map == null || target == null) return;
+    loadRich(map, target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [retryToken]);
 
   // --- Keep layer data in sync. ------------------------------------------------
   useEffect(() => {
@@ -221,7 +235,7 @@ export function EngineeringMap({
     for (const layer of layers) {
       const source = map.getSource(sourceId(layer.id)) as maplibregl.GeoJSONSource | undefined;
       if (source) source.setData(toFeatureCollection(layer));
-      else installOneLayer(map, layer, clusteredRef.current);
+      else installOneLayer(map, layer, clusterCountsRef.current);
     }
     if (selectedRef.current) openPopupFor(selectedRef.current);
   }, [layers]);
@@ -266,11 +280,12 @@ export function EngineeringMap({
     if (marker) map.flyTo({ center: [marker.longitude, marker.latitude], zoom: 12, essential: true });
   }, [focusId, layers]);
 
-  // --- Helpers (closures over refs; bound once). -------------------------------
-  function startLoadTimer() {
+  // --- Transitions & helpers (closures over refs; bound once). -----------------
+  function startLoadTimer(map: maplibregl.Map) {
     clearLoadTimer();
     loadTimerRef.current = setTimeout(() => {
-      if (!styleReadyRef.current) failCurrentStyle();
+      // Bounded: a stalled rich load falls back once; no infinite spinner/retry.
+      if (!styleReadyRef.current && pendingModeRef.current === "rich") goNeutral(map);
     }, loadTimeoutMs);
   }
   function clearLoadTimer() {
@@ -280,48 +295,29 @@ export function EngineeringMap({
     }
   }
 
-  function loadStage(map: maplibregl.Map, stage: Stage) {
+  function loadRich(map: maplibregl.Map, styleId: string) {
+    const style = styleById(styleId);
+    if (style == null) return;
     styleReadyRef.current = false;
-    if (stage.kind === "configured") {
-      attemptedRef.current.add(stage.style.id);
-      clusteredRef.current = true;
-      onBasemapNotice?.(null);
-      startLoadTimer();
-      map.setStyle(stage.style.styleUrl);
-    } else {
-      attemptedRef.current.add(NEUTRAL_FALLBACK_STYLE_ID);
-      clusteredRef.current = false; // no glyphs on the neutral canvas ⇒ no cluster labels
-      onBasemapNotice?.("The configured basemap could not be loaded. Showing a neutral offline canvas — every substation is still plotted and listed.");
-      startLoadTimer();
-      map.setStyle(NEUTRAL_FALLBACK_STYLE as StyleSpecification);
-    }
+    pendingModeRef.current = "rich";
+    clusterCountsRef.current = true;
+    announce("loading");
+    startLoadTimer(map);
+    map.setStyle(style.styleUrl);
   }
 
-  /** Advance the offline fallback: selected → Standard → neutral → list. */
-  function failCurrentStyle() {
+  function goNeutral(map: maplibregl.Map) {
     clearLoadTimer();
-    const map = mapRef.current;
-    if (map == null) return;
-    const standard = available.find((s) => s.id === "standard");
-    if (standard && !attemptedRef.current.has(standard.id)) {
-      onBasemapNotice?.(`The selected basemap could not be loaded. Falling back to the ${standard.label} map.`);
-      setActiveStyleId(standard.id);
-      loadStage(map, { kind: "configured", style: standard });
-      return;
-    }
-    if (!attemptedRef.current.has(NEUTRAL_FALLBACK_STYLE_ID)) {
-      loadStage(map, { kind: "neutral" });
-      return;
-    }
-    // Even the neutral inline canvas failed ⇒ no usable map (e.g. no WebGL).
     styleReadyRef.current = false;
-    setMapUsable(false);
-    onBasemapStatus?.(false);
-    onBasemapNotice?.(null);
+    pendingModeRef.current = "neutral";
+    clusterCountsRef.current = false; // neutral ships no glyphs ⇒ no cluster labels
+    announce("neutral");
+    startLoadTimer(map);
+    map.setStyle(buildNeutralStyle());
   }
 
-  function installLayers(map: maplibregl.Map, ls: EngineeringMapLayer[], clustered: boolean) {
-    for (const layer of ls) installOneLayer(map, layer, clustered);
+  function installLayers(map: maplibregl.Map, ls: EngineeringMapLayer[], withCounts: boolean) {
+    for (const layer of ls) installOneLayer(map, layer, withCounts);
   }
 
   function openPopupFor(id: string | null) {
@@ -336,7 +332,6 @@ export function EngineeringMap({
       .setLngLat([marker.longitude, marker.latitude])
       .setHTML(marker.popupHtml)
       .addTo(map);
-    // Wire the popup's "Open" affordance to SPA navigation and its close to deselect.
     const root = popup.getElement();
     root.querySelector("[data-map-open]")?.addEventListener("click", (ev) => {
       ev.preventDefault();
@@ -348,37 +343,36 @@ export function EngineeringMap({
     popupRef.current = popup;
   }
 
-  function installOneLayer(map: maplibregl.Map, layer: EngineeringMapLayer, clustered: boolean) {
+  function installOneLayer(map: maplibregl.Map, layer: EngineeringMapLayer, withCounts: boolean) {
     const sid = sourceId(layer.id);
     if (map.getSource(sid)) return;
-    map.addSource(sid, { type: "geojson", data: toFeatureCollection(layer), cluster: clustered, clusterMaxZoom: 11, clusterRadius: 44 });
+    // Clustering stays functional in both modes; only the numeric count label
+    // (which needs glyphs) is omitted in neutral mode.
+    map.addSource(sid, { type: "geojson", data: toFeatureCollection(layer), cluster: true, clusterMaxZoom: 11, clusterRadius: 44 });
 
-    if (clustered) {
-      map.addLayer({ id: `${sid}-clusters`, type: "circle", source: sid, filter: ["has", "point_count"], paint: { "circle-color": "#2540D8", "circle-opacity": 0.85, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 30] } });
+    map.addLayer({ id: `${sid}-clusters`, type: "circle", source: sid, filter: ["has", "point_count"], paint: { "circle-color": "#2540D8", "circle-opacity": 0.85, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 30] } });
+    if (withCounts) {
       map.addLayer({ id: `${sid}-cluster-count`, type: "symbol", source: sid, filter: ["has", "point_count"], layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 12 }, paint: { "text-color": "#FFFFFF" } });
     }
-    map.addLayer({ id: `${sid}-points`, type: "circle", source: sid, filter: clustered ? ["!", ["has", "point_count"]] : ["all"], paint: { "circle-color": colorExpression(layer) as maplibregl.ExpressionSpecification, "circle-radius": 7, "circle-stroke-width": 1.5, "circle-stroke-color": "#FFFFFF" } });
+    map.addLayer({ id: `${sid}-points`, type: "circle", source: sid, filter: ["!", ["has", "point_count"]], paint: { "circle-color": colorExpression(layer) as maplibregl.ExpressionSpecification, "circle-radius": 7, "circle-stroke-width": 1.5, "circle-stroke-color": "#FFFFFF" } });
     map.addLayer({ id: `${sid}-selected`, type: "circle", source: sid, filter: ["==", ["get", "id"], "__none__"], paint: { "circle-color": "rgba(0,0,0,0)", "circle-radius": 12, "circle-stroke-width": 3, "circle-stroke-color": "#0F2340" } });
 
     map.on("click", `${sid}-points`, (e) => {
       const id = e.features?.[0]?.properties?.id;
       if (typeof id === "string") onSelectRef.current?.(id);
     });
-    if (clustered) {
-      map.on("click", `${sid}-clusters`, (e) => {
-        const feature = e.features?.[0];
-        const clusterId = feature?.properties?.cluster_id;
-        const src = map.getSource(sid) as maplibregl.GeoJSONSource;
-        if (clusterId != null && src.getClusterExpansionZoom) {
-          void src.getClusterExpansionZoom(clusterId).then((zoom) => {
-            const geom = feature!.geometry as GeoJSON.Point;
-            map.easeTo({ center: geom.coordinates as [number, number], zoom });
-          });
-        }
-      });
-    }
-    const cursorLayers = clustered ? [`${sid}-points`, `${sid}-clusters`] : [`${sid}-points`];
-    for (const cursorLayer of cursorLayers) {
+    map.on("click", `${sid}-clusters`, (e) => {
+      const feature = e.features?.[0];
+      const clusterId = feature?.properties?.cluster_id;
+      const src = map.getSource(sid) as maplibregl.GeoJSONSource;
+      if (clusterId != null && src.getClusterExpansionZoom) {
+        void src.getClusterExpansionZoom(clusterId).then((zoom) => {
+          const geom = feature!.geometry as GeoJSON.Point;
+          map.easeTo({ center: geom.coordinates as [number, number], zoom });
+        });
+      }
+    });
+    for (const cursorLayer of [`${sid}-points`, `${sid}-clusters`]) {
       map.on("mouseenter", cursorLayer, () => (map.getCanvas().style.cursor = "pointer"));
       map.on("mouseleave", cursorLayer, () => (map.getCanvas().style.cursor = ""));
     }
@@ -388,7 +382,7 @@ export function EngineeringMap({
     return (
       <div
         role="img"
-        aria-label="Basemap unavailable"
+        aria-label="Map unavailable"
         style={{
           height,
           display: "flex",
@@ -404,11 +398,9 @@ export function EngineeringMap({
           fontFamily: tokens.typography.fontFamily,
         }}
       >
-        <p style={{ margin: 0, fontWeight: tokens.typography.weight.semibold, color: tokens.color.textPrimary }}>Basemap unavailable</p>
+        <p style={{ margin: 0, fontWeight: tokens.typography.weight.semibold, color: tokens.color.textPrimary }}>Map could not be initialised</p>
         <p style={{ margin: 0, maxWidth: "44ch", fontSize: tokens.typography.size.small, color: tokens.color.textSecondary, lineHeight: tokens.typography.lineHeight.normal }}>
-          {initialId == null
-            ? "No map style is configured (VITE_MAP_STYLE_STANDARD). Substation Registry data remains available — use the record list or the Table view."
-            : "The map could not be loaded. Substation Registry data remains available — use the record list or the Table view."}
+          This browser could not start the map view. Substation Registry data remains available — use the record list or the Table view.
         </p>
       </div>
     );
@@ -417,7 +409,8 @@ export function EngineeringMap({
   return (
     <div style={{ position: "relative", height, borderRadius: tokens.radius.lg, overflow: "hidden" }}>
       <div ref={containerRef} data-testid="engineering-map" style={{ position: "absolute", inset: 0 }} />
-      {available.length > 1 && (
+      {/* Rich-style selector — only meaningful while rich styles are active. */}
+      {mode === "rich" && available.length > 1 && (
         <StyleSelector
           styles={available}
           activeId={activeStyleId}

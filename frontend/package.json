@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "map:build-style": "node scripts/build-standard-style.mjs",
-    "map:audit-style": "node scripts/audit-standard-style.mjs"
+    "map:audit-style": "node scripts/audit-standard-style.mjs",
+    "map:audit-neutral": "node scripts/audit-neutral-geometry.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
