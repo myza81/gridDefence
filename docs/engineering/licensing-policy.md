@@ -121,16 +121,29 @@ Apache-2.0, pmtiles CLI BSD-3) are licence-clean and used at build time only.
 
 ### 6b. Connected rich-basemap provider governance
 
-Rich mode uses an **environment-configured online style** (`VITE_MAP_STYLE_*`);
-no provider is adopted by default (the app defaults to the bundled neutral map),
-so no provider dependency or secret is committed. When a Project Owner enables a
-provider, it must pass this gate (online-use permitted, attribution clear, no
+Rich mode uses an online style resolved as `VITE_MAP_STYLE_STANDARD →
+VITE_MAP_STYLE_URL → built-in governed default`. GridDefence is an internal,
+single-approved-provider engineering app, so the Standard style ships with a
+**governed built-in default** — **OpenFreeMap Liberty** (`DEFAULT_STANDARD_STYLE_URL`
+in mapConfig.ts) — adopted here so the rich map is the out-of-the-box experience.
+This is a governed adoption of an already-reviewed provider (below), not a
+convenience grab: it is documented, attributed, key-free, and falls back to the
+bundled neutral map (never to a *different* public provider) when unavailable.
+The env vars are **overrides**; no secret is committed. Any provider (default or
+override) must pass this gate (online-use permitted, attribution clear, no
 prohibited licence, no offline-redistribution assumption, no committed secret,
-acceptable through the company network). Assessed candidates:
+acceptable through the company network).
+
+**Production caveat.** OpenFreeMap is community/donation-hosted (no SLA), which
+is fine as the default for development and general internal use. **Critical /
+high-availability / air-gapped** deployments SHOULD override the default with a
+paid provider (domain-restricted key) or the self-hosted offline package.
+
+Assessed candidates:
 
 | Provider | Data / licence | Auth | Verdict |
 |---|---|---|---|
-| **OpenFreeMap** (`tiles.openfreemap.org`) | OpenStreetMap **ODbL**; open styles; self-hostable | **None** (no key) | **ACCEPT** for evaluation/dev and non-critical online use — no secret, CORS, "© OpenStreetMap". Caveat: community/donation-hosted → **not** a guaranteed SLA; for critical production prefer a paid provider or self-host. |
+| **OpenFreeMap** (`tiles.openfreemap.org`) — **adopted built-in default** | OpenStreetMap **ODbL**; open styles; self-hostable | **None** (no key) | **ACCEPT — built-in default** (rich map out of the box); no secret, CORS, "© OpenStreetMap". Caveat: community/donation-hosted → **not** a guaranteed SLA; critical/HA production SHOULD override with a paid provider or self-host. |
 | **MapTiler** (`api.maptiler.com`) | OSM + MapTiler; ODbL data + provider terms | Domain-restricted browser **key** | **ACCEPT for production** with an origin-locked key + appropriate plan. Attribution "© MapTiler © OpenStreetMap". Key is browser-exposed by design; never commit real values. |
 | **Stadia Maps** (`tiles.stadiamaps.com`) | OSM; ODbL + provider terms | Key / domain auth | **ACCEPT for production** with a plan/domain auth (as MapTiler). |
 | **Protomaps hosted API** | OSM ODbL | Key (or self-host) | **ACCEPT** with a key, or self-host via the optional offline PMTiles package. |

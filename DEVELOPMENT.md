@@ -368,21 +368,24 @@ python scripts/build_neutral_geometry.py     # rebuild the committed GeoJSON + m
 cd frontend; npm run map:audit-neutral        # verify checksum + provenance + local-only
 ```
 
-**Enabling the rich ONLINE basemap.** The map defaults to neutral mode because no
-online style is configured (`CONFIGURATION_MISSING`: there is no committed
-`frontend/.env`). To turn on rich mode, set a governed provider style URL and
-**restart Vite** (env is read at startup):
+**Rich ONLINE basemap is the default.** `git clone → npm install → npm run dev`
+shows the rich map out of the box (when the internet is reachable) — **no
+`frontend/.env` required**. The Standard style ships with a governed built-in
+default provider (OpenFreeMap Liberty, OSM/ODbL, no key; see licensing-policy
+§6b). It falls back to the built-in neutral map only when the provider is
+genuinely unavailable.
+
+To **override** the default (paid domain-keyed provider for production, or the
+self-hosted offline package), set it in `frontend/.env` and **restart Vite**
+(env is read at startup):
 
 ```powershell
-# frontend/.env  (see frontend/.env.example + licensing-policy.md §6b)
-# No-key option (OSM/ODbL, community-hosted):
-#   VITE_MAP_STYLE_STANDARD=https://tiles.openfreemap.org/styles/liberty
-# Key option (domain-restricted browser token; never commit a real value):
+# frontend/.env  (optional override — see frontend/.env.example + licensing-policy §6b)
 #   VITE_MAP_STYLE_STANDARD=https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_RESTRICTED_KEY
-cd frontend; npm run dev   # then open /substations?view=map — status should read "Rich map"
+#   # or self-hosted:  VITE_MAP_STYLE_STANDARD=/map-assets/standard/style.json
 ```
 
-On a managed laptop, if rich mode still falls back to neutral, IT may need to
+On a managed laptop, if rich mode falls back to neutral, IT may need to
 allow-list the provider domain(s) (see engineering-map.md §0.1). Do not commit
 tokens; `VITE_*` values are browser-exposed build config, not secrets.
 

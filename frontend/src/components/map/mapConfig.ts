@@ -5,20 +5,26 @@ import type { StyleSpecification } from "maplibre-gl";
  *
  * The basemap is configured through MapLibre **style URLs** (not raw tile
  * URLs), one per selectable style, so a deployment chooses its own map stack
- * without code changes. Two operating modes are supported by configuration
- * alone (see docs/architecture/engineering-map.md):
+ * without code changes (see docs/architecture/engineering-map.md).
  *
- *  - Connected development mode — style URLs may point at externally hosted
- *    styles (`https://…`).
- *  - Offline / internal production mode — style URLs point at resources served
- *    entirely from the GridDefence deployment or an internal service
- *    (e.g. `/map-assets/styles/standard/style.json`).
+ * Standard resolution (rich map is the default experience — no `.env` needed):
  *
- * No public tile/style provider is hard-coded as a production service. A style
- * is "available" only when its URL is configured; unconfigured styles are
- * omitted from the selector rather than offered and then failing. When *no*
- * style is configured the map degrades to the accessible record list, and the
- * engineering data stays fully usable.
+ *   VITE_MAP_STYLE_STANDARD  →  VITE_MAP_STYLE_URL (legacy alias)
+ *                            →  built-in governed default (OpenFreeMap Liberty)
+ *
+ * GridDefence is an internal, single-approved-provider engineering app, so the
+ * Standard style ships with a **governed built-in default** (already passed the
+ * licensing/engineering review — see docs/engineering/licensing-policy.md §6b);
+ * the environment variable is an **override**, not a requirement. A fresh clone
+ * therefore starts in rich mode when the internet is reachable, and drops to the
+ * built-in neutral map only when the provider is genuinely unavailable (handled
+ * at runtime by EngineeringMap). Satellite/Terrain remain optional env-only
+ * styles. On failure the map never silently switches to a *different* public
+ * provider — it falls back to the local neutral geometry.
+ *
+ * Critical/high-availability or air-gapped deployments should override
+ * VITE_MAP_STYLE_STANDARD with a paid provider (domain-restricted key) or the
+ * self-hosted offline package rather than relying on the community default.
  */
 
 export interface EngineeringMapStyle {
@@ -42,14 +48,24 @@ function env(name: string): string | undefined {
 }
 
 /**
+ * Governed built-in default Standard basemap (OpenFreeMap Liberty — OpenStreetMap
+ * data under ODbL, no API key, CORS-enabled). Adopted per licensing-policy §6b so
+ * the rich map is the out-of-the-box experience; overridable via env for a
+ * paid/self-hosted provider. Attribution is rendered by MapLibre's attribution
+ * control from the style's own metadata.
+ */
+export const DEFAULT_STANDARD_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+
+/**
  * Style catalogue. Adding a future style (Dark, High Contrast, Utility,
  * Engineering) is a one-line addition here plus an env var — the EngineeringMap
  * component and every consumer are unchanged, keeping the map infrastructure
  * rather than a one-off. `VITE_MAP_STYLE_URL` is honoured as a back-compatible
- * alias for the Standard style.
+ * alias for the Standard style; Standard falls back to the governed built-in
+ * default when neither env var is set.
  */
 const STYLE_CATALOGUE: { id: string; label: string; url: string | undefined; description: string }[] = [
-  { id: "standard", label: "Standard", url: env("VITE_MAP_STYLE_STANDARD") ?? env("VITE_MAP_STYLE_URL"), description: "Engineering day map — boundaries, settlements, roads, water, land cover." },
+  { id: "standard", label: "Standard", url: env("VITE_MAP_STYLE_STANDARD") ?? env("VITE_MAP_STYLE_URL") ?? DEFAULT_STANDARD_STYLE_URL, description: "Engineering day map — boundaries, settlements, roads, water, land cover." },
   { id: "satellite", label: "Satellite", url: env("VITE_MAP_STYLE_SATELLITE"), description: "Satellite imagery with labels (connected-only unless locally hosted)." },
   { id: "terrain", label: "Terrain", url: env("VITE_MAP_STYLE_TERRAIN"), description: "Terrain / relief presentation (connected-only unless locally hosted)." },
 ];

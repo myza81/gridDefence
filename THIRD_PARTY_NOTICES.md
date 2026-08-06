@@ -117,17 +117,19 @@ required at runtime.
 
 ### 5b. Connected rich-basemap providers (runtime, environment-configured — none adopted by default)
 
-Rich mode is enabled only when a Project Owner sets `VITE_MAP_STYLE_*` to a
-governed provider (see [licensing-policy.md §6b](docs/engineering/licensing-policy.md)).
-No provider is committed or bundled; its resources are fetched at runtime under
-the provider's online-use terms (not offline redistribution). When adopted, its
-attribution is shown by MapLibre's attribution control and must be recorded here.
+Rich mode resolves the Standard style as `VITE_MAP_STYLE_STANDARD →
+VITE_MAP_STYLE_URL → built-in governed default`. The **built-in default is
+OpenFreeMap Liberty** (adopted, governed — see
+[licensing-policy.md §6b](docs/engineering/licensing-policy.md)); the env vars
+override it. No provider key/asset is committed or bundled; resources are fetched
+at runtime under the provider's online-use terms (not offline redistribution),
+and attribution is shown by MapLibre's attribution control.
 
-| Provider (example) | Underlying data | Attribution to display | Notes |
+| Provider | Underlying data | Attribution to display | Notes |
 |---|---|---|---|
-| OpenFreeMap | OpenStreetMap (ODbL) | © OpenStreetMap contributors | No key; community-hosted (no SLA) |
-| MapTiler | OSM (ODbL) + MapTiler | © MapTiler © OpenStreetMap contributors | Domain-restricted browser key; do not commit |
-| Stadia Maps | OSM (ODbL) | © Stadia Maps © OpenStreetMap contributors | Key / domain auth; do not commit |
+| **OpenFreeMap** (built-in default) | OpenStreetMap (ODbL) | © OpenStreetMap contributors | No key; community-hosted (no SLA) — override for critical/HA production |
+| MapTiler (override) | OSM (ODbL) + MapTiler | © MapTiler © OpenStreetMap contributors | Domain-restricted browser key; do not commit |
+| Stadia Maps (override) | OSM (ODbL) | © Stadia Maps © OpenStreetMap contributors | Key / domain auth; do not commit |
 
 Runtime attribution for the map is rendered by MapLibre's attribution control,
 which aggregates each source's `attribution` field (the committed

@@ -62,15 +62,27 @@ describe("auditStyleForExternalUrls", () => {
 });
 
 describe("BASEMAP_STYLES availability from configuration", () => {
-  it("offers no styles and no default when nothing is configured", async () => {
-    const { BASEMAP_STYLES, DEFAULT_STYLE_ID } = await loadConfig({
+  it("uses the governed built-in default Standard when nothing is configured", async () => {
+    const { BASEMAP_STYLES, DEFAULT_STYLE_ID, DEFAULT_STANDARD_STYLE_URL } = await loadConfig({
       VITE_MAP_STYLE_STANDARD: undefined,
       VITE_MAP_STYLE_SATELLITE: undefined,
       VITE_MAP_STYLE_TERRAIN: undefined,
       VITE_MAP_STYLE_URL: undefined,
     });
-    expect(BASEMAP_STYLES).toEqual([]);
-    expect(DEFAULT_STYLE_ID).toBeNull();
+    // Rich map out of the box: Standard resolves to the built-in default.
+    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard"]);
+    expect(BASEMAP_STYLES[0].styleUrl).toBe(DEFAULT_STANDARD_STYLE_URL);
+    expect(DEFAULT_STYLE_ID).toBe("standard");
+  });
+
+  it("lets VITE_MAP_STYLE_STANDARD override the built-in default", async () => {
+    const { BASEMAP_STYLES, DEFAULT_STANDARD_STYLE_URL } = await loadConfig({
+      VITE_MAP_STYLE_STANDARD: "https://override.example/style.json",
+      VITE_MAP_STYLE_URL: undefined,
+    });
+    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard"]);
+    expect(BASEMAP_STYLES[0].styleUrl).toBe("https://override.example/style.json");
+    expect(BASEMAP_STYLES[0].styleUrl).not.toBe(DEFAULT_STANDARD_STYLE_URL);
   });
 
   it("offers only the configured styles (offline Standard-only deployment)", async () => {
@@ -104,11 +116,12 @@ describe("BASEMAP_STYLES availability from configuration", () => {
     expect(BASEMAP_STYLES[0].styleUrl).toBe("/map-assets/styles/standard/style.json");
   });
 
-  it("treats an empty/whitespace value as unset", async () => {
-    const { BASEMAP_STYLES } = await loadConfig({
+  it("treats an empty/whitespace override as unset and uses the built-in default", async () => {
+    const { BASEMAP_STYLES, DEFAULT_STANDARD_STYLE_URL } = await loadConfig({
       VITE_MAP_STYLE_STANDARD: "   ",
       VITE_MAP_STYLE_URL: undefined,
     });
-    expect(BASEMAP_STYLES).toEqual([]);
+    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard"]);
+    expect(BASEMAP_STYLES[0].styleUrl).toBe(DEFAULT_STANDARD_STYLE_URL);
   });
 });
