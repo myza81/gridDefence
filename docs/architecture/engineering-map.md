@@ -59,6 +59,38 @@ The style catalogue offers **Standard** and **Satellite** (and **Terrain** when 
 
 Markers/clusters render **above** the imagery; lifecycle marker colours keep a white stroke and cluster counts are white DOM markers, so both stay legible over dark imagery.
 
+### 0.3 Standard richness — why it can look sparse (and what we do)
+
+Investigated with evidence (the live OpenFreeMap Liberty style), not assumed:
+
+- **The style is already rich.** Liberty is **111 layers** — 23 road, 12 rail, 7 water, 6 land-use, 5 land-cover, 2 park, buildings (+3D), 3 boundary, 12 label and 5 POI layers, over an OpenMapTiles vector source plus a Natural Earth shaded-relief source, with full glyphs + sprite. It is comparable to OSM/Google/Apple standard maps (roads, road names, rivers, railways, buildings, industrial/residential land use, forests/parks, admin boundaries, place names, POIs). GridDefence renders the **whole** style — no hidden layers, no feature filtering, no simplification on our side.
+- **Why it can feel sparse** is therefore not the provider or our config, but: (1) the **initial view was country-scale** (the whole Peninsular-Malaysia extent), where *any* basemap shows only coastline/major roads/place labels — street detail and buildings appear only at ~z13+; (2) vector styles **declutter** labels/POIs at low–mid zoom, whereas the MVP defaulted to **OSM-Carto raster** (`tile.openstreetmap.org`), the densest standard style, usually viewed zoomed into a single substation (~z15); (3) the OpenMapTiles schema **omits power infrastructure**, so substations/lines are not drawn by the provider (which is consistent with the overlay philosophy below).
+- **What we do:** the map now **opens fitted to where the substations actually are** (street/city scale, capped so a single record opens at city scale) instead of the country extent, so the existing richness is immediately visible; the reset control still returns to the configured Peninsular-Malaysia extent. GridDefence markers were given a stronger white casing so they stay dominant over the denser basemap.
+- **No provider migration.** Liberty already meets the "Google/Apple-Maps-like" bar and is governed (OSM/ODbL, no key, self-hostable). A deployment wanting maximal OSM-Carto density or a keyed provider can override `VITE_MAP_STYLE_STANDARD` — it is not adopted by default.
+
+### 0.4 Geographic context vs engineering truth — overlay philosophy
+
+Everything the basemap shows — from OpenStreetMap/OpenFreeMap, the satellite provider, or any third-party GIS — is **External Geographic Context**, *never* Engineering Truth. GridDefence's authoritative data is the Registry. The map is a layered GIS:
+
+```
+Base Geographic Context   (roads, rivers, railways, buildings, OSM features — external)
+        ↓
+GridDefence Registry Layer (Substation markers — engineering truth)
+        ↓
+Future Engineering Layers  (optional · explicitly enabled · governed — never automatic)
+```
+
+These layers are **never automatically merged**. Specifically:
+
+- **GridDefence connectivity is intentionally NOT drawn over the basemap.** GridDefence markers ✓; GridDefence connectivity ✗ by default. Rationale: GridDefence engineering coordinates may not geographically align with external mapping providers, and drawing both together could **incorrectly imply they have already been reconciled**. The `EngineeringMap` framework draws only point markers and **no lines/relationships** — "geographic proximity is not electrical connectivity" (on-screen copy + this framework's contract).
+- **Never imply equivalence.** An external OSM/satellite "substation" is **not** a GridDefence substation unless that relationship has been explicitly governed. GridDefence markers are visually distinct (lifecycle-coloured, white-cased, clustered) and are the only substations the map asserts.
+- **Architectural review (this phase).** The current map draws **substation point markers only**; no Circuit / Connectivity / Transformer geometry is drawn over the basemap, and none is planned to be drawn automatically. That remains architecturally correct after this clarification. Any future Circuit/Transformer/Connectivity or scheme visualisation would be an **additive, opt-in, governed** engineering layer ([EDR-006](../engineering/edr/EDR-006-operational-context-visualization.md) presentation-not-truth; [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md) registry-vs-topology) — never an automatic merge onto the geographic basemap.
+- **Future Geographic Data Quality opportunity (evaluate only — no implementation now).** If GridDefence coordinates and externally mapped substations differ significantly, GridDefence must **not** reconcile automatically. A future *Geographic Data Quality* module could surface such discrepancies for **engineering review** (decision support, not automation — [EDR-004](../engineering/edr/EDR-004-decision-support-not-automation.md); same stance as [ADR-030](../adr/ADR-030-coordinate-assisted-state-resolution.md)). Recorded here as a future opportunity only.
+
+### 0.5 Hybrid readiness
+
+The style catalogue is arranged for **Standard · Satellite · Hybrid · Neutral**. Hybrid (satellite imagery + roads/labels) is **architecture-ready but hidden** — it appears in the selector only when `VITE_MAP_STYLE_HYBRID` is configured with a governed provider style URL (no built-in default is adopted today). This adds the seam without adopting a provider.
+
 ---
 
 ## 1. What the Engineering Map is

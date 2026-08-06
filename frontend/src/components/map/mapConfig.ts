@@ -109,8 +109,11 @@ function satelliteDef(): StyleDef {
 }
 
 const STYLE_CATALOGUE: StyleDef[] = [
-  { id: "standard", label: "Standard", description: "Engineering day map — boundaries, settlements, roads, water, land cover.", styleUrl: env("VITE_MAP_STYLE_STANDARD") ?? env("VITE_MAP_STYLE_URL") ?? DEFAULT_STANDARD_STYLE_URL },
+  { id: "standard", label: "Standard", description: "Engineering day map — roads, road names, rivers, railways, buildings, land use, boundaries, place names.", styleUrl: env("VITE_MAP_STYLE_STANDARD") ?? env("VITE_MAP_STYLE_URL") ?? DEFAULT_STANDARD_STYLE_URL },
   satelliteDef(),
+  // Hybrid (imagery + labels/roads) is architecture-ready but has no governed
+  // built-in default; it appears only when a provider style URL is configured.
+  { id: "hybrid", label: "Hybrid", description: "Satellite imagery with roads/labels (configured provider).", styleUrl: env("VITE_MAP_STYLE_HYBRID") },
   { id: "terrain", label: "Terrain", description: "Terrain / relief presentation (connected-only unless locally hosted).", styleUrl: env("VITE_MAP_STYLE_TERRAIN") },
 ];
 

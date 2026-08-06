@@ -109,6 +109,16 @@ describe("BASEMAP_STYLES availability from configuration", () => {
     expect(DEFAULT_STYLE_ID).toBe("standard");
   });
 
+  it("is Hybrid-ready: Hybrid is absent by default and appears only when configured", async () => {
+    const off = await loadConfig({});
+    expect(off.BASEMAP_STYLES.map((s) => s.id)).not.toContain("hybrid");
+
+    const on = await loadConfig({ VITE_MAP_STYLE_HYBRID: "https://dev.example/hybrid.json" });
+    expect(on.BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard", "satellite", "hybrid"]);
+    expect(on.styleById("hybrid")?.styleUrl).toBe("https://dev.example/hybrid.json");
+    expect(on.DEFAULT_STYLE_ID).toBe("standard");
+  });
+
   it("honours VITE_MAP_STYLE_URL as the Standard alias", async () => {
     const { BASEMAP_STYLES } = await loadConfig({
       VITE_MAP_STYLE_STANDARD: undefined,

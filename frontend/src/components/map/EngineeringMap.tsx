@@ -152,13 +152,18 @@ export function EngineeringMap({
     if (initialRichId == null) onRichUnavailableRef.current?.("configuration_missing");
     const initialStyle = initialRichId != null ? styleSource(styleById(initialRichId)!) : buildNeutralStyle();
 
+    // Open fitted to where the substations actually are (street/city scale), so
+    // the rich basemap's context is visible immediately — instead of the sparse
+    // country-scale view. Falls back to the full extent when nothing is mapped;
+    // the reset control still returns to the configured extent (`bounds`).
+    const initialBounds = markersBounds(layersRef.current) ?? bounds;
     let map: maplibregl.Map;
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
         style: initialStyle,
-        bounds,
-        fitBoundsOptions: { padding: 40 },
+        bounds: initialBounds,
+        fitBoundsOptions: { padding: 48, maxZoom: 12 },
         attributionControl: { compact: false },
         maxTileCacheSize: 256,
         refreshExpiredTiles: false,
@@ -373,7 +378,9 @@ export function EngineeringMap({
     map.addSource(sid, { type: "geojson", data: toFeatureCollection(layer), cluster: true, clusterMaxZoom: 11, clusterRadius: 44 });
 
     map.addLayer({ id: `${sid}-clusters`, type: "circle", source: sid, filter: ["has", "point_count"], paint: { "circle-color": "#2540D8", "circle-opacity": 0.85, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 30] } });
-    map.addLayer({ id: `${sid}-points`, type: "circle", source: sid, filter: ["!", ["has", "point_count"]], paint: { "circle-color": colorExpression(layer) as maplibregl.ExpressionSpecification, "circle-radius": 7, "circle-stroke-width": 1.5, "circle-stroke-color": "#FFFFFF" } });
+    // Stronger white casing so lifecycle markers stay visually dominant over a
+    // rich/dense basemap (roads, buildings) or dark satellite imagery.
+    map.addLayer({ id: `${sid}-points`, type: "circle", source: sid, filter: ["!", ["has", "point_count"]], paint: { "circle-color": colorExpression(layer) as maplibregl.ExpressionSpecification, "circle-radius": 7, "circle-stroke-width": 2.5, "circle-stroke-color": "#FFFFFF" } });
     map.addLayer({ id: `${sid}-selected`, type: "circle", source: sid, filter: ["==", ["get", "id"], "__none__"], paint: { "circle-color": "rgba(0,0,0,0)", "circle-radius": 12, "circle-stroke-width": 3, "circle-stroke-color": "#0F2340" } });
 
     map.on("click", `${sid}-points`, (e) => {
@@ -491,6 +498,21 @@ function StyleSelector({ styles, activeId, onChange }: { styles: EngineeringMapS
 }
 
 const sourceId = (layerId: string) => `layer-${layerId}`;
+
+/** Bounding box [w,s,e,n] covering all markers, or null when none. Used to open
+ *  the map at the scale where substations actually are (richer visible context). */
+function markersBounds(layers: EngineeringMapLayer[]): [number, number, number, number] | null {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const layer of layers) {
+    for (const m of layer.markers) {
+      if (m.longitude < w) w = m.longitude;
+      if (m.longitude > e) e = m.longitude;
+      if (m.latitude < s) s = m.latitude;
+      if (m.latitude > n) n = m.latitude;
+    }
+  }
+  return Number.isFinite(w) ? [w, s, e, n] : null;
+}
 
 function applySelection(map: maplibregl.Map, selectedId: string | null) {
   map.getStyle().layers.forEach((l) => {

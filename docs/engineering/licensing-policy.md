@@ -173,6 +173,19 @@ box); `VITE_MAP_STYLE_SATELLITE` overrides it. Assessed candidates:
 Satellite imagery is **online-use only** — no offline caching/redistribution is
 assumed. The default is imagery-only; a hybrid style is an operator override.
 
+### 6d. Geographic context vs engineering truth
+
+All basemap content (OpenStreetMap/OpenFreeMap, satellite imagery, any
+third-party GIS) is **External Geographic Context**, licensed and attributed as
+such — it is **not** GridDefence engineering truth. GridDefence's authoritative
+data is the Registry. Consequently the map draws only GridDefence's own markers
+over the external basemap and **never draws GridDefence connectivity or other
+engineering geometry over it by default**, and never implies that an externally
+mapped substation equals a GridDefence substation. This keeps the licensing
+boundary and the engineering-truth boundary aligned: we attribute and depend on
+external providers for *context*, while engineering assertions remain GridDefence's
+own governed data. Overlay philosophy: [engineering-map.md](../architecture/engineering-map.md) §0.4.
+
 ## 7. Attribution policy
 
 Mandatory attributions must remain visible in all modes — online, **offline**,
