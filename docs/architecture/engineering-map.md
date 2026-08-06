@@ -21,6 +21,31 @@ In **both** modes GridDefence continues to show its own information: substation 
 
 **PMTiles is now optional.** The operator-installed offline PMTiles Standard package (§11b) is **no longer required** for map acceptance; it remains a documented, optional enterprise enhancement for deployments that want a rich *locally hosted* basemap. Its governance, provenance, and the reusable `pmtiles://` protocol are retained; missing PMTiles assets simply mean the map runs in neutral mode (they never make the fallback look broken). Neutral geometry provenance: [`frontend/public/map-assets/neutral/manifest.json`](../../frontend/public/map-assets/neutral/manifest.json) (public-domain Natural Earth, checksummed; regenerate with `python scripts/build_neutral_geometry.py`, verify with `npm run map:audit-neutral`).
 
+### 0.1 Enabling rich mode (configuration) & why it may stay neutral
+
+Rich mode is **off until configured**. If the map shows *Neutral map* with no online detail, the usual cause is **`CONFIGURATION_MISSING`**: no `VITE_MAP_STYLE_STANDARD` is set (there is no committed `frontend/.env`, and `.env.example` leaves it blank), so `BASEMAP_STYLES` is empty and the map starts neutral by design. To enable rich mode, set a governed provider style URL in `frontend/.env` and **restart Vite** (env is read at startup):
+
+```
+# frontend/.env  (see frontend/.env.example for governed provider options)
+VITE_MAP_STYLE_STANDARD=https://tiles.openfreemap.org/styles/liberty      # no key, OSM/ODbL
+# or a domain-restricted key provider:
+# VITE_MAP_STYLE_STANDARD=https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_RESTRICTED_KEY
+```
+
+Provider governance (accept/reject, attribution, keys) is in [licensing-policy.md §6b](../engineering/licensing-policy.md) and [THIRD_PARTY_NOTICES.md §5b](../../THIRD_PARTY_NOTICES.md). `VITE_*` values are browser-exposed build-time config, not secrets — but do not commit real provider tokens.
+
+**Essential vs non-essential failure.** Rich mode activates when MapLibre fires `style.load` (bounded by `loadTimeoutMs`, default 8 s). Only an **essential** failure falls back to neutral: the style document itself failing to load, or the timeout elapsing before `style.load`. A **non-essential** sub-resource error (an individual sprite, glyph, font, or tile — classified by [mapDiagnostics.ts](../../frontend/src/components/map/mapDiagnostics.ts) `classifyStyleError`, which are non-fatal in MapLibre and still allow `style.load`) does **not** discard an otherwise-usable rich basemap. The fallback is bounded — no indefinite spinner, no retry storm, no continuous probing, and never a silent switch to another public provider.
+
+**Diagnostics (safe).** When rich mode is unavailable the map reports a closed-set reason (`configuration_missing` | `style_load_failed` | `timeout` | `unknown`), surfaced as a compact human summary next to the neutral status (e.g. *"The online basemap could not be loaded (blocked, unreachable, or invalid)."*). Reasons carry **no URLs or tokens**; a developer console line redacts URLs (query string dropped) via `redactUrl`. Raw stack traces/credentials/full URLs are never shown in the UI.
+
+**Corporate network / allow-list.** On a managed laptop, rich failure is often a proxy/TLS-interception/CSP/DNS/firewall block of the provider, not an app bug. The map falls back to neutral promptly and honestly; to *enable* rich mode, IT should allow-list the chosen provider's domains (minimum necessary, no broad wildcards):
+
+| Function | OpenFreeMap | MapTiler |
+|---|---|---|
+| Style + tiles + glyphs + sprites | `tiles.openfreemap.org` | `api.maptiler.com` |
+
+(Stadia: `tiles.stadiamaps.com`.) Do not disable TLS verification, add HTTP endpoints, or require admin rights. If no provider can be approved, leave rich unset — neutral mode is a complete, governed default.
+
 ---
 
 ## 1. What the Engineering Map is

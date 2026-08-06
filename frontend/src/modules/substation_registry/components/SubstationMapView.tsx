@@ -9,6 +9,8 @@ import { ErrorState } from "../../../components/ui/ErrorState";
 import { MetadataList } from "../../../components/ui/MetadataList";
 import { EngineeringMap } from "../../../components/map/EngineeringMap";
 import type { EngineeringMapLayer, MapMode } from "../../../components/map/EngineeringMap";
+import { richFailureSummary } from "../../../components/map/mapDiagnostics";
+import type { RichFailureReason } from "../../../components/map/mapDiagnostics";
 import { PENINSULAR_MALAYSIA_BOUNDS } from "../../../components/map/mapConfig";
 import { useIsMobile } from "../../../components/layout/useIsMobile";
 import { tokens } from "../../../theme/tokens";
@@ -44,6 +46,14 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
   // a rich style is actually configured.
   const [mapMode, setMapMode] = useState<MapMode>("loading");
   const [retryToken, setRetryToken] = useState(0);
+  // Safe reason code (no URLs/tokens) for why rich mode is unavailable; shown as
+  // a compact diagnostic detail in neutral mode, cleared once rich mode returns.
+  const [richReason, setRichReason] = useState<RichFailureReason | null>(null);
+  // Rich mode restored ⇒ clear any stale diagnostic. (Kept out of onModeChange so
+  // that handler stays a stable state setter.)
+  useEffect(() => {
+    if (mapMode === "rich") setRichReason(null);
+  }, [mapMode]);
 
   // Structural (not cosmetic) layout switch — inline styles cannot express a
   // media query. Desktop: large map + side details. Tablet: balanced stack.
@@ -136,13 +146,14 @@ export function SubstationMapView({ filters }: { filters: MapFilters }) {
 
       <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "minmax(0, 1.7fr) minmax(300px, 1fr)", gap: tokens.space[3], alignItems: "start" }}>
         <div style={{ minWidth: 0 }}>
-          <MapStatusBar mode={mapMode} onRetry={() => setRetryToken((n) => n + 1)} />
+          <MapStatusBar mode={mapMode} reason={richReason} onRetry={() => setRetryToken((n) => n + 1)} />
           <EngineeringMap
             layers={[layer]}
             bounds={PENINSULAR_MALAYSIA_BOUNDS}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onModeChange={setMapMode}
+            onRichUnavailable={setRichReason}
             retryToken={retryToken}
             onOpen={(id) => navigate(`/substations/${id}`)}
             focusId={focusId}
@@ -271,7 +282,7 @@ const visuallyHidden = { position: "absolute", width: "1px", height: "1px", padd
  * unavailable — it says the online geographic details are unavailable. The mode
  * is also announced to assistive tech via a polite live region.
  */
-function MapStatusBar({ mode, onRetry }: { mode: MapMode; onRetry: () => void }) {
+function MapStatusBar({ mode, reason, onRetry }: { mode: MapMode; reason: RichFailureReason | null; onRetry: () => void }) {
   const neutral = mode === "neutral";
   const liveMessage =
     mode === "loading"
@@ -285,6 +296,9 @@ function MapStatusBar({ mode, onRetry }: { mode: MapMode; onRetry: () => void })
         <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "50%", flex: "none", background: mode === "rich" ? "#22A45D" : neutral ? "#C08A2E" : tokens.color.borderStrong }} />
         {mode === "loading" ? "Loading rich basemap…" : mode === "rich" ? "Rich map" : "Neutral map"}
         {neutral && <span style={{ color: tokens.color.textSecondary }}>· online geographic details unavailable</span>}
+        {neutral && reason && (
+          <span title={richFailureSummary(reason)} style={{ color: tokens.color.textFaint }}>· {richFailureSummary(reason)}</span>
+        )}
       </span>
       {neutral && (
         <button

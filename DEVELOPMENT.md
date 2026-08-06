@@ -368,6 +368,24 @@ python scripts/build_neutral_geometry.py     # rebuild the committed GeoJSON + m
 cd frontend; npm run map:audit-neutral        # verify checksum + provenance + local-only
 ```
 
+**Enabling the rich ONLINE basemap.** The map defaults to neutral mode because no
+online style is configured (`CONFIGURATION_MISSING`: there is no committed
+`frontend/.env`). To turn on rich mode, set a governed provider style URL and
+**restart Vite** (env is read at startup):
+
+```powershell
+# frontend/.env  (see frontend/.env.example + licensing-policy.md §6b)
+# No-key option (OSM/ODbL, community-hosted):
+#   VITE_MAP_STYLE_STANDARD=https://tiles.openfreemap.org/styles/liberty
+# Key option (domain-restricted browser token; never commit a real value):
+#   VITE_MAP_STYLE_STANDARD=https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_RESTRICTED_KEY
+cd frontend; npm run dev   # then open /substations?view=map — status should read "Rich map"
+```
+
+On a managed laptop, if rich mode still falls back to neutral, IT may need to
+allow-list the provider domain(s) (see engineering-map.md §0.1). Do not commit
+tokens; `VITE_*` values are browser-exposed build config, not secrets.
+
 **Optional — locally hosted rich Standard basemap (PMTiles).** The steps below
 package a rich Peninsular-Malaysia basemap served entirely from the app. This is
 now **optional** (the neutral fallback covers the no-config case); use it only

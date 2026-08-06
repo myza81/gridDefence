@@ -7,6 +7,8 @@ import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById } from "
 import type { EngineeringMapStyle } from "./mapConfig";
 import { createClusterCountController } from "./clusterCountMarkers";
 import type { ClusterCountController } from "./clusterCountMarkers";
+import { classifyStyleError, redactUrl } from "./mapDiagnostics";
+import type { RichFailureReason } from "./mapDiagnostics";
 import { registerPmtilesProtocol } from "./pmtilesProtocol";
 
 /**
@@ -57,6 +59,8 @@ interface EngineeringMapProps {
   onSelect?: (id: string | null) => void;
   /** Reports the active map mode so the caller can show honest status/retry. */
   onModeChange?: (mode: MapMode) => void;
+  /** Reports why rich mode is unavailable (safe reason code — no URLs/tokens). */
+  onRichUnavailable?: (reason: RichFailureReason) => void;
   /** Changing this (e.g. a "Retry rich map" click) attempts the rich style once. */
   retryToken?: number;
   /** Invoked when the popup's "Open" action is used (SPA navigation). */
@@ -95,6 +99,7 @@ export function EngineeringMap({
   selectedId,
   onSelect,
   onModeChange,
+  onRichUnavailable,
   retryToken = 0,
   onOpen,
   focusId,
@@ -119,11 +124,13 @@ export function EngineeringMap({
   const onSelectRef = useRef(onSelect);
   const onOpenRef = useRef(onOpen);
   const onModeChangeRef = useRef(onModeChange);
+  const onRichUnavailableRef = useRef(onRichUnavailable);
   layersRef.current = layers;
   selectedRef.current = selectedId ?? null;
   onSelectRef.current = onSelect;
   onOpenRef.current = onOpen;
   onModeChangeRef.current = onModeChange;
+  onRichUnavailableRef.current = onRichUnavailable;
 
   const available = styles.filter((s) => s.available);
   const initialRichId = available.some((s) => s.id === DEFAULT_STYLE_ID) ? (DEFAULT_STYLE_ID as string) : available[0]?.id ?? null;
@@ -142,6 +149,7 @@ export function EngineeringMap({
     registerPmtilesProtocol(); // idempotent — a rich style may be pmtiles://
     // Start in the richest available: a configured rich style, else neutral.
     pendingModeRef.current = initialRichId != null ? "rich" : "neutral";
+    if (initialRichId == null) onRichUnavailableRef.current?.("configuration_missing");
     const initialStyle = initialRichId != null ? styleById(initialRichId)!.styleUrl : buildNeutralStyle();
 
     let map: maplibregl.Map;
@@ -185,12 +193,15 @@ export function EngineeringMap({
     });
 
     map.on("error", (e) => {
-      const message = String(e?.error?.message ?? "");
-      // Only a style/glyph/sprite/source *load* failure of a rich style falls
-      // back; a single missing tile must not tear the workspace down, and a
-      // neutral (local) failure has nowhere safe left to go.
-      if (/style|sprite|glyph|source/i.test(message) && !styleReadyRef.current && pendingModeRef.current === "rich") {
-        goNeutral(map);
+      // Only an ESSENTIAL failure of a rich style before it becomes ready falls
+      // back. A non-essential sub-resource error (sprite/glyph/individual tile)
+      // must NOT discard an otherwise-usable rich basemap (§ essential failure),
+      // and a neutral (local) failure has nowhere safe left to go.
+      if (styleReadyRef.current || pendingModeRef.current !== "rich") return;
+      if (classifyStyleError(e) === "essential") {
+        const url = (e as { error?: { url?: string } })?.error?.url;
+        if (url) console.warn(`Engineering map: rich basemap could not load — ${redactUrl(url)}`);
+        goNeutral(map, "style_load_failed");
       }
     });
 
@@ -294,7 +305,7 @@ export function EngineeringMap({
     clearLoadTimer();
     loadTimerRef.current = setTimeout(() => {
       // Bounded: a stalled rich load falls back once; no infinite spinner/retry.
-      if (!styleReadyRef.current && pendingModeRef.current === "rich") goNeutral(map);
+      if (!styleReadyRef.current && pendingModeRef.current === "rich") goNeutral(map, "timeout");
     }, loadTimeoutMs);
   }
   function clearLoadTimer() {
@@ -315,11 +326,12 @@ export function EngineeringMap({
     map.setStyle(style.styleUrl);
   }
 
-  function goNeutral(map: maplibregl.Map) {
+  function goNeutral(map: maplibregl.Map, reason?: RichFailureReason) {
     clearLoadTimer();
     styleReadyRef.current = false;
     pendingModeRef.current = "neutral";
     clusterCountsRef.current?.clear(); // sources are rebuilt on style.load
+    if (reason) onRichUnavailableRef.current?.(reason);
     announce("neutral");
     startLoadTimer(map);
     map.setStyle(buildNeutralStyle());

@@ -15,27 +15,32 @@ import type { FetchHandler } from "../testUtils";
 // focused id.
 let mockMode: "loading" | "rich" | "neutral" = "rich";
 let mockRetryMode: "rich" | "neutral" | null = null;
+let mockRichReason: "configuration_missing" | "style_load_failed" | "timeout" | "unknown" = "style_load_failed";
 vi.mock("../../src/components/map/EngineeringMap", async () => {
   const React = await import("react");
   return {
-    EngineeringMap: ({ layers, onSelect, onModeChange, retryToken, focusId }: {
+    EngineeringMap: ({ layers, onSelect, onModeChange, onRichUnavailable, retryToken, focusId }: {
       layers: { markers: { id: string; label: string }[] }[];
       onSelect?: (id: string) => void;
       onModeChange?: (mode: "loading" | "rich" | "neutral") => void;
+      onRichUnavailable?: (reason: "configuration_missing" | "style_load_failed" | "timeout" | "unknown") => void;
       retryToken?: number;
       focusId?: string | null;
     }) => {
       React.useEffect(() => {
         onModeChange?.(mockMode);
-      }, [onModeChange]);
+        if (mockMode === "neutral") onRichUnavailable?.(mockRichReason);
+      }, [onModeChange, onRichUnavailable]);
       const first = React.useRef(true);
       React.useEffect(() => {
         if (first.current) {
           first.current = false;
           return;
         }
-        onModeChange?.(mockRetryMode ?? mockMode);
-      }, [retryToken, onModeChange]);
+        const m = mockRetryMode ?? mockMode;
+        onModeChange?.(m);
+        if (m === "neutral") onRichUnavailable?.(mockRichReason);
+      }, [retryToken, onModeChange, onRichUnavailable]);
       return React.createElement(
         "div",
         { "data-testid": "engineering-map-stub" },
@@ -106,6 +111,7 @@ describe("SubstationMapView", () => {
     window.localStorage.clear();
     mockMode = "rich";
     mockRetryMode = null;
+    mockRichReason = "style_load_failed";
   });
 
   it("summarises coordinate coverage, lists records, and opens a selected substation", async () => {
@@ -192,6 +198,19 @@ describe("SubstationMapView", () => {
     expect(screen.getByRole("button", { name: "Retry rich map" })).toBeInTheDocument();
   });
 
+  it("shows a compact, safe diagnostic reason in neutral mode (no URL or token)", async () => {
+    mockMode = "neutral";
+    mockRichReason = "style_load_failed";
+    stubMap([FEATURE({ substation_id: "id-1", mnemonic: "ABBA", official_name: "A Famosa" })]);
+
+    renderWithProviders(<SubstationMapView filters={{}} />, { route: "/substations?view=map" });
+
+    // Human summary, not an implementation code, URL, or token.
+    expect(await screen.findByText(/could not be loaded \(blocked, unreachable, or invalid\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/https?:\/\//i)).toBeNull();
+    expect(screen.queryByText(/key=|token=|style_load_failed/i)).toBeNull();
+  });
+
   it("restores rich mode on a successful retry, preserving the selected record", async () => {
     mockMode = "neutral";
     mockRetryMode = "rich";
@@ -243,6 +262,7 @@ describe("Substation Registry view switch", () => {
     window.localStorage.clear();
     mockMode = "rich";
     mockRetryMode = null;
+    mockRichReason = "style_load_failed";
   });
 
   function stubList(mapCapture?: (url: string) => void) {

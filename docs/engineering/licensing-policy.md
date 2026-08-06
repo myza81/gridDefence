@@ -119,6 +119,30 @@ prepared tiles rejected** (commercial/uncertain redistribution); hosted tile
 services rejected (no offline redistribution). Build-time tools (Planetiler
 Apache-2.0, pmtiles CLI BSD-3) are licence-clean and used at build time only.
 
+### 6b. Connected rich-basemap provider governance
+
+Rich mode uses an **environment-configured online style** (`VITE_MAP_STYLE_*`);
+no provider is adopted by default (the app defaults to the bundled neutral map),
+so no provider dependency or secret is committed. When a Project Owner enables a
+provider, it must pass this gate (online-use permitted, attribution clear, no
+prohibited licence, no offline-redistribution assumption, no committed secret,
+acceptable through the company network). Assessed candidates:
+
+| Provider | Data / licence | Auth | Verdict |
+|---|---|---|---|
+| **OpenFreeMap** (`tiles.openfreemap.org`) | OpenStreetMap **ODbL**; open styles; self-hostable | **None** (no key) | **ACCEPT** for evaluation/dev and non-critical online use — no secret, CORS, "© OpenStreetMap". Caveat: community/donation-hosted → **not** a guaranteed SLA; for critical production prefer a paid provider or self-host. |
+| **MapTiler** (`api.maptiler.com`) | OSM + MapTiler; ODbL data + provider terms | Domain-restricted browser **key** | **ACCEPT for production** with an origin-locked key + appropriate plan. Attribution "© MapTiler © OpenStreetMap". Key is browser-exposed by design; never commit real values. |
+| **Stadia Maps** (`tiles.stadiamaps.com`) | OSM; ODbL + provider terms | Key / domain auth | **ACCEPT for production** with a plan/domain auth (as MapTiler). |
+| **Protomaps hosted API** | OSM ODbL | Key (or self-host) | **ACCEPT** with a key, or self-host via the optional offline PMTiles package. |
+| OSM raw raster (`tile.openstreetmap.org`) | ODbL data | None | **REJECT** — OSMF tile-usage policy forbids heavy/bulk/commercial use. |
+| Mapbox / Google / Esri | Proprietary/commercial | Token | **REJECT as default** — proprietary/commercial terms; only with an explicit Owner-adopted licence. |
+
+**Online-use permission is not offline-redistribution permission.** A connected
+provider's tiles/styles/glyphs/sprites are fetched at runtime and must **not** be
+bundled/redistributed unless its licence permits it (the offline package uses a
+separately governed, self-hostable source — §6a). Record any adopted provider in
+`THIRD_PARTY_NOTICES.md` with its data attribution.
+
 ## 7. Attribution policy
 
 Mandatory attributions must remain visible in all modes — online, **offline**,
