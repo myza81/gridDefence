@@ -375,9 +375,15 @@ default provider (OpenFreeMap Liberty, OSM/ODbL, no key; see licensing-policy
 §6b). It falls back to the built-in neutral map only when the provider is
 genuinely unavailable.
 
-To **override** the default (paid domain-keyed provider for production, or the
-self-hosted offline package), set it in `frontend/.env` and **restart Vite**
-(env is read at startup):
+A **Satellite** view is also available out of the box (governed built-in default:
+EOX Sentinel-2 cloudless, CC-BY-4.0, no key, imagery-only) — switch via the map's
+style selector. Set `VITE_MAP_STYLE_SATELLITE` to override with a hybrid
+imagery+labels provider (e.g. a domain-keyed MapTiler Satellite). Allow-list
+`tiles.maps.eox.at` for the default. See licensing-policy §6c.
+
+To **override** the Standard default (paid domain-keyed provider for production,
+or the self-hosted offline package), set it in `frontend/.env` and **restart
+Vite** (env is read at startup):
 
 ```powershell
 # frontend/.env  (optional override — see frontend/.env.example + licensing-policy §6b)

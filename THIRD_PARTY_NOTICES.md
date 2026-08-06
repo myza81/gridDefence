@@ -127,9 +127,11 @@ and attribution is shown by MapLibre's attribution control.
 
 | Provider | Underlying data | Attribution to display | Notes |
 |---|---|---|---|
-| **OpenFreeMap** (built-in default) | OpenStreetMap (ODbL) | © OpenStreetMap contributors | No key; community-hosted (no SLA) — override for critical/HA production |
+| **OpenFreeMap** (Standard built-in default) | OpenStreetMap (ODbL) | © OpenStreetMap contributors | No key; community-hosted (no SLA) — override for critical/HA production |
 | MapTiler (override) | OSM (ODbL) + MapTiler | © MapTiler © OpenStreetMap contributors | Domain-restricted browser key; do not commit |
 | Stadia Maps (override) | OSM (ODbL) | © Stadia Maps © OpenStreetMap contributors | Key / domain auth; do not commit |
+| **EOX Sentinel-2 cloudless** (Satellite built-in default) | Copernicus Sentinel data (**CC-BY-4.0**) | Sentinel-2 cloudless — s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data), CC-BY-4.0 | No key; imagery-only; online-use only. Allow-list `tiles.maps.eox.at` |
+| Esri World Imagery (override, if licensed) | Esri + multiple sources | Tiles © Esri … | ArcGIS terms — only where licensed; not adopted by default |
 
 Runtime attribution for the map is rendered by MapLibre's attribution control,
 which aggregates each source's `attribution` field (the committed

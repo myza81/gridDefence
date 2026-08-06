@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { tokens } from "../../theme/tokens";
-import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById } from "./mapConfig";
+import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById, styleSource } from "./mapConfig";
 import type { EngineeringMapStyle } from "./mapConfig";
 import { createClusterCountController } from "./clusterCountMarkers";
 import type { ClusterCountController } from "./clusterCountMarkers";
@@ -150,7 +150,7 @@ export function EngineeringMap({
     // Start in the richest available: a configured rich style, else neutral.
     pendingModeRef.current = initialRichId != null ? "rich" : "neutral";
     if (initialRichId == null) onRichUnavailableRef.current?.("configuration_missing");
-    const initialStyle = initialRichId != null ? styleById(initialRichId)!.styleUrl : buildNeutralStyle();
+    const initialStyle = initialRichId != null ? styleSource(styleById(initialRichId)!) : buildNeutralStyle();
 
     let map: maplibregl.Map;
     try {
@@ -323,7 +323,7 @@ export function EngineeringMap({
     clusterCountsRef.current?.clear(); // sources are rebuilt on style.load
     announce("loading");
     startLoadTimer(map);
-    map.setStyle(style.styleUrl);
+    map.setStyle(styleSource(style));
   }
 
   function goNeutral(map: maplibregl.Map, reason?: RichFailureReason) {

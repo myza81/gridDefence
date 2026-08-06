@@ -47,6 +47,18 @@ Critical/high-availability or air-gapped deployments **should** override the com
 
 (Stadia: `tiles.stadiamaps.com`.) Do not disable TLS verification, add HTTP endpoints, or require admin rights. If no provider can be approved, leave rich unset — neutral mode is a complete, governed default.
 
+### 0.2 Satellite basemap
+
+The style catalogue offers **Standard** and **Satellite** (and **Terrain** when configured); the compact style selector (top-left of the map, rich mode) switches between them. **Standard remains the default.** Switching preserves camera, zoom, selected substation, popup/details, filters, cluster counts, and the accessible record list (the selector uses the same `style.load` re-install path as retry), and MapLibre's attribution control updates to the selected provider.
+
+- **Governed built-in default:** EOX **Sentinel-2 cloudless** (`DEFAULT_SATELLITE_TILE_URL`, `buildSatelliteRasterStyle` in [mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)) — Copernicus Sentinel data under **CC-BY-4.0**, free for internal/enterprise use with attribution, **no API key**, CORS-enabled. So Satellite is available out of the box, matching the MVP's ease — but governed and legally clean (the MVP used Esri `arcgisonline`, whose terms restrict enterprise/commercial use; see licensing-policy §6c).
+- **Imagery-only:** the default is pure imagery — **no roads, labels, or boundaries**. For a hybrid imagery+labels style, set `VITE_MAP_STYLE_SATELLITE` to a provider style URL (e.g. a domain-keyed MapTiler Satellite).
+- **Override:** `VITE_MAP_STYLE_SATELLITE=<style URL>` replaces the built-in default (any MapLibre style/raster style; a licensed Esri/MapTiler/Stadia deployment). No token is committed.
+- **Failure:** a raster imagery outage shows the style's dark **backdrop with markers/cluster counts on top** (never a blank canvas); Standard stays selectable and the Table view stays available. A configured Satellite *style URL* that fails to load is an essential failure → neutral (bounded timeout, no retry storm). Tile errors are non-essential and never tear down the workspace.
+- **Allow-list:** EOX satellite tiles — `tiles.maps.eox.at`.
+
+Markers/clusters render **above** the imagery; lifecycle marker colours keep a white stroke and cluster counts are white DOM markers, so both stay legible over dark imagery.
+
 ---
 
 ## 1. What the Engineering Map is
