@@ -5,6 +5,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { tokens } from "../../theme/tokens";
 import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById } from "./mapConfig";
 import type { EngineeringMapStyle } from "./mapConfig";
+import { createClusterCountController } from "./clusterCountMarkers";
+import type { ClusterCountController } from "./clusterCountMarkers";
 import { registerPmtilesProtocol } from "./pmtilesProtocol";
 
 /**
@@ -104,11 +106,11 @@ export function EngineeringMap({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const styleReadyRef = useRef(false);
-  // Whether the current style has glyphs (rich) so cluster-count labels can
-  // render. The neutral style ships no glyphs, so counts are omitted there.
-  const clusterCountsRef = useRef(true);
   const pendingModeRef = useRef<Exclude<MapMode, "loading">>("neutral");
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cluster-count numbers are DOM markers (glyph-independent), so they render in
+  // both rich and neutral modes without any font/glyph request.
+  const clusterCountsRef = useRef<ClusterCountController | null>(null);
 
   // Refs mirror the latest props so the persistent map handlers (bound once)
   // always read current values without re-binding.
@@ -140,7 +142,6 @@ export function EngineeringMap({
     registerPmtilesProtocol(); // idempotent — a rich style may be pmtiles://
     // Start in the richest available: a configured rich style, else neutral.
     pendingModeRef.current = initialRichId != null ? "rich" : "neutral";
-    clusterCountsRef.current = pendingModeRef.current === "rich";
     const initialStyle = initialRichId != null ? styleById(initialRichId)!.styleUrl : buildNeutralStyle();
 
     let map: maplibregl.Map;
@@ -163,6 +164,10 @@ export function EngineeringMap({
     mapRef.current = map;
     announce("loading");
 
+    // Cluster-count DOM markers, tracking the current layer set across reloads.
+    clusterCountsRef.current = createClusterCountController(map, () => layersRef.current.map((l) => sourceId(l.id)));
+    map.on("render", () => clusterCountsRef.current?.update());
+
     map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), "top-right");
     map.addControl(new ResetExtentControl(bounds), "top-right");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-left");
@@ -172,9 +177,10 @@ export function EngineeringMap({
     map.on("style.load", () => {
       clearLoadTimer();
       styleReadyRef.current = true;
-      installLayers(map, layersRef.current, clusterCountsRef.current);
+      installLayers(map, layersRef.current);
       applySelection(map, selectedRef.current);
       openPopupFor(selectedRef.current);
+      clusterCountsRef.current?.update();
       announce(pendingModeRef.current);
     });
 
@@ -194,6 +200,8 @@ export function EngineeringMap({
       clearLoadTimer();
       popupRef.current?.remove();
       popupRef.current = null;
+      clusterCountsRef.current?.destroy();
+      clusterCountsRef.current = null;
       styleReadyRef.current = false;
       map.remove();
       mapRef.current = null;
@@ -235,8 +243,9 @@ export function EngineeringMap({
     for (const layer of layers) {
       const source = map.getSource(sourceId(layer.id)) as maplibregl.GeoJSONSource | undefined;
       if (source) source.setData(toFeatureCollection(layer));
-      else installOneLayer(map, layer, clusterCountsRef.current);
+      else installOneLayer(map, layer);
     }
+    clusterCountsRef.current?.update();
     if (selectedRef.current) openPopupFor(selectedRef.current);
   }, [layers]);
 
@@ -300,7 +309,7 @@ export function EngineeringMap({
     if (style == null) return;
     styleReadyRef.current = false;
     pendingModeRef.current = "rich";
-    clusterCountsRef.current = true;
+    clusterCountsRef.current?.clear(); // sources are rebuilt on style.load
     announce("loading");
     startLoadTimer(map);
     map.setStyle(style.styleUrl);
@@ -310,14 +319,14 @@ export function EngineeringMap({
     clearLoadTimer();
     styleReadyRef.current = false;
     pendingModeRef.current = "neutral";
-    clusterCountsRef.current = false; // neutral ships no glyphs ⇒ no cluster labels
+    clusterCountsRef.current?.clear(); // sources are rebuilt on style.load
     announce("neutral");
     startLoadTimer(map);
     map.setStyle(buildNeutralStyle());
   }
 
-  function installLayers(map: maplibregl.Map, ls: EngineeringMapLayer[], withCounts: boolean) {
-    for (const layer of ls) installOneLayer(map, layer, withCounts);
+  function installLayers(map: maplibregl.Map, ls: EngineeringMapLayer[]) {
+    for (const layer of ls) installOneLayer(map, layer);
   }
 
   function openPopupFor(id: string | null) {
@@ -343,17 +352,15 @@ export function EngineeringMap({
     popupRef.current = popup;
   }
 
-  function installOneLayer(map: maplibregl.Map, layer: EngineeringMapLayer, withCounts: boolean) {
+  function installOneLayer(map: maplibregl.Map, layer: EngineeringMapLayer) {
     const sid = sourceId(layer.id);
     if (map.getSource(sid)) return;
-    // Clustering stays functional in both modes; only the numeric count label
-    // (which needs glyphs) is omitted in neutral mode.
+    // Clustering is identical in both modes. The cluster *circle* is a MapLibre
+    // layer; the numeric *count* is a DOM marker (see clusterCountMarkers.ts) so
+    // it renders without any glyph/font request — visible in rich AND neutral.
     map.addSource(sid, { type: "geojson", data: toFeatureCollection(layer), cluster: true, clusterMaxZoom: 11, clusterRadius: 44 });
 
     map.addLayer({ id: `${sid}-clusters`, type: "circle", source: sid, filter: ["has", "point_count"], paint: { "circle-color": "#2540D8", "circle-opacity": 0.85, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 30] } });
-    if (withCounts) {
-      map.addLayer({ id: `${sid}-cluster-count`, type: "symbol", source: sid, filter: ["has", "point_count"], layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 12 }, paint: { "text-color": "#FFFFFF" } });
-    }
     map.addLayer({ id: `${sid}-points`, type: "circle", source: sid, filter: ["!", ["has", "point_count"]], paint: { "circle-color": colorExpression(layer) as maplibregl.ExpressionSpecification, "circle-radius": 7, "circle-stroke-width": 1.5, "circle-stroke-color": "#FFFFFF" } });
     map.addLayer({ id: `${sid}-selected`, type: "circle", source: sid, filter: ["==", ["get", "id"], "__none__"], paint: { "circle-color": "rgba(0,0,0,0)", "circle-radius": 12, "circle-stroke-width": 3, "circle-stroke-color": "#0F2340" } });
 
