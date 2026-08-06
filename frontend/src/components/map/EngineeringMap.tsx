@@ -9,6 +9,7 @@ import { createClusterCountController } from "./clusterCountMarkers";
 import type { ClusterCountController } from "./clusterCountMarkers";
 import { classifyStyleError, redactUrl } from "./mapDiagnostics";
 import type { RichFailureReason } from "./mapDiagnostics";
+import { computeStandardTuning } from "./mapCartography";
 import { registerPmtilesProtocol } from "./pmtilesProtocol";
 
 /**
@@ -163,7 +164,10 @@ export function EngineeringMap({
         container: containerRef.current,
         style: initialStyle,
         bounds: initialBounds,
-        fitBoundsOptions: { padding: 48, maxZoom: 12 },
+        // Open at an engineering zoom where OpenMapTiles data is rich (minor
+        // roads, buildings appear ~z13); a single/tight cluster opens at
+        // neighbourhood scale rather than the sparse country view.
+        fitBoundsOptions: { padding: 48, maxZoom: 13 },
         attributionControl: { compact: false },
         maxTileCacheSize: 256,
         refreshExpiredTiles: false,
@@ -194,6 +198,7 @@ export function EngineeringMap({
       applySelection(map, selectedRef.current);
       openPopupFor(selectedRef.current);
       clusterCountsRef.current?.update();
+      applyStandardTuning(map);
       announce(pendingModeRef.current);
     });
 
@@ -344,6 +349,22 @@ export function EngineeringMap({
 
   function installLayers(map: maplibregl.Map, ls: EngineeringMapLayer[]) {
     for (const layer of ls) installOneLayer(map, layer);
+  }
+
+  /** Show a few key labels slightly earlier for area recognition (no-op unless
+   *  the loaded style has the OpenMapTiles/Liberty label layers). */
+  function applyStandardTuning(map: maplibregl.Map) {
+    try {
+      for (const t of computeStandardTuning(map.getStyle())) {
+        try {
+          map.setLayerZoomRange(t.id, t.minzoom, t.maxzoom);
+        } catch {
+          // layer not present in this style — skip
+        }
+      }
+    } catch {
+      // style not ready — skip
+    }
   }
 
   function openPopupFor(id: string | null) {

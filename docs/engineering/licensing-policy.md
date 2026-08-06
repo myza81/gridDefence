@@ -139,6 +139,14 @@ is fine as the default for development and general internal use. **Critical /
 high-availability / air-gapped** deployments SHOULD override the default with a
 paid provider (domain-restricted key) or the self-hosted offline package.
 
+**Raster maximal-density note.** The Liberty default is a *vector* style; minor
+roads/buildings appear only at higher zoom (OpenMapTiles data generalization —
+see engineering-map.md §0.3). A deployment wanting the MVP's all-zoom raster
+density may override Standard with a raster OSM-Carto style, but **only via a
+keyed or self-hosted provider** — the public OSMF tile server
+(`tile.openstreetmap.org`) is **rejected** for this use (its tile-usage policy
+forbids heavy/bulk/enterprise use).
+
 Assessed candidates:
 
 | Provider | Data / licence | Auth | Verdict |
