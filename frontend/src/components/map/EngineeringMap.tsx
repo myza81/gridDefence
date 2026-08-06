@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { tokens } from "../../theme/tokens";
-import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById, styleSource } from "./mapConfig";
+import { BASEMAP_STYLES, DEFAULT_STYLE_ID, buildNeutralStyle, styleById } from "./mapConfig";
 import type { EngineeringMapStyle } from "./mapConfig";
 import { createClusterCountController } from "./clusterCountMarkers";
 import type { ClusterCountController } from "./clusterCountMarkers";
@@ -16,9 +16,9 @@ import { registerPmtilesProtocol } from "./pmtilesProtocol";
  * Engineering Map Framework — a generic, reusable MapLibre GL wrapper.
  *
  * **Dual-mode.** It provides the richest map that is actually available:
- *  - **Rich mode** — when a configured online style and its resources load, it
+ *  - **Rich mode** — when the Standard online style and its resources load, it
  *    shows that provider's detailed basemap (roads, water, land cover, labels,
- *    boundaries, and satellite/terrain where configured), with attribution.
+ *    boundaries), with attribution.
  *  - **Neutral mode** — when no rich style is configured or one fails/times out,
  *    it shows a small, locally bundled, public-domain geographic reference
  *    (land / sea / coastlines / national borders from Natural Earth) that makes
@@ -135,12 +135,12 @@ export function EngineeringMap({
 
   const available = styles.filter((s) => s.available);
   const initialRichId = available.some((s) => s.id === DEFAULT_STYLE_ID) ? (DEFAULT_STYLE_ID as string) : available[0]?.id ?? null;
-  const [activeStyleId, setActiveStyleId] = useState<string | null>(initialRichId);
-  const [mode, setModeState] = useState<MapMode>("loading");
   const [mapUsable, setMapUsable] = useState(true);
 
+  // The map has a single basemap (Standard) + automatic neutral fallback, so the
+  // component renders no mode-dependent UI itself; it reports mode to the caller
+  // (which shows honest status + the Retry action).
   function announce(next: MapMode) {
-    setModeState(next);
     onModeChangeRef.current?.(next);
   }
 
@@ -151,7 +151,7 @@ export function EngineeringMap({
     // Start in the richest available: a configured rich style, else neutral.
     pendingModeRef.current = initialRichId != null ? "rich" : "neutral";
     if (initialRichId == null) onRichUnavailableRef.current?.("configuration_missing");
-    const initialStyle = initialRichId != null ? styleSource(styleById(initialRichId)!) : buildNeutralStyle();
+    const initialStyle = initialRichId != null ? styleById(initialRichId)!.styleUrl : buildNeutralStyle();
 
     // Open fitted to where the substations actually are (street/city scale), so
     // the rich basemap's context is visible immediately — instead of the sparse
@@ -230,20 +230,7 @@ export function EngineeringMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Switch rich style from the selector. ------------------------------------
-  const firstStyleEffect = useRef(true);
-  useEffect(() => {
-    if (firstStyleEffect.current) {
-      firstStyleEffect.current = false;
-      return; // constructor already loaded the initial style
-    }
-    const map = mapRef.current;
-    if (map == null || activeStyleId == null) return;
-    loadRich(map, activeStyleId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStyleId]);
-
-  // --- Retry rich map (user-triggered; one attempt per token change). ----------
+  // --- Retry the Standard map (user-triggered; one attempt per token change). --
   const firstRetryEffect = useRef(true);
   useEffect(() => {
     if (firstRetryEffect.current) {
@@ -251,9 +238,8 @@ export function EngineeringMap({
       return;
     }
     const map = mapRef.current;
-    const target = activeStyleId ?? initialRichId;
-    if (map == null || target == null) return;
-    loadRich(map, target);
+    if (map == null || initialRichId == null) return;
+    loadRich(map, initialRichId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [retryToken]);
 
@@ -333,7 +319,7 @@ export function EngineeringMap({
     clusterCountsRef.current?.clear(); // sources are rebuilt on style.load
     announce("loading");
     startLoadTimer(map);
-    map.setStyle(styleSource(style));
+    map.setStyle(style.styleUrl);
   }
 
   function goNeutral(map: maplibregl.Map, reason?: RichFailureReason) {
@@ -400,7 +386,7 @@ export function EngineeringMap({
 
     map.addLayer({ id: `${sid}-clusters`, type: "circle", source: sid, filter: ["has", "point_count"], paint: { "circle-color": "#2540D8", "circle-opacity": 0.85, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 30] } });
     // Stronger white casing so lifecycle markers stay visually dominant over a
-    // rich/dense basemap (roads, buildings) or dark satellite imagery.
+    // rich/dense basemap (roads, buildings).
     map.addLayer({ id: `${sid}-points`, type: "circle", source: sid, filter: ["!", ["has", "point_count"]], paint: { "circle-color": colorExpression(layer) as maplibregl.ExpressionSpecification, "circle-radius": 7, "circle-stroke-width": 2.5, "circle-stroke-color": "#FFFFFF" } });
     map.addLayer({ id: `${sid}-selected`, type: "circle", source: sid, filter: ["==", ["get", "id"], "__none__"], paint: { "circle-color": "rgba(0,0,0,0)", "circle-radius": 12, "circle-stroke-width": 3, "circle-stroke-color": "#0F2340" } });
 
@@ -453,67 +439,10 @@ export function EngineeringMap({
     );
   }
 
+  // Single basemap (Standard) → no style selector; the operator never chooses.
   return (
     <div style={{ position: "relative", height, borderRadius: tokens.radius.lg, overflow: "hidden" }}>
       <div ref={containerRef} data-testid="engineering-map" style={{ position: "absolute", inset: 0 }} />
-      {/* Rich-style selector — only meaningful while rich styles are active. */}
-      {mode === "rich" && available.length > 1 && (
-        <StyleSelector
-          styles={available}
-          activeId={activeStyleId}
-          onChange={(id) => {
-            if (id !== activeStyleId) setActiveStyleId(id);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function StyleSelector({ styles, activeId, onChange }: { styles: EngineeringMapStyle[]; activeId: string | null; onChange: (id: string) => void }) {
-  return (
-    <div
-      role="group"
-      aria-label="Basemap style"
-      style={{
-        position: "absolute",
-        top: tokens.space[2],
-        left: tokens.space[2],
-        display: "inline-flex",
-        gap: "2px",
-        padding: "3px",
-        background: "rgba(255,255,255,0.94)",
-        backdropFilter: "blur(6px)",
-        border: `1px solid ${tokens.color.borderDefault}`,
-        borderRadius: tokens.radius.md,
-        boxShadow: tokens.shadow.hairline,
-        fontFamily: tokens.typography.fontFamily,
-      }}
-    >
-      {styles.map((s) => {
-        const active = s.id === activeId;
-        return (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => onChange(s.id)}
-            aria-pressed={active}
-            title={s.description}
-            style={{
-              border: "none",
-              cursor: "pointer",
-              padding: "5px 10px",
-              borderRadius: tokens.radius.sm,
-              fontSize: "12px",
-              fontWeight: active ? tokens.typography.weight.semibold : tokens.typography.weight.medium,
-              color: active ? tokens.color.actionPrimaryText : tokens.color.textSecondary,
-              background: active ? tokens.color.actionPrimary : "transparent",
-            }}
-          >
-            {s.label}
-          </button>
-        );
-      })}
     </div>
   );
 }

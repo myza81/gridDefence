@@ -93,12 +93,6 @@ serving:
 - **Fonts/glyphs (Noto, OFL-1.1)** — approved; honour OFL conditions.
 - **Sprites** — record the specific source licence in the asset manifest before
   hosting; reject if unstated.
-- **Satellite imagery** — **excluded.** Common providers forbid or do not clearly
-  grant offline redistribution. Do not bundle satellite imagery without confirmed
-  written redistribution rights. Until then, Satellite is connected-only.
-- **Terrain / DEM / hillshade** — **excluded** on the same basis; confirm the
-  specific source's redistribution terms before any offline packaging. Never
-  fabricate terrain/contours.
 - **Malaysian administrative boundaries** — no dataset with confirmed
   enterprise redistribution rights has been established. **Recommended against
   adoption** until an owner/licence is verified (this also gates the future
@@ -164,27 +158,10 @@ bundled/redistributed unless its licence permits it (the offline package uses a
 separately governed, self-hostable source — §6a). Record any adopted provider in
 `THIRD_PARTY_NOTICES.md` with its data attribution.
 
-### 6c. Satellite imagery provider governance
+### 6c. Geographic context vs engineering truth
 
-Satellite imagery is held to the same bar as any external provider, plus an
-explicit imagery-terms check. The **governed built-in default** is EOX
-**Sentinel-2 cloudless** (adopted so a Satellite view is available out of the
-box); `VITE_MAP_STYLE_SATELLITE` overrides it. Assessed candidates:
-
-| Provider | Licence / terms | Auth | Verdict |
-|---|---|---|---|
-| **EOX Sentinel-2 cloudless** (`tiles.maps.eox.at`) — **adopted built-in default** | **CC-BY-4.0** (Copernicus Sentinel data) — free incl. enterprise/commercial with attribution | **None** (no key) | **ACCEPT — built-in default.** Imagery-only (no labels/boundaries); CORS-enabled; attribution "Sentinel-2 cloudless — s2maps.eu by EOX … CC-BY-4.0". |
-| **MapTiler Satellite** (`api.maptiler.com`) | OSM/provider terms | Domain-restricted key | **ACCEPT WITH CONFIGURATION.** Hybrid imagery+labels; set via `VITE_MAP_STYLE_SATELLITE`; key origin-locked, never committed. |
-| **Esri World Imagery** (`server.arcgisonline.com`) — the MVP's provider | Esri Master Agreement / ArcGIS terms | None on the sample server | **REJECT as default; ACCEPT WITH CONFIGURATION** only where the deployment holds an ArcGIS licence and accepts Esri's terms (the public sample service restricts commercial/enterprise use and offers no SLA). Do **not** adopt merely because the MVP used it. |
-| Bing / Google imagery | Proprietary/commercial | Token | **REJECT** — proprietary terms, redistribution/caching restrictions. |
-
-Satellite imagery is **online-use only** — no offline caching/redistribution is
-assumed. The default is imagery-only; a hybrid style is an operator override.
-
-### 6d. Geographic context vs engineering truth
-
-All basemap content (OpenStreetMap/OpenFreeMap, satellite imagery, any
-third-party GIS) is **External Geographic Context**, licensed and attributed as
+All basemap content (OpenStreetMap/OpenFreeMap, any third-party GIS) is
+**External Geographic Context**, licensed and attributed as
 such — it is **not** GridDefence engineering truth. GridDefence's authoritative
 data is the Registry. Consequently the map draws only GridDefence's own markers
 over the external basemap and **never draws GridDefence connectivity or other

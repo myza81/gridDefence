@@ -62,25 +62,26 @@ describe("auditStyleForExternalUrls", () => {
 });
 
 describe("BASEMAP_STYLES availability from configuration", () => {
-  type Cat = { id: string; styleUrl?: string; inlineStyle?: unknown };
+  type Cat = { id: string; styleUrl?: string };
   const std = (b: Cat[]) => b.find((s) => s.id === "standard")!;
-  const sat = (b: Cat[]) => b.find((s) => s.id === "satellite")!;
 
-  it("offers Standard + Satellite by default (built-in governed defaults)", async () => {
-    const { BASEMAP_STYLES, DEFAULT_STYLE_ID, DEFAULT_STANDARD_STYLE_URL, DEFAULT_SATELLITE_TILE_URL } = await loadConfig({
+  it("offers a single Standard basemap by default (no Satellite/Hybrid/Terrain)", async () => {
+    const { BASEMAP_STYLES, DEFAULT_STYLE_ID, DEFAULT_STANDARD_STYLE_URL } = await loadConfig({
       VITE_MAP_STYLE_STANDARD: undefined,
-      VITE_MAP_STYLE_SATELLITE: undefined,
-      VITE_MAP_STYLE_TERRAIN: undefined,
       VITE_MAP_STYLE_URL: undefined,
     });
-    // Standard AND Satellite are available out of the box (MVP parity); Terrain omitted.
-    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard", "satellite"]);
-    expect(DEFAULT_STYLE_ID).toBe("standard"); // Standard remains the default
+    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard"]);
+    expect(DEFAULT_STYLE_ID).toBe("standard");
     expect(std(BASEMAP_STYLES).styleUrl).toBe(DEFAULT_STANDARD_STYLE_URL);
-    // Satellite default is an inline raster style over the governed EOX tiles.
-    const satStyle = sat(BASEMAP_STYLES).inlineStyle as { sources: Record<string, { tiles: string[] }> };
-    expect(satStyle.sources.satellite.tiles[0]).toBe(DEFAULT_SATELLITE_TILE_URL);
-    expect(sat(BASEMAP_STYLES).styleUrl).toBeUndefined();
+  });
+
+  it("ignores removed Satellite/Hybrid/Terrain env vars — only Standard is ever offered", async () => {
+    const { BASEMAP_STYLES } = await loadConfig({
+      VITE_MAP_STYLE_SATELLITE: "https://x.example/satellite.json",
+      VITE_MAP_STYLE_HYBRID: "https://x.example/hybrid.json",
+      VITE_MAP_STYLE_TERRAIN: "https://x.example/terrain.json",
+    });
+    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard"]);
   });
 
   it("lets VITE_MAP_STYLE_STANDARD override the built-in Standard default", async () => {
@@ -90,33 +91,6 @@ describe("BASEMAP_STYLES availability from configuration", () => {
     });
     expect(std(BASEMAP_STYLES).styleUrl).toBe("https://override.example/style.json");
     expect(std(BASEMAP_STYLES).styleUrl).not.toBe(DEFAULT_STANDARD_STYLE_URL);
-  });
-
-  it("lets VITE_MAP_STYLE_SATELLITE override the built-in Satellite default (provider style URL)", async () => {
-    const { BASEMAP_STYLES } = await loadConfig({
-      VITE_MAP_STYLE_SATELLITE: "https://api.maptiler.com/maps/satellite/style.json?key=X",
-    });
-    expect(sat(BASEMAP_STYLES).styleUrl).toBe("https://api.maptiler.com/maps/satellite/style.json?key=X");
-    expect(sat(BASEMAP_STYLES).inlineStyle).toBeUndefined(); // configured URL, not the built-in raster
-  });
-
-  it("includes Terrain only when its URL is set; Standard remains default", async () => {
-    const { BASEMAP_STYLES, DEFAULT_STYLE_ID } = await loadConfig({
-      VITE_MAP_STYLE_STANDARD: "https://dev.example/standard.json",
-      VITE_MAP_STYLE_TERRAIN: "https://dev.example/terrain.json",
-    });
-    expect(BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard", "satellite", "terrain"]);
-    expect(DEFAULT_STYLE_ID).toBe("standard");
-  });
-
-  it("is Hybrid-ready: Hybrid is absent by default and appears only when configured", async () => {
-    const off = await loadConfig({});
-    expect(off.BASEMAP_STYLES.map((s) => s.id)).not.toContain("hybrid");
-
-    const on = await loadConfig({ VITE_MAP_STYLE_HYBRID: "https://dev.example/hybrid.json" });
-    expect(on.BASEMAP_STYLES.map((s) => s.id)).toEqual(["standard", "satellite", "hybrid"]);
-    expect(on.styleById("hybrid")?.styleUrl).toBe("https://dev.example/hybrid.json");
-    expect(on.DEFAULT_STYLE_ID).toBe("standard");
   });
 
   it("honours VITE_MAP_STYLE_URL as the Standard alias", async () => {
@@ -133,33 +107,5 @@ describe("BASEMAP_STYLES availability from configuration", () => {
       VITE_MAP_STYLE_URL: undefined,
     });
     expect(std(BASEMAP_STYLES).styleUrl).toBe(DEFAULT_STANDARD_STYLE_URL);
-  });
-});
-
-describe("buildSatelliteRasterStyle", () => {
-  it("is a raster style over the governed EOX tiles with Sentinel-2/CC-BY attribution and a backdrop", async () => {
-    const { buildSatelliteRasterStyle, DEFAULT_SATELLITE_TILE_URL, styleSource } = await loadConfig({});
-    const style = buildSatelliteRasterStyle();
-    const satSource = style.sources.satellite as { type: string; tiles: string[]; attribution?: string };
-    expect(satSource).toMatchObject({ type: "raster", tiles: [DEFAULT_SATELLITE_TILE_URL] });
-    expect(String(satSource.attribution)).toMatch(/Sentinel-2 cloudless|EOX|CC-BY/i);
-    // A defined background sits under the imagery ⇒ an outage is a backdrop, not blank.
-    expect(style.layers[0]).toMatchObject({ id: "background", type: "background" });
-    expect(style.layers.some((l: { type: string }) => l.type === "raster")).toBe(true);
-    // No glyphs/sprites (cluster counts are DOM markers, so still visible).
-    expect(style.glyphs).toBeUndefined();
-    expect(style.sprite).toBeUndefined();
-    // styleSource hands MapLibre the inline style object when there is no URL.
-    expect(styleSource({ id: "satellite", label: "Satellite", available: true, inlineStyle: style })).toBe(style);
-    expect(styleSource({ id: "standard", label: "Standard", available: true, styleUrl: "u" })).toBe("u");
-  });
-
-  it("differs in attribution from Standard/Neutral (attribution changes by provider)", async () => {
-    const { buildSatelliteRasterStyle, buildNeutralStyle } = await loadConfig({});
-    const satAttr = String((buildSatelliteRasterStyle().sources.satellite as { attribution?: string }).attribution);
-    const neutralAttr = String((buildNeutralStyle().sources as Record<string, { attribution?: string }>).neutral.attribution);
-    expect(satAttr).not.toBe(neutralAttr);
-    expect(satAttr).toMatch(/EOX|Sentinel/i);
-    expect(neutralAttr).toMatch(/Natural Earth/i);
   });
 });

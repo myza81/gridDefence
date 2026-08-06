@@ -18,9 +18,9 @@ import type { StyleSpecification } from "maplibre-gl";
  * the environment variable is an **override**, not a requirement. A fresh clone
  * therefore starts in rich mode when the internet is reachable, and drops to the
  * built-in neutral map only when the provider is genuinely unavailable (handled
- * at runtime by EngineeringMap). Satellite/Terrain remain optional env-only
- * styles. On failure the map never silently switches to a *different* public
- * provider — it falls back to the local neutral geometry.
+ * at runtime by EngineeringMap). There is a single Standard basemap — no
+ * Satellite/Hybrid/Terrain. On failure the map never silently switches to a
+ * *different* public provider — it falls back to the local neutral geometry.
  *
  * Critical/high-availability or air-gapped deployments should override
  * VITE_MAP_STYLE_STANDARD with a paid provider (domain-restricted key) or the
@@ -28,25 +28,16 @@ import type { StyleSpecification } from "maplibre-gl";
  */
 
 export interface EngineeringMapStyle {
-  /** Stable id used in the selector and in URLs/state. */
+  /** Stable id used in URLs/state. */
   id: string;
-  /** Human label shown in the style selector. */
+  /** Human label. */
   label: string;
   /** MapLibre style URL — external (dev) or internal/local (production). */
-  styleUrl?: string;
-  /** Inline MapLibre style (e.g. the built-in raster Satellite), used when no
-   *  style URL is configured. Exactly one of styleUrl / inlineStyle is present. */
-  inlineStyle?: StyleSpecification;
+  styleUrl: string;
   /** Always true for catalogue entries (kept for API stability). */
   available: boolean;
-  /** One-line description shown as a tooltip / caption. */
+  /** One-line description. */
   description?: string;
-}
-
-/** What to hand MapLibre's `setStyle` for a catalogue entry — a URL or an inline
- *  style object (MapLibre `setStyle` accepts both). */
-export function styleSource(style: EngineeringMapStyle): string | StyleSpecification {
-  return style.inlineStyle ?? (style.styleUrl as string);
 }
 
 /** Read a Vite env var, treating empty/whitespace as unset. */
@@ -66,67 +57,27 @@ function env(name: string): string | undefined {
 export const DEFAULT_STANDARD_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
 /**
- * Governed built-in default Satellite imagery: EOX **Sentinel-2 cloudless**
- * (Copernicus Sentinel data), licensed **CC-BY-4.0** — free for internal/
- * enterprise/commercial use with attribution, no API key, CORS-enabled. It is
- * imagery-only (no roads/labels/boundaries); a deployment wanting a hybrid
- * imagery+labels style sets `VITE_MAP_STYLE_SATELLITE` to a provider style URL
- * (e.g. a domain-keyed MapTiler Satellite). See licensing-policy §6c.
+ * Style catalogue. The Engineering Map ships a single basemap — **Standard** —
+ * which resolves as `VITE_MAP_STYLE_STANDARD → VITE_MAP_STYLE_URL (legacy) →
+ * built-in governed default`. There is intentionally no Satellite/Hybrid/Terrain
+ * (removed as a product simplification); the automatic **neutral** fallback
+ * handles provider unavailability. The catalogue is a list so a future governed
+ * style could be added, but none is offered today.
  */
-export const DEFAULT_SATELLITE_TILE_URL = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg";
-export const SATELLITE_ATTRIBUTION = 'Sentinel-2 cloudless — <a href="https://s2maps.eu">s2maps.eu</a> by EOX IT Services GmbH (Contains modified Copernicus Sentinel data), CC-BY-4.0';
-
-/** Build a raster MapLibre style for satellite imagery. A defined dark
- *  background sits under the raster so an imagery outage shows a backdrop with
- *  markers on top — never a blank canvas. No glyphs/sprites (cluster counts are
- *  DOM markers, so they stay visible). */
-export function buildSatelliteRasterStyle(tileUrl: string = DEFAULT_SATELLITE_TILE_URL, attribution: string = SATELLITE_ATTRIBUTION): StyleSpecification {
-  return {
-    version: 8,
-    name: "satellite-raster",
-    sources: { satellite: { type: "raster", tiles: [tileUrl], tileSize: 256, minzoom: 0, maxzoom: 16, attribution } },
-    layers: [
-      { id: "background", type: "background", paint: { "background-color": "#0B1220" } },
-      { id: "satellite", type: "raster", source: "satellite" },
-    ],
-  };
-}
-
-/**
- * Style catalogue. Adding a future style (Dark, High Contrast, Utility,
- * Engineering) is a one-line addition here plus an env var — the EngineeringMap
- * component and every consumer are unchanged, keeping the map infrastructure
- * rather than a one-off. Standard falls back to the governed built-in default;
- * Satellite falls back to the governed built-in raster default; Terrain is
- * env-only. `VITE_MAP_STYLE_URL` is a back-compatible alias for Standard.
- */
-type StyleDef = { id: string; label: string; description: string; styleUrl?: string; inlineStyle?: StyleSpecification };
-
-function satelliteDef(): StyleDef {
-  const override = env("VITE_MAP_STYLE_SATELLITE");
-  if (override) return { id: "satellite", label: "Satellite", description: "Satellite imagery (configured provider).", styleUrl: override };
-  return { id: "satellite", label: "Satellite", description: "Satellite imagery — Sentinel-2 cloudless (imagery-only; labels/boundaries limited).", inlineStyle: buildSatelliteRasterStyle() };
-}
-
-const STYLE_CATALOGUE: StyleDef[] = [
-  { id: "standard", label: "Standard", description: "Engineering day map — roads, road names, rivers, railways, buildings, land use, boundaries, place names.", styleUrl: env("VITE_MAP_STYLE_STANDARD") ?? env("VITE_MAP_STYLE_URL") ?? DEFAULT_STANDARD_STYLE_URL },
-  satelliteDef(),
-  // Hybrid (imagery + labels/roads) is architecture-ready but has no governed
-  // built-in default; it appears only when a provider style URL is configured.
-  { id: "hybrid", label: "Hybrid", description: "Satellite imagery with roads/labels (configured provider).", styleUrl: env("VITE_MAP_STYLE_HYBRID") },
-  { id: "terrain", label: "Terrain", description: "Terrain / relief presentation (connected-only unless locally hosted).", styleUrl: env("VITE_MAP_STYLE_TERRAIN") },
+const STYLE_CATALOGUE: EngineeringMapStyle[] = [
+  {
+    id: "standard",
+    label: "Standard",
+    description: "Engineering day map — roads, road names, rivers, railways, buildings, land use, boundaries, place names.",
+    styleUrl: env("VITE_MAP_STYLE_STANDARD") ?? env("VITE_MAP_STYLE_URL") ?? DEFAULT_STANDARD_STYLE_URL,
+    available: true,
+  },
 ];
 
-/** Styles that have a source (a URL or a built-in inline style). Terrain is
- *  omitted unless configured; Standard and Satellite always resolve to a
- *  governed default. */
-export const BASEMAP_STYLES: EngineeringMapStyle[] = STYLE_CATALOGUE
-  .filter((s) => s.styleUrl != null || s.inlineStyle != null)
-  .map((s) => ({ id: s.id, label: s.label, styleUrl: s.styleUrl, inlineStyle: s.inlineStyle, available: true, description: s.description }));
+export const BASEMAP_STYLES: EngineeringMapStyle[] = STYLE_CATALOGUE;
 
-/** The style shown first: Standard when configured, else the first available. */
-export const DEFAULT_STYLE_ID: string | null =
-  BASEMAP_STYLES.find((s) => s.id === "standard")?.id ?? BASEMAP_STYLES[0]?.id ?? null;
+/** The style shown first (Standard). */
+export const DEFAULT_STYLE_ID: string | null = BASEMAP_STYLES.find((s) => s.id === "standard")?.id ?? BASEMAP_STYLES[0]?.id ?? null;
 
 export function styleById(id: string | null | undefined): EngineeringMapStyle | undefined {
   return BASEMAP_STYLES.find((s) => s.id === id);

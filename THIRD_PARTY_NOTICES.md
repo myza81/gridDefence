@@ -98,8 +98,6 @@ See [`frontend/public/map-assets/standard/`](frontend/public/map-assets/standard
 | Map **style layers** | BSD-3-Clause | protomaps-themes-base | Style/paint for the offline Standard map | Retain copyright notice |
 | **Fonts / glyphs** | OFL-1.1 | Noto Sans (Google/Noto project) | Label rendering (Latin: English + Malay place names) | OFL: font name/RFN conditions; no standalone sale |
 | **Sprites** | (per source) | Protomaps basemaps-assets | Icons for the style | Per the asset's own licence — record in its manifest before hosting |
-| **Satellite imagery** | **Excluded** | — | — | Not bundled — redistribution rights not established (see policy) |
-| **Terrain / DEM / hillshade** | **Excluded** | — | — | Not bundled — redistribution rights not established (see policy) |
 | Included base data (Natural Earth) | Public domain | Natural Earth (naturalearthdata.com) | Small-scale base features inside the Protomaps schema | No attribution required |
 | **Malaysian administrative boundaries** (as a separate governed layer) | **Not adopted** | — | Future ADR-030 State overlay | No enterprise-redistributable dataset confirmed — recommended against adoption until resolved |
 
@@ -130,8 +128,6 @@ and attribution is shown by MapLibre's attribution control.
 | **OpenFreeMap** (Standard built-in default) | OpenStreetMap (ODbL) | © OpenStreetMap contributors | No key; community-hosted (no SLA) — override for critical/HA production |
 | MapTiler (override) | OSM (ODbL) + MapTiler | © MapTiler © OpenStreetMap contributors | Domain-restricted browser key; do not commit |
 | Stadia Maps (override) | OSM (ODbL) | © Stadia Maps © OpenStreetMap contributors | Key / domain auth; do not commit |
-| **EOX Sentinel-2 cloudless** (Satellite built-in default) | Copernicus Sentinel data (**CC-BY-4.0**) | Sentinel-2 cloudless — s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data), CC-BY-4.0 | No key; imagery-only; online-use only. Allow-list `tiles.maps.eox.at` |
-| Esri World Imagery (override, if licensed) | Esri + multiple sources | Tiles © Esri … | ArcGIS terms — only where licensed; not adopted by default |
 
 Runtime attribution for the map is rendered by MapLibre's attribution control,
 which aggregates each source's `attribution` field (the committed

@@ -33,8 +33,8 @@ describe("computeStandardTuning", () => {
     // A style where the label is already earlier than our target ⇒ no override.
     const already = { layers: [{ id: "highway-name-major", type: "symbol", minzoom: 9 }] } as never;
     expect(computeStandardTuning(already)).toEqual([]);
-    // No matching layers (e.g. satellite/neutral) ⇒ no-op.
-    expect(computeStandardTuning({ layers: [{ id: "satellite", type: "raster" }] } as never)).toEqual([]);
+    // No matching layers (e.g. the neutral style) ⇒ no-op.
+    expect(computeStandardTuning({ layers: [{ id: "neutral-land", type: "fill" }] } as never)).toEqual([]);
     expect(computeStandardTuning(undefined)).toEqual([]);
   });
 

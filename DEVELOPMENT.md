@@ -373,13 +373,8 @@ shows the rich map out of the box (when the internet is reachable) — **no
 `frontend/.env` required**. The Standard style ships with a governed built-in
 default provider (OpenFreeMap Liberty, OSM/ODbL, no key; see licensing-policy
 §6b). It falls back to the built-in neutral map only when the provider is
-genuinely unavailable.
-
-A **Satellite** view is also available out of the box (governed built-in default:
-EOX Sentinel-2 cloudless, CC-BY-4.0, no key, imagery-only) — switch via the map's
-style selector. Set `VITE_MAP_STYLE_SATELLITE` to override with a hybrid
-imagery+labels provider (e.g. a domain-keyed MapTiler Satellite). Allow-list
-`tiles.maps.eox.at` for the default. See licensing-policy §6c.
+genuinely unavailable. The map ships a **single Standard basemap** (no
+Satellite/Hybrid/Terrain, no style selector) → automatic neutral fallback.
 
 To **override** the Standard default (paid domain-keyed provider for production,
 or the self-hosted offline package), set it in `frontend/.env` and **restart

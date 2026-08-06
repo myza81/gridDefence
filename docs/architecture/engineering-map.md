@@ -10,7 +10,7 @@ This document records how the **Engineering Map** is built and, critically, how 
 
 The map provides the richest resources actually available — nothing more, nothing less — in exactly two modes:
 
-- **Rich mode** — when a configured online style (`VITE_MAP_STYLE_*`) and its resources load, the map shows that provider's detailed basemap (roads, water, land cover, place labels, boundaries, and satellite/terrain where configured), with attribution. It never claims a layer the loaded style does not actually provide.
+- **Rich mode** — when the configured Standard online style (`VITE_MAP_STYLE_STANDARD`, or the built-in default) and its resources load, the map shows that provider's detailed basemap (roads, water, land cover, place labels, boundaries), with attribution. It never claims a layer the loaded style does not actually provide.
 - **Neutral mode** — the built-in fallback, used when no rich style is configured or one fails/times out. It renders a **small, locally bundled, public-domain** geographic reference (land / sea / coastlines / national borders) from **Natural Earth**, served app-relative from [`frontend/public/map-assets/neutral/`](../../frontend/public/map-assets/neutral/). It makes **no external font, sprite, tile, or glyph requests**, works immediately after clone + build (no Docker, no operator install, no internet), and shows **only** that geometry — no roads, rivers, forests, labels, landmarks, imagery, or terrain (none are packaged). Malaysian **State** boundaries are intentionally absent until a governed source passes the licensing gate.
 
 In **both** modes GridDefence continues to show its own information: substation markers (lifecycle-coloured, drawn above the geography), clusters **with their numeric record count**, selected-marker highlight, details panel, registry search/filters, missing-coordinate summary, the accessible record list, and Open-Substation navigation. The metric scale bar and reset-to-Peninsular-Malaysia control work in both modes.
@@ -47,17 +47,9 @@ Critical/high-availability or air-gapped deployments **should** override the com
 
 (Stadia: `tiles.stadiamaps.com`.) Do not disable TLS verification, add HTTP endpoints, or require admin rights. If no provider can be approved, leave rich unset — neutral mode is a complete, governed default.
 
-### 0.2 Satellite basemap
+### 0.2 A single basemap — no style selector
 
-The style catalogue offers **Standard** and **Satellite** (and **Terrain** when configured); the compact style selector (top-left of the map, rich mode) switches between them. **Standard remains the default.** Switching preserves camera, zoom, selected substation, popup/details, filters, cluster counts, and the accessible record list (the selector uses the same `style.load` re-install path as retry), and MapLibre's attribution control updates to the selected provider.
-
-- **Governed built-in default:** EOX **Sentinel-2 cloudless** (`DEFAULT_SATELLITE_TILE_URL`, `buildSatelliteRasterStyle` in [mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)) — Copernicus Sentinel data under **CC-BY-4.0**, free for internal/enterprise use with attribution, **no API key**, CORS-enabled. So Satellite is available out of the box, matching the MVP's ease — but governed and legally clean (the MVP used Esri `arcgisonline`, whose terms restrict enterprise/commercial use; see licensing-policy §6c).
-- **Imagery-only:** the default is pure imagery — **no roads, labels, or boundaries**. For a hybrid imagery+labels style, set `VITE_MAP_STYLE_SATELLITE` to a provider style URL (e.g. a domain-keyed MapTiler Satellite).
-- **Override:** `VITE_MAP_STYLE_SATELLITE=<style URL>` replaces the built-in default (any MapLibre style/raster style; a licensed Esri/MapTiler/Stadia deployment). No token is committed.
-- **Failure:** a raster imagery outage shows the style's dark **backdrop with markers/cluster counts on top** (never a blank canvas); Standard stays selectable and the Table view stays available. A configured Satellite *style URL* that fails to load is an essential failure → neutral (bounded timeout, no retry storm). Tile errors are non-essential and never tear down the workspace.
-- **Allow-list:** EOX satellite tiles — `tiles.maps.eox.at`.
-
-Markers/clusters render **above** the imagery; lifecycle marker colours keep a white stroke and cluster counts are white DOM markers, so both stay legible over dark imagery.
+The Engineering Map ships **one basemap: Standard**, with the automatic **neutral** fallback. There is intentionally **no Satellite, Hybrid, or Terrain and no style selector** — the operator never chooses a basemap (a deliberate product simplification: the Standard basemap provides sufficient engineering context, while additional imagery modes added licensing, performance, provider-dependency and maintenance cost not justified by the engineering value). The only map configuration is the Standard provider override (§0.1).
 
 ### 0.3 Standard richness — the real root cause, and what we tuned
 
@@ -68,7 +60,7 @@ Investigated per-layer against the live OpenFreeMap Liberty style (not by layer 
 
 **What we changed (honest, bounded):**
 1. **Open at an engineering zoom.** The map opens **fitted to the substations' bounding box** with the max-zoom cap raised to **z13**, where the generalized-in data (minor roads, buildings) is actually present — the single biggest, data-honest richness win. Reset still returns to the configured extent.
-2. **Modest label tuning** ([mapCartography.ts](../../frontend/src/components/map/mapCartography.ts) `computeStandardTuning`, applied after `style.load`): show major/minor **road names**, **river names** and **village names** ~1 zoom earlier so engineers recognise the area sooner. It only ever *lowers* a threshold, only for layer ids that exist (a no-op on satellite/neutral/other providers), and **never touches geometry** (which is data-generalized, not style-gated) — no faked richness.
+2. **Modest label tuning** ([mapCartography.ts](../../frontend/src/components/map/mapCartography.ts) `computeStandardTuning`, applied after `style.load`): show major/minor **road names**, **river names** and **village names** ~1 zoom earlier so engineers recognise the area sooner. It only ever *lowers* a threshold, only for layer ids that exist (a no-op on the neutral style or other providers), and **never touches geometry** (which is data-generalized, not style-gated) — no faked richness.
 3. **Marker dominance** kept: lifecycle markers carry a strong white casing and cluster counts are white DOM markers, so engineering information stays dominant over the denser basemap.
 
 **Default zoom recommendation:** engineers should normally begin at **district/city scale** — the fit-to-data view (the bounding box of the visible substations; a single record opens at neighbourhood scale) — *not* at Malaysia/state scale, which is where the "sparse" impression came from.
@@ -79,7 +71,7 @@ Investigated per-layer against the live OpenFreeMap Liberty style (not by layer 
 
 ### 0.4 Geographic context vs engineering truth — overlay philosophy
 
-Everything the basemap shows — from OpenStreetMap/OpenFreeMap, the satellite provider, or any third-party GIS — is **External Geographic Context**, *never* Engineering Truth. GridDefence's authoritative data is the Registry. The map is a layered GIS:
+Everything the basemap shows — from OpenStreetMap/OpenFreeMap or any third-party GIS — is **External Geographic Context**, *never* Engineering Truth. GridDefence's authoritative data is the Registry. The map is a layered GIS:
 
 ```
 Base Geographic Context   (roads, rivers, railways, buildings, OSM features — external)
@@ -92,13 +84,9 @@ Future Engineering Layers  (optional · explicitly enabled · governed — never
 These layers are **never automatically merged**. Specifically:
 
 - **GridDefence connectivity is intentionally NOT drawn over the basemap.** GridDefence markers ✓; GridDefence connectivity ✗ by default. Rationale: GridDefence engineering coordinates may not geographically align with external mapping providers, and drawing both together could **incorrectly imply they have already been reconciled**. The `EngineeringMap` framework draws only point markers and **no lines/relationships** — "geographic proximity is not electrical connectivity" (on-screen copy + this framework's contract).
-- **Never imply equivalence.** An external OSM/satellite "substation" is **not** a GridDefence substation unless that relationship has been explicitly governed. GridDefence markers are visually distinct (lifecycle-coloured, white-cased, clustered) and are the only substations the map asserts.
+- **Never imply equivalence.** An externally mapped (OSM) "substation" is **not** a GridDefence substation unless that relationship has been explicitly governed. GridDefence markers are visually distinct (lifecycle-coloured, white-cased, clustered) and are the only substations the map asserts.
 - **Architectural review (this phase).** The current map draws **substation point markers only**; no Circuit / Connectivity / Transformer geometry is drawn over the basemap, and none is planned to be drawn automatically. That remains architecturally correct after this clarification. Any future Circuit/Transformer/Connectivity or scheme visualisation would be an **additive, opt-in, governed** engineering layer ([EDR-006](../engineering/edr/EDR-006-operational-context-visualization.md) presentation-not-truth; [ADR-006](../adr/ADR-006-connectivity-registry-vs-psse-topology-architecture.md) registry-vs-topology) — never an automatic merge onto the geographic basemap.
 - **Future Geographic Data Quality opportunity (evaluate only — no implementation now).** If GridDefence coordinates and externally mapped substations differ significantly, GridDefence must **not** reconcile automatically. A future *Geographic Data Quality* module could surface such discrepancies for **engineering review** (decision support, not automation — [EDR-004](../engineering/edr/EDR-004-decision-support-not-automation.md); same stance as [ADR-030](../adr/ADR-030-coordinate-assisted-state-resolution.md)). Recorded here as a future opportunity only.
-
-### 0.5 Hybrid readiness
-
-The style catalogue is arranged for **Standard · Satellite · Hybrid · Neutral**. Hybrid (satellite imagery + roads/labels) is **architecture-ready but hidden** — it appears in the selector only when `VITE_MAP_STYLE_HYBRID` is configured with a governed provider style URL (no built-in default is adopted today). This adds the seam without adopting a provider.
 
 ---
 
@@ -116,27 +104,21 @@ Two modes are selected purely by configuration — no code change (CLAUDE.md §2
 
 | Variable | Meaning |
 |---|---|
-| `VITE_MAP_STYLE_STANDARD` | Standard "engineering day" style. (`VITE_MAP_STYLE_URL` is honoured as a back-compatible alias.) |
-| `VITE_MAP_STYLE_SATELLITE` | Satellite imagery style (optional). |
-| `VITE_MAP_STYLE_TERRAIN` | Terrain / relief style (optional). |
+| `VITE_MAP_STYLE_STANDARD` | The single Standard style URL (`VITE_MAP_STYLE_URL` is honoured as a back-compatible alias). Optional — a governed built-in default applies when unset. |
 
-**Connected development mode** — externally hosted styles (require internet):
+**Connected development mode** — externally hosted Standard style (requires internet):
 ```
 VITE_MAP_STYLE_STANDARD=https://your-provider.example/standard/style.json
-VITE_MAP_STYLE_SATELLITE=https://your-provider.example/satellite/style.json
-VITE_MAP_STYLE_TERRAIN=https://your-provider.example/terrain/style.json
 ```
 
-**Offline / internal production mode** — every resource served from the GridDefence deployment or an internal service (no internet):
+**Offline / internal production mode** — the Standard resources served from the GridDefence deployment or an internal service (no internet):
 ```
 VITE_MAP_STYLE_STANDARD=/map-assets/styles/standard/style.json
-VITE_MAP_STYLE_SATELLITE=/map-assets/styles/satellite/style.json
-VITE_MAP_STYLE_TERRAIN=/map-assets/styles/terrain/style.json
 ```
 
-**Availability comes from configuration, not code** ([mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)). A style is offered in the selector only when its variable is set; unset styles are omitted rather than offered and then failing. When *nothing* is configured, the map degrades to the record list and the registry stays fully usable. No public provider is hard-coded as a production service, and the map **never silently falls back to a public external provider**.
+**Availability comes from configuration, not code** ([mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)). When the Standard style is unreachable the map falls back to the built-in neutral geometry — it **never silently falls back to a public external provider**.
 
-The recommended **initial production target** is a detailed **offline Standard** map for Peninsular Malaysia; Satellite and Terrain are enabled only when locally licensed and hosted.
+The recommended **initial production target** is a detailed **offline Standard** map for Peninsular Malaysia.
 
 ---
 
@@ -146,7 +128,7 @@ A style is offline-capable only if **every** resource it references resolves loc
 
 `auditStyleForExternalUrls(style)` ([mapConfig.ts](../../frontend/src/components/map/mapConfig.ts)) scans a style object and returns every external URL it finds (empty ⇒ offline-capable). It is exercised by [mapConfig.test.ts](../../frontend/tests/components/map/mapConfig.test.ts) and should be run by operators against any style they intend to host offline. Checklist of resources to localise:
 
-- style JSON · glyph/font ranges (`.pbf`) · sprite (`.json`/`.png`) · vector tiles · raster tiles · satellite imagery tiles · raster-DEM/hillshade tiles · contour vector tiles · administrative boundaries · place labels · roads · rivers/water · forest/land-cover.
+- style JSON · glyph/font ranges (`.pbf`) · sprite (`.json`/`.png`) · vector tiles · administrative boundaries · place labels · roads · rivers/water · forest/land-cover.
 
 ---
 
@@ -159,7 +141,7 @@ A style is offline-capable only if **every** resource it references resolves loc
 | Compose deployment | A `map-assets` static service (Nginx) mounting a versioned volume/image with `style.json`, `glyphs/`, `sprite.*`, and `peninsular-malaysia.pmtiles`; or serve the same folder from the frontend container. Frontend points `VITE_MAP_STYLE_STANDARD=/map-assets/styles/standard/style.json`. |
 | Health check | HTTP `GET` on the style JSON. The map service being down must **not** make the wider GridDefence application unhealthy (see §9). |
 | Startup | Deterministic — assets are baked into the image or a pre-populated named volume; **no runtime downloading of production tiles**. |
-| Tile-data volume / size | Peninsular-Malaysia vector (Standard) at z0–z14 is typically ~a few hundred MB (confirm at packaging time). Satellite/terrain raster is far larger (§7). |
+| Tile-data volume / size | Peninsular-Malaysia vector (Standard) at z0–z14 is typically ~a few hundred MB (confirm at packaging time). |
 | Update process | Rebuild the assets image / replace the PMTiles file with a new dated version; documented in the operator runbook; frontend URL is unchanged. |
 | Backup | The PMTiles + style/glyph/sprite bundle is a small, immutable artefact — back up with the deployment. |
 | Caching | Long-lived `Cache-Control` on immutable tile/glyph/sprite assets; the style JSON short-lived so a re-packaged dataset is picked up. |
@@ -195,12 +177,6 @@ Accessible Substation record list
 The neutral style (`buildNeutralStyle()`, see §0) renders the bundled public-domain Natural Earth land/sea/coastline/border geometry with zero external requests. Clustering is **fully functional** in neutral mode — cluster circles (a MapLibre layer) and their numeric counts (local DOM markers, glyph-independent — see §0) both render, and click-to-expand works. Geometry is never fabricated; Malaysian State boundaries await a governed source.
 
 When degraded, the UI shows an honest notice (e.g. *"The configured basemap could not be loaded. Showing a neutral offline canvas — every substation is still plotted and listed."*). When no map is possible at all it shows an explicit **Basemap unavailable — Substation Registry data remains available** state (never a permanent spinner or unexplained blank canvas). The **Table view and record list remain available at all times.**
-
----
-
-## 7. Satellite & terrain — larger data and licence sensitivity
-
-Satellite imagery and terrain/DEM data are far larger and often carry restrictive licences. For each offline style, document: source, licence, redistribution rights, storage estimate, supported zoom range, update process, and whether internal hosting is permitted. It is acceptable — and is the recommended initial posture — to ship an **offline Standard** basemap while leaving **Satellite and Terrain connected-only** until locally licensed and hosted; the selector then simply offers Standard alone, and the offline Standard map remains fully usable. **Do not package third-party imagery without confirmed redistribution rights, and do not fabricate contour/terrain geometry.** If the configured Standard style does not carry a layer (e.g. hillshade/contours), that limitation is documented honestly rather than faked.
 
 ---
 

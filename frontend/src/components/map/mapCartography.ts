@@ -8,7 +8,7 @@ import type { StyleSpecification } from "maplibre-gl";
  * present earlier than the default zoom threshold — so engineers recognise the
  * area (road names, river names, town/village names) a little sooner. We only
  * ever LOWER a threshold, and only for layer ids that exist (so it is a no-op on
- * the satellite/neutral styles or any non-OpenMapTiles provider).
+ * the neutral style or any non-OpenMapTiles provider).
  *
  * What we CANNOT tune (and deliberately do not fake): the appearance of minor
  * roads, waterways, buildings and POIs at low/mid zoom is governed by the vector
